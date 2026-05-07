@@ -1,10 +1,79 @@
 #include "Http.h"
+#include <cctype>
 #include <fstream>
 #include <random>
 #include <sstream>
 
 namespace eacp::HTTP
 {
+
+namespace
+{
+bool equalsCaseInsensitive(const std::string& a, const std::string& b)
+{
+    if (a.size() != b.size())
+        return false;
+
+    for (auto i = size_t {0}; i < a.size(); ++i)
+        if (std::tolower((unsigned char) a[i]) != std::tolower((unsigned char) b[i]))
+            return false;
+
+    return true;
+}
+} // namespace
+
+void Response::setContent(const std::string& contentToUse,
+                          const std::string& contentType)
+{
+    content = contentToUse;
+    headers["Content-Type"] = contentType;
+}
+
+void Response::setHeader(const std::string& key, const std::string& value)
+{
+    headers[key] = value;
+}
+
+void Response::setRedirect(const std::string& url, int status)
+{
+    statusCode = status;
+    headers["Location"] = url;
+}
+
+bool Request::hasHeader(const std::string& key) const
+{
+    for (auto& [k, v]: headers)
+        if (equalsCaseInsensitive(k, key))
+            return true;
+    return false;
+}
+
+std::string Request::getHeader(const std::string& key) const
+{
+    for (auto& [k, v]: headers)
+        if (equalsCaseInsensitive(k, key))
+            return v;
+    return {};
+}
+
+bool Request::hasParam(const std::string& key) const
+{
+    return params.contains(key);
+}
+
+std::string Request::getParam(const std::string& key) const
+{
+    auto it = params.find(key);
+    return it == params.end() ? std::string() : it->second;
+}
+
+std::string Request::pathWithoutQuery() const
+{
+    auto q = url.find('?');
+    if (q == std::string::npos)
+        return url;
+    return url.substr(0, q);
+}
 
 std::string generateBoundary()
 {

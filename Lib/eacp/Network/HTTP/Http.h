@@ -9,6 +9,10 @@ namespace eacp::HTTP
 
 struct Response
 {
+    void setContent(const std::string& contentToUse, const std::string& contentType);
+    void setHeader(const std::string& key, const std::string& value);
+    void setRedirect(const std::string& url, int status = 302);
+
     std::string content;
     std::string error;
     std::map<std::string, std::string> headers;
@@ -44,6 +48,14 @@ struct Request
 
     Response perform() const;
     Response downloadTo(const std::string& filePath) const;
+
+    bool hasHeader(const std::string& key) const;
+    std::string getHeader(const std::string& key) const;
+
+    bool hasParam(const std::string& key) const;
+    std::string getParam(const std::string& key) const;
+
+    std::string pathWithoutQuery() const;
 
     std::string url;
     std::string type = "GET";
