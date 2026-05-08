@@ -1,18 +1,13 @@
 #include "SVGAttributes.h"
-#include <algorithm>
+
+#include <eacp/Core/Utils/Strings.h>
+
 #include <cctype>
 #include <sstream>
 #include <unordered_map>
 
 namespace eacp::SVG
 {
-
-static std::string toLower(std::string s)
-{
-    std::ranges::transform(
-        s, s.begin(), [](auto c) { return (char)std::tolower((int)c); });
-    return s;
-}
 
 static uint8_t hexDigit(char c)
 {
@@ -89,7 +84,7 @@ static const std::unordered_map<std::string, Graphics::Color>& namedColors()
 
 ColorResult parseColor(const std::string& value)
 {
-    if (value.empty() || toLower(value) == "none")
+    if (value.empty() || Strings::toLower(value) == "none")
         return {{}, true};
 
     if (value[0] == '#')
@@ -98,7 +93,7 @@ ColorResult parseColor(const std::string& value)
     if (value.substr(0, 4) == "rgb(")
         return {parseRGBFunction(value), false};
 
-    auto lower = toLower(value);
+    auto lower = Strings::toLower(value);
     auto& colors = namedColors();
     auto it = colors.find(lower);
     if (it != colors.end())

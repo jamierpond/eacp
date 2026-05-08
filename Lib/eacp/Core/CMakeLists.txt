@@ -10,7 +10,8 @@ target_sources(eacp-core PRIVATE
         Threads/TaskSemaphore.cpp
         Utils/Files.cpp
         Utils/Logging.cpp
-        Utils/Random.cpp)
+        Utils/Random.cpp
+        Utils/Strings.cpp)
 
 if (APPLE)
     target_sources(eacp-core PRIVATE

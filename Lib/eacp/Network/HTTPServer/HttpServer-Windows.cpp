@@ -3,11 +3,12 @@
 #include "HttpServer.h"
 #include "HttpServerDispatcher.h"
 
+#include <eacp/Core/Utils/Strings.h>
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
 #include <atomic>
-#include <cctype>
 #include <ea_data_structures/Pointers/OwningPointer.h>
 #include <ea_data_structures/Structures/Vector.h>
 #include <memory>
@@ -21,53 +22,6 @@ namespace eacp::HTTP
 
 namespace
 {
-
-std::string trim(const std::string& s)
-{
-    auto begin = s.find_first_not_of(" \t");
-    if (begin == std::string::npos)
-        return "";
-    auto end = s.find_last_not_of(" \t");
-    return s.substr(begin, end - begin + 1);
-}
-
-std::string toLower(std::string s)
-{
-    for (auto& c: s)
-        c = (char) std::tolower((unsigned char) c);
-    return s;
-}
-
-const char* reasonPhrase(int code)
-{
-    switch (code)
-    {
-        case 200:
-            return "OK";
-        case 201:
-            return "Created";
-        case 204:
-            return "No Content";
-        case 301:
-            return "Moved Permanently";
-        case 302:
-            return "Found";
-        case 304:
-            return "Not Modified";
-        case 400:
-            return "Bad Request";
-        case 401:
-            return "Unauthorized";
-        case 403:
-            return "Forbidden";
-        case 404:
-            return "Not Found";
-        case 500:
-            return "Internal Server Error";
-        default:
-            return "OK";
-    }
-}
 
 struct WinsockInit
 {
@@ -94,7 +48,7 @@ void writeResponseToFd(SOCKET fd, const Response& res)
     auto hasContentLength = false;
     for (auto& [k, v]: res.headers)
     {
-        if (toLower(k) == "content-length")
+        if (Strings::toLower(k) == "content-length")
             hasContentLength = true;
         ss << k << ": " << v << "\r\n";
     }
@@ -332,8 +286,8 @@ void Server::Impl::handleConnection(SOCKET fd,
                 auto colon = line.find(':');
                 if (colon == std::string::npos)
                     continue;
-                request.headers[trim(line.substr(0, colon))] =
-                    trim(line.substr(colon + 1));
+                request.headers[Strings::trim(line.substr(0, colon))] =
+                    Strings::trim(line.substr(colon + 1));
             }
 
             bodyStart = end + 4;
@@ -341,7 +295,7 @@ void Server::Impl::handleConnection(SOCKET fd,
 
             for (auto& [k, v]: request.headers)
             {
-                if (toLower(k) == "content-length")
+                if (Strings::toLower(k) == "content-length")
                 {
                     try
                     {

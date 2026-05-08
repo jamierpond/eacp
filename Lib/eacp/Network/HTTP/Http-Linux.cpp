@@ -1,5 +1,7 @@
 #include "Http.h"
 
+#include <eacp/Core/Utils/Strings.h>
+
 #include <curl/curl.h>
 
 #include <cstdio>
@@ -30,15 +32,6 @@ size_t writeToString(void* contents, size_t size, size_t nmemb, void* userp)
     return total;
 }
 
-std::string trim(const std::string& s)
-{
-    auto begin = s.find_first_not_of(" \t\r\n");
-    if (begin == std::string::npos)
-        return {};
-    auto end = s.find_last_not_of(" \t\r\n");
-    return s.substr(begin, end - begin + 1);
-}
-
 size_t headerCallback(char* buffer, size_t size, size_t nitems, void* userp)
 {
     auto total = size * nitems;
@@ -48,8 +41,8 @@ size_t headerCallback(char* buffer, size_t size, size_t nitems, void* userp)
     auto colon = line.find(':');
     if (colon != std::string::npos)
     {
-        auto key = trim(line.substr(0, colon));
-        auto value = trim(line.substr(colon + 1));
+        auto key = Strings::trim(line.substr(0, colon));
+        auto value = Strings::trim(line.substr(colon + 1));
         if (!key.empty())
             headers[key] = value;
     }
