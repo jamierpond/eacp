@@ -1,7 +1,8 @@
+#include "../Utils/WinInclude.h"
+
 #include "EventLoop.h"
 #include "ThreadUtils-Windows.h"
 #include "../Utils/Singleton.h"
-#include "../Utils/Windows.h"
 
 #include <ea_data_structures/Structures/Vector.h>
 #include <atomic>

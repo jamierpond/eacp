@@ -1,9 +1,9 @@
 // Windows implementation of TextLayer using Windows.UI.Composition surfaces
+#include <eacp/Core/Utils/WinInclude.h>
+
 #include "TextLayer.h"
 #include "NativeLayer-Windows.h"
 #include "../Helpers/StringUtils-Windows.h"
-
-#include <eacp/Core/Utils/Windows.h>
 
 #include <cassert>
 

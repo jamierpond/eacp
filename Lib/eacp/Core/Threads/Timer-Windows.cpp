@@ -1,3 +1,5 @@
+#include "../Utils/WinInclude.h"
+
 #include "Timer.h"
 #include "EventLoop.h"
 #include "ThreadUtils-Windows.h"

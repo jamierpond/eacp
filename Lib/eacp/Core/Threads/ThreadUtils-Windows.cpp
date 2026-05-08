@@ -1,3 +1,5 @@
+#include "../Utils/WinInclude.h"
+
 #include "ThreadUtils-Windows.h"
 #include <DispatcherQueue.h>
 #include <winrt/Windows.Foundation.h>

@@ -1,3 +1,5 @@
+#include <eacp/Core/Utils/WinInclude.h>
+
 #include "HttpServer.h"
 #include "HttpServerDispatcher.h"
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <eacp/Core/Utils/WinInclude.h>
+
 #include <string>
 #include <winrt/base.h>
 

@@ -1,8 +1,8 @@
 // Windows implementation of ShapeLayer using Windows.UI.Composition surfaces
+#include <eacp/Core/Utils/WinInclude.h>
+
 #include "ShapeLayer.h"
 #include "NativeLayer-Windows.h"
-
-#include <eacp/Core/Utils/Windows.h>
 
 #include <cassert>
 #include <algorithm>
@@ -74,10 +74,10 @@ struct ShapeLayer::Native : NativeLayerBase
         dc->Clear(D2D1::ColorF(0, 0, 0, 0));
 
         // Base transform: offset + DPI scale
-        auto baseTransform = D2D1::Matrix3x2F::Scale(dpiScale, dpiScale)
-                             * D2D1::Matrix3x2F::Translation(
-                                 static_cast<float>(offset.x),
-                                 static_cast<float>(offset.y));
+        auto baseTransform =
+            D2D1::Matrix3x2F::Scale(dpiScale, dpiScale)
+            * D2D1::Matrix3x2F::Translation(static_cast<float>(offset.x),
+                                            static_cast<float>(offset.y));
 
         // Fill
         if (hasFill)
@@ -86,10 +86,9 @@ struct ShapeLayer::Native : NativeLayerBase
             {
                 // Create gradient brush
                 D2D1_GRADIENT_STOP stops[8];
-                UINT32 stopCount = static_cast<UINT32>(
-                    (std::min)(gradient.stops.size(), size_t(8)));
+                auto stopCount = (std::min) (gradient.stops.size(), 8);
 
-                for (UINT32 i = 0; i < stopCount; ++i)
+                for (auto i = 0; i < stopCount; ++i)
                 {
                     auto& stop = gradient.stops[i];
                     stops[i].position = stop.position;
@@ -98,8 +97,9 @@ struct ShapeLayer::Native : NativeLayerBase
                 }
 
                 ComPtr<ID2D1GradientStopCollection> stopCollection;
-                dc->CreateGradientStopCollection(
-                    stops, stopCount, stopCollection.GetAddressOf());
+                dc->CreateGradientStopCollection(stops,
+                                                 static_cast<UINT32>(stopCount),
+                                                 stopCollection.GetAddressOf());
 
                 if (stopCollection)
                 {

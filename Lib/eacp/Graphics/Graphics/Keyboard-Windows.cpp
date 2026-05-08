@@ -1,8 +1,8 @@
+#include <eacp/Core/Utils/WinInclude.h>
+
 #include "Keyboard.h"
 #include "../Window/Window.h"
 #include "../Helpers/StringUtils-Windows.h"
-
-#include <eacp/Core/Utils/Windows.h>
 
 namespace eacp::Graphics
 {

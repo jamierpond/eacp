@@ -1,7 +1,7 @@
+#include <eacp/Core/Utils/WinInclude.h>
+
 #include "View.h"
 #include "../Layers/NativeLayer-Windows.h"
-
-#include <eacp/Core/Utils/Windows.h>
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.UI.Composition.h>

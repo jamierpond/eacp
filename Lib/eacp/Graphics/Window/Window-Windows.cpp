@@ -1,8 +1,8 @@
+#include <eacp/Core/Utils/WinInclude.h>
+
 #include "Window.h"
 #include "../Layers/NativeLayer-Windows.h"
 #include "../Helpers/StringUtils-Windows.h"
-
-#include <eacp/Core/Utils/Windows.h>
 
 #include <algorithm>
 #include <bitset>

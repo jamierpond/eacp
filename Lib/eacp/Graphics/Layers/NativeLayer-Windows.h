@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../Primitives/Primitives.h"
+#include <eacp/Core/Utils/WinInclude.h>
 
-#include <eacp/Core/Utils/Windows.h>
+#include "../Primitives/Primitives.h"
 
 #include <d2d1_1.h>
 #include <wrl/client.h>

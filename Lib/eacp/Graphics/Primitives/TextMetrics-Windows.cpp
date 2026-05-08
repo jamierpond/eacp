@@ -1,7 +1,7 @@
+#include <eacp/Core/Utils/WinInclude.h>
+
 #include "TextMetrics.h"
 #include "../Helpers/StringUtils-Windows.h"
-
-#include <eacp/Core/Utils/Windows.h>
 
 #include <dwrite.h>
 #include <wrl/client.h>

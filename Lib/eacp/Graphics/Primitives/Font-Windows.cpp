@@ -1,6 +1,7 @@
+#include <eacp/Core/Utils/WinInclude.h>
+
 #include "Font.h"
 #include "../Helpers/StringUtils-Windows.h"
-
 
 #include <dwrite.h>
 #include <wrl/client.h>

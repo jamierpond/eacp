@@ -1,7 +1,7 @@
 // Windows implementation of Path using Direct2D
-#include "Path.h"
+#include <eacp/Core/Utils/WinInclude.h>
 
-#include <eacp/Core/Utils/Windows.h>
+#include "Path.h"
 
 #include <cassert>
 
