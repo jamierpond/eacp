@@ -35,6 +35,24 @@ Output executables:
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Debug -DEACP_UNITY_BUILD=OFF
 ```
 
+### Local Miro source
+
+Miro is fetched via CPM from `eyalamirmusic/Miro` by default. To work against a
+local Miro checkout (e.g. while co-developing both repos), pass
+`-DCPM_Miro_SOURCE=$HOME/Code/Miro` at configure time. CPM honours
+`CPM_<Name>_SOURCE` automatically and uses the local path instead of the GitHub
+fetch.
+
+```bash
+cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Debug -DEACP_UNITY_BUILD=OFF \
+      -DCPM_Miro_SOURCE=$HOME/Code/Miro
+```
+
+Use `$HOME` (not `~`). CMake does not expand `~`, and shell tilde expansion is
+suppressed inside quotes — `-DCPM_Miro_SOURCE="~/Code/Miro"` will silently
+configure against a non-existent path and fail later with errors like
+`Unknown CMake command "miro_add_type_export"`.
+
 ## Architecture
 New source files are added directly to the module's CMakeLists.txt under the
 appropriate `target_sources(...)` call. Platform-specific sources go inside the

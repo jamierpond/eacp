@@ -1,6 +1,4 @@
-#include "../../build/_deps/miro-src/Lib/Miro/Reflection/ReflectMacro.h"
-#include "../../build/_deps/miro-src/Lib/Miro/Reflection/Serialize.h"
-
+#include <Miro/Miro.h>
 #include <eacp/Network/HTTP/Http.h>
 #include <iostream>
 
@@ -13,7 +11,8 @@ struct Req
 
 int main()
 {
-    auto req = eacp::HTTP::Request("https://tamber-embed-server-620733406514.us-central1.run.app/embed");
+    auto req = eacp::HTTP::Request(
+        "https://tamber-embed-server-620733406514.us-central1.run.app/embed");
 
     req.type = "POST";
     req.headers["secret"] = "MagicTheGathering";
@@ -26,7 +25,6 @@ int main()
         auto res = req.perform();
         std::cout << res.content << std::endl;
     }
-
 
     return 0;
 }

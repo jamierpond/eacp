@@ -35,3 +35,15 @@ find_package(Miro REQUIRED)
 
 add_library(eacp-network-json INTERFACE)
 target_link_libraries(eacp-network-json INTERFACE eacp-network Miro)
+
+add_library(eacp-network-rpc STATIC)
+
+target_sources(eacp-network-rpc PRIVATE
+        HTTPRpc/RpcServer.cpp
+        HTTPRpc/RpcClient.cpp)
+
+target_link_libraries(eacp-network-rpc PUBLIC eacp-network Miro)
+
+set_default_target_setting(eacp-network-rpc)
+eacp_enable_unity_build(eacp-network-rpc)
+add_ide_sources(eacp-network-rpc)

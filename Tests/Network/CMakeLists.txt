@@ -9,3 +9,7 @@ nano_add_executable(HttpServerTests
 nano_add_executable(HttpJsonTests
         SOURCES HttpJsonTests.cpp
         TARGETS eacp-network-json)
+
+nano_add_executable(HttpRpcTests
+        SOURCES HttpRpcTests.cpp
+        TARGETS eacp-network-rpc)
