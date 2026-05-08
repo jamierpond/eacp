@@ -4,11 +4,24 @@
 
 namespace eacp::Threads
 {
+static NSApplicationActivationPolicy activationPolicyFromBundle()
+{
+    auto* info = [[NSBundle mainBundle] infoDictionary];
+
+    if ([info[@"LSBackgroundOnly"] boolValue])
+        return NSApplicationActivationPolicyProhibited;
+
+    if ([info[@"LSUIElement"] boolValue])
+        return NSApplicationActivationPolicyAccessory;
+
+    return NSApplicationActivationPolicyRegular;
+}
+
 static NSApplication* getApp()
 {
     static NSApplication* app = [] {
         auto* application = [NSApplication sharedApplication];
-        [application setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [application setActivationPolicy:activationPolicyFromBundle()];
         return application;
     }();
     return app;
