@@ -1,31 +1,38 @@
 # eacp_add_webview_app — single entry point for native + WebView + RPC apps.
 #
-# Folds five separate calls (add_executable, target_link_libraries,
-# miro_export, eacp_webview_generate_backend, eacp_webview_add_vite)
-# plus the macOS bundle plumbing into one call.
+# Folds the whole pipeline (executable, schema library + codegen, vite
+# build, ResEmbed, macOS bundle, transport binding) into one call.
+# Apps that don't need any cross-app glue should require nothing more
+# than this one function call in their CMakeLists.txt.
 #
 # Usage:
 #   eacp_add_webview_app(<TARGET>
 #       SOURCES         <files>           # main() + non-RPC sources
-#       COMMAND_SOURCES <files>           # optional; files with MIRO_EXPORT_COMMAND
+#       COMMAND_SOURCES <files>           # files with MIRO_EXPORT_COMMAND;
+#                                         # compiled into ${TARGET}Schema
 #       WEB_DIR         <path>            # vite project dir (must contain package.json)
 #       BUNDLE_ID       <com.example.app>
 #       BUNDLE_NAME     "Display name"
 #       [NAMESPACE      <ns>]             # res-embed namespace; default WebResources
 #       [CATEGORY       <cat>]            # res-embed category; default WebApp
 #       [SCHEMA_NAME    <stem>]           # default: schema
-#       [SCHEMA_FORMATS <formats>]        # default: ts backend ts-server
+#       [SCHEMA_FORMATS <formats>]        # default: ts backend ts-server bridge
+#                                         # (cpp-miro and cpp-client are always
+#                                         # emitted so siblings can consume the
+#                                         # schema via eacp_target_uses_schema)
 #   )
 #
-# Schema output is hardcoded to ${WEB_DIR}/src/generated. SOURCES and
-# COMMAND_SOURCES both end up in the executable; only COMMAND_SOURCES feed
-# the schema-export tool. When COMMAND_SOURCES is empty the helper skips
-# the Miro pipeline and just builds the vite frontend.
-#
-# The schema target created here is named ${TARGET}Schema. To emit the
-# same registrations to additional output dirs (e.g. C++ headers for a
-# sibling target), call miro_export_emit(${TARGET}Schema ...) after
-# this function returns — no need to declare a second exporter.
+# Schema layout:
+#   - ${TARGET}Schema is a STATIC library carrying COMMAND_SOURCES.
+#     Linked into ${TARGET} with WHOLE_ARCHIVE so MIRO_EXPORT_COMMAND
+#     static initializers fire at startup. Sibling consumers (e.g. an
+#     HTTP RPC server living in a peer app) link it the same way via
+#     eacp_target_uses_schema(<consumer> ${TARGET}Schema HANDLERS).
+#   - ${TARGET}Schema_codegen runs at build time, emitting TS files
+#     into ${WEB_DIR}/src/generated and C++ headers into
+#     ${CMAKE_CURRENT_BINARY_DIR}/cpp-generated. Both directories are
+#     added as INTERFACE include dirs on the schema library, so any
+#     consumer that links the library picks them up automatically.
 function(eacp_add_webview_app TARGET)
     set(oneValueArgs WEB_DIR BUNDLE_ID BUNDLE_NAME NAMESPACE CATEGORY SCHEMA_NAME)
     set(multiValueArgs SOURCES COMMAND_SOURCES SCHEMA_FORMATS)
@@ -53,29 +60,38 @@ function(eacp_add_webview_app TARGET)
         set(ARG_SCHEMA_NAME "schema")
     endif ()
     if (NOT ARG_SCHEMA_FORMATS)
-        set(ARG_SCHEMA_FORMATS ts backend ts-server)
+        set(ARG_SCHEMA_FORMATS ts backend ts-server bridge)
     endif ()
 
-    set(GENERATED_DIR "${ARG_WEB_DIR}/src/generated")
+    set(TS_GENERATED_DIR "${ARG_WEB_DIR}/src/generated")
+    set(CPP_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/cpp-generated")
 
-    add_executable(${TARGET} ${ARG_SOURCES} ${ARG_COMMAND_SOURCES})
+    add_executable(${TARGET} ${ARG_SOURCES})
     target_link_libraries(${TARGET} PRIVATE eacp-webview eacp-network-rpc)
 
     if (ARG_COMMAND_SOURCES)
         # SOURCES paths in miro_export are resolved against
-        # CMAKE_CURRENT_SOURCE_DIR at *call* site, which inside this function
-        # is the caller's directory — so bare filenames work.
+        # CMAKE_CURRENT_SOURCE_DIR at *call* site, which inside this
+        # function is the caller's directory — so bare filenames work.
         miro_export(${TARGET}Schema
                 SOURCES ${ARG_COMMAND_SOURCES}
-                OUTPUT_DIR ${GENERATED_DIR}
+                OUTPUT_DIR ${TS_GENERATED_DIR}
                 OUTPUT_NAME ${ARG_SCHEMA_NAME}
                 FORMATS ${ARG_SCHEMA_FORMATS})
 
+        # Always also emit the C++ artifacts so any sibling target can
+        # consume them via eacp_target_uses_schema without having to
+        # tack on its own miro_export_emit().
+        miro_export_emit(${TARGET}Schema
+                OUTPUT_DIR ${CPP_GENERATED_DIR}
+                OUTPUT_NAME ${ARG_SCHEMA_NAME}
+                FORMATS cpp-miro cpp-client)
+
         eacp_webview_generate_backend(
-                OUTPUT_DIR ${GENERATED_DIR}
+                OUTPUT_DIR ${TS_GENERATED_DIR}
                 BASENAME ${ARG_SCHEMA_NAME})
 
-        add_dependencies(${TARGET} ${TARGET}Schema)
+        eacp_target_uses_schema(${TARGET} ${TARGET}Schema HANDLERS)
     endif ()
 
     eacp_webview_add_vite(${TARGET}

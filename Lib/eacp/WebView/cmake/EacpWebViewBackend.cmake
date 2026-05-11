@@ -1,8 +1,9 @@
 # eacp_webview_generate_backend — writes a self-contained TypeScript
-# shim that binds Miro's transport-agnostic makeBackend factory to
-# window.eacp.invoke. Replaces the boilerplate every embedded webview
-# project would otherwise hand-write — Miro stays transport-agnostic
-# and this is the only place that knows about window.eacp.
+# shim that binds Miro's transport-agnostic makeBridge runtime to the
+# eacp WebView transport (window.eacp). Replaces the boilerplate every
+# embedded webview project would otherwise hand-write — Miro stays
+# transport-agnostic and this is the only place that knows about
+# window.eacp.
 #
 # Usage:
 #   eacp_webview_generate_backend(
@@ -12,9 +13,10 @@
 #   )
 #
 # Side effect: writes ${OUTPUT_DIR}/${OUTPUT_NAME}.ts at configure time.
-# The file imports makeBackend from "./${BASENAME}.backend" and binds
-# it to window.eacp.invoke. Re-runs every configure so template changes
-# in this file propagate without an explicit clean.
+# The file imports makeBackend from "./${BASENAME}.backend" and
+# makeBridge from "./${BASENAME}.bridge" and binds them to
+# window.eacp. Re-runs every configure so template changes in this
+# file propagate without an explicit clean.
 function(eacp_webview_generate_backend)
     cmake_parse_arguments(ARG "" "BASENAME;OUTPUT_DIR;OUTPUT_NAME" "" ${ARGN})
 
@@ -34,6 +36,7 @@ function(eacp_webview_generate_backend)
     file(MAKE_DIRECTORY "${ARG_OUTPUT_DIR}")
     file(WRITE "${SHIM_PATH}"
 "import { makeBackend } from './${ARG_BASENAME}.backend';
+import { makeBridge, type Transport } from './${ARG_BASENAME}.bridge';
 
 interface EacpBridge
 {
@@ -49,7 +52,12 @@ declare global
     }
 }
 
-export const backend = makeBackend((command, payload) =>
-    window.eacp.invoke(command, payload));
+const webViewTransport: Transport = {
+    invoke: (command, payload) => window.eacp.invoke(command, payload),
+    on:     (event, handler) =>
+        window.eacp.on(event, handler as (payload: unknown) => void),
+};
+
+export const backend = makeBridge(webViewTransport, makeBackend);
 ")
 endfunction()

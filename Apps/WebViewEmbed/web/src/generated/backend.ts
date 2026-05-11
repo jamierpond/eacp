@@ -1,4 +1,5 @@
 import { makeBackend } from './schema.backend';
+import { makeBridge, type Transport } from './schema.bridge';
 
 interface EacpBridge
 {
@@ -14,5 +15,10 @@ declare global
     }
 }
 
-export const backend = makeBackend((command, payload) =>
-    window.eacp.invoke(command, payload));
+const webViewTransport: Transport = {
+    invoke: (command, payload) => window.eacp.invoke(command, payload),
+    on:     (event, handler) =>
+        window.eacp.on(event, handler as (payload: unknown) => void),
+};
+
+export const backend = makeBridge(webViewTransport, makeBackend);

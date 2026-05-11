@@ -13,6 +13,7 @@ option(EACP_UNITY_BUILD "Compile eacp libraries as CMake unity builds" ON)
 
 include(TargetSetup)
 include(CPM)
+include(EacpSchema)
 
 if (PROJECT_IS_TOP_LEVEL)
     eacp_default_setup()
