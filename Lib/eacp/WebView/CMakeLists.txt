@@ -12,11 +12,14 @@ target_link_libraries(eacp-webview PUBLIC eacp-graphics ResEmbed Miro)
 
 target_sources(eacp-webview PRIVATE
         WebView/WebView-Shared.cpp
+        WebView/DevServerProbe.cpp
         WebView/Bridge.cpp
         WebView/MenuHelpers.cpp)
 
 if (APPLE)
-    target_sources(eacp-webview PRIVATE WebView/WebView.mm)
+    target_sources(eacp-webview PRIVATE
+            WebView/WebView.mm
+            WebView/DevServerProbe-Posix.cpp)
     target_link_libraries(eacp-webview PRIVATE
             "-framework Foundation"
             "-framework WebKit")
@@ -29,12 +32,17 @@ if (APPLE)
                 "-framework AppKit")
     endif ()
 elseif (WIN32)
-    target_sources(eacp-webview PRIVATE WebView/WebView-Windows.cpp)
+    target_sources(eacp-webview PRIVATE
+            WebView/WebView-Windows.cpp
+            WebView/DevServerProbe-Windows.cpp)
 
     find_package(WebView2 REQUIRED)
 
     target_link_libraries(eacp-webview PRIVATE
-            WebView2::WebView2)
+            WebView2::WebView2
+            ws2_32)
+else ()
+    target_sources(eacp-webview PRIVATE WebView/DevServerProbe-Posix.cpp)
 endif ()
 
 set_default_target_setting(eacp-webview)

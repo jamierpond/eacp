@@ -49,7 +49,9 @@ public:
             std::string scheme = "app";
             std::string host = "local";
             std::string indexFile = "index.html";
-            std::string devServerURL;
+            std::string devServerURL = "http://localhost:5173";
+            bool preferDevServer = true;
+            int devServerProbeTimeoutMs = 150;
             bool autoLoad = true;
         };
 
@@ -126,9 +128,6 @@ inline WebView::Options embeddedOptions(std::string category)
     auto options = WebView::Options {};
     options.embedded.enabled = true;
     options.embedded.provider = fromResEmbed(std::move(category));
-#ifdef EACP_WEBVIEW_DEV_SERVER_URL
-    options.embedded.devServerURL = EACP_WEBVIEW_DEV_SERVER_URL;
-#endif
     return options;
 }
 } // namespace eacp::Graphics

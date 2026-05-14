@@ -1,5 +1,7 @@
 #include "WebView.h"
 
+#include "DevServerProbe.h"
+
 namespace eacp::Graphics
 {
 std::string mimeForPath(std::string_view path)
@@ -80,13 +82,20 @@ ResourceProvider makeResourceProviderFromFiles(FileProvider provider,
     };
 }
 
-void applyEmbeddedSchemes(WebView::Options& options)
+void registerEmbeddedScheme(WebView::Options& options)
 {
-    if (! options.embedded.enabled || ! options.embedded.devServerURL.empty())
-        return;
-
     options.schemes[options.embedded.scheme] = makeResourceProviderFromFiles(
         options.embedded.provider, options.embedded.indexFile);
+}
+
+bool shouldUseDevServer(const WebView::Options::Embedded& embedded)
+{
+    if (! embedded.enabled || ! embedded.preferDevServer
+        || embedded.devServerURL.empty())
+        return false;
+
+    return probeDevServer(embedded.devServerURL,
+                          embedded.devServerProbeTimeoutMs);
 }
 } // namespace
 
@@ -97,14 +106,18 @@ WebView::WebView()
 
 WebView::WebView(Options options)
 {
-    applyEmbeddedSchemes(options);
+    auto useDevServer = shouldUseDevServer(options.embedded);
+
+    if (options.embedded.enabled && ! useDevServer)
+        registerEmbeddedScheme(options);
+
     auto embedded = options.embedded;
     initNative(std::move(options));
 
     if (! embedded.enabled || ! embedded.autoLoad)
         return;
 
-    if (! embedded.devServerURL.empty())
+    if (useDevServer)
         loadURL(embedded.devServerURL);
     else
         loadURL(embedded.scheme + "://" + embedded.host + "/" + embedded.indexFile);
