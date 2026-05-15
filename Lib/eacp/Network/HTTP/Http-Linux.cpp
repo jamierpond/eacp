@@ -96,6 +96,9 @@ void applyCommonOptions(CURL* curl, const Request& req, CurlSlist& headers)
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
+    if (req.type == "HEAD")
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+
     if (!req.body.empty())
     {
         curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long) req.body.size());
