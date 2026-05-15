@@ -19,4 +19,12 @@ std::string toLower(std::string s)
         c = (char) std::tolower((unsigned char) c);
     return s;
 }
+
+bool equalsCaseInsensitive(const std::string& a, const std::string& b)
+{
+    if (a.size() != b.size())
+        return false;
+
+    return toLower(a) == toLower(b);
 }
+} // namespace eacp::Strings

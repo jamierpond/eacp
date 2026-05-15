@@ -242,6 +242,74 @@ auto tParallelFallsBackOnSmallFile =
     check(readFile(destination) == body);
 };
 
+auto tParallelReportsIntermediateProgress =
+    test("HttpParallelDownload/reportsIntermediateProgress") = []
+{
+    auto body = makePayload(4 * 1024 * 1024 + 31);
+    auto stats = RangeStats();
+    auto chunkBytes = (std::int64_t) (body.size() / 4);
+
+    auto staggeredHandler =
+        [&](const Request& req)
+    {
+        auto res = handleRangeRequest(req, body, stats, true);
+        if (req.type != "HEAD" && res.statusCode == 206)
+        {
+            auto rangeHeader = req.getHeader("Range");
+            auto rest = rangeHeader.substr(std::string("bytes=").size());
+            auto start = std::stoll(rest.substr(0, rest.find('-')));
+            auto chunkIndex = start / chunkBytes;
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(40 * (long long) chunkIndex));
+        }
+        return res;
+    };
+
+    auto server = makePoolServer();
+    check(server.listen(0, staggeredHandler));
+    auto port = server.boundPort();
+
+    auto progress = DownloadProgress();
+    auto req = Request(baseUrl(port) + "/big");
+    req.progress = &progress;
+    req.parallelChunks = 4;
+
+    auto samplerStop = std::atomic<bool>(false);
+    auto distinctValues = std::atomic<int>(0);
+    auto sawIntermediate = std::atomic<bool>(false);
+    auto sampler = std::thread(
+        [&]
+        {
+            auto lastSeen = std::int64_t(-1);
+            while (!samplerStop.load())
+            {
+                auto received = progress.bytesReceived.load();
+                auto total = progress.totalBytes.load();
+                if (received != lastSeen)
+                {
+                    lastSeen = received;
+                    distinctValues.fetch_add(1);
+                }
+                if (total > 0 && received > 0 && received < total)
+                    sawIntermediate.store(true);
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
+            }
+        });
+
+    auto out = ParallelOutcome();
+    auto destination = tempPath("intermediate.bin");
+    performDownload(server, req, destination, out);
+
+    samplerStop.store(true);
+    sampler.join();
+
+    check(out.eventLoopFinished);
+    check(out.response.error.empty());
+    check(progress.bytesReceived.load() == (std::int64_t) body.size());
+    check(sawIntermediate.load());
+    check(distinctValues.load() >= 3);
+};
+
 auto tParallelChunksOneSkipsProbe =
     test("HttpParallelDownload/parallelChunksOneIssuesNoHeadProbe") = []
 {

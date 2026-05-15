@@ -1,32 +1,20 @@
 #include "Http.h"
 #include <algorithm>
-#include <cctype>
-#include <cstdint>
+#include <atomic>
+#include <chrono>
+#include <eacp/Core/Utils/Strings.h>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <random>
 #include <sstream>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
 
 namespace eacp::HTTP
 {
-
-namespace
-{
-bool equalsCaseInsensitive(const std::string& a, const std::string& b)
-{
-    if (a.size() != b.size())
-        return false;
-
-    for (auto i = size_t {0}; i < a.size(); ++i)
-        if (std::tolower((unsigned char) a[i]) != std::tolower((unsigned char) b[i]))
-            return false;
-
-    return true;
-}
-} // namespace
 
 void Response::setContent(const std::string& contentToUse,
                           const std::string& contentType)
@@ -49,7 +37,7 @@ void Response::setRedirect(const std::string& url, int status)
 bool Request::hasHeader(const std::string& key) const
 {
     for (auto& [k, v]: headers)
-        if (equalsCaseInsensitive(k, key))
+        if (Strings::equalsCaseInsensitive(k, key))
             return true;
     return false;
 }
@@ -57,7 +45,7 @@ bool Request::hasHeader(const std::string& key) const
 std::string Request::getHeader(const std::string& key) const
 {
     for (auto& [k, v]: headers)
-        if (equalsCaseInsensitive(k, key))
+        if (Strings::equalsCaseInsensitive(k, key))
             return v;
     return {};
 }
@@ -191,17 +179,15 @@ std::string getHeaderCI(const std::map<std::string, std::string>& headers,
                         const std::string& key)
 {
     for (const auto& [k, v]: headers)
-        if (equalsCaseInsensitive(k, key))
+        if (Strings::equalsCaseInsensitive(k, key))
             return v;
+
     return {};
 }
 
 bool acceptsRangeBytes(const std::string& value)
 {
-    auto lower = std::string();
-    lower.reserve(value.size());
-    for (auto c: value)
-        lower.push_back((char) std::tolower((unsigned char) c));
+    auto lower = Strings::toLower(value);
     return lower.find("bytes") != std::string::npos;
 }
 } // namespace
@@ -217,9 +203,10 @@ Response downloadFileParallel(const Request& req, const std::string& filePath)
     head.headers.erase("Range");
     auto headRes = httpRequest(head);
 
-    auto rangeOk = headRes.error.empty()
-                && headRes.statusCode >= 200 && headRes.statusCode < 300
-                && acceptsRangeBytes(getHeaderCI(headRes.headers, "Accept-Ranges"));
+    auto rangeOk =
+        headRes.error.empty() && headRes.statusCode >= 200
+        && headRes.statusCode < 300
+        && acceptsRangeBytes(getHeaderCI(headRes.headers, "Accept-Ranges"));
 
     auto total = std::int64_t(-1);
     if (rangeOk)
@@ -254,11 +241,22 @@ Response downloadFileParallel(const Request& req, const std::string& filePath)
     if (progress)
         progress->totalBytes.store(total);
 
-    auto chunks = std::vector<std::string>(N);
-    auto threads = std::vector<std::thread>();
+    auto chunkProgress = std::vector<DownloadProgress>(N);
+    auto chunkPaths = std::vector<std::string>(N);
+    for (auto i = 0; i < N; ++i)
+        chunkPaths[i] = filePath + ".part" + std::to_string(i);
+
+    auto cleanupTempFiles = [&]
+    {
+        for (const auto& p: chunkPaths)
+        {
+            auto ec = std::error_code();
+            std::filesystem::remove(p, ec);
+        }
+    };
+
     auto firstError = std::string();
     auto errorMutex = std::mutex();
-
     auto recordError = [&](std::string msg)
     {
         auto lock = std::lock_guard(errorMutex);
@@ -266,26 +264,21 @@ Response downloadFileParallel(const Request& req, const std::string& filePath)
             firstError = std::move(msg);
     };
 
+    auto threads = std::vector<std::thread>();
     threads.reserve((size_t) N);
     for (auto i = 0; i < N; ++i)
     {
         threads.emplace_back(
             [&, i]
             {
-                if (progress && progress->cancel.load())
-                {
-                    recordError("cancelled");
-                    return;
-                }
-
                 auto worker = req;
                 worker.parallelChunks = 1;
                 worker.type = "GET";
-                worker.progress = nullptr;
+                worker.progress = &chunkProgress[i];
                 worker.headers["Range"] = "bytes=" + std::to_string(ranges[i].start)
-                                        + "-" + std::to_string(ranges[i].end);
+                                          + "-" + std::to_string(ranges[i].end);
 
-                auto res = httpRequest(worker);
+                auto res = downloadFile(worker, chunkPaths[i]);
 
                 if (!res.error.empty())
                 {
@@ -293,27 +286,45 @@ Response downloadFileParallel(const Request& req, const std::string& filePath)
                     return;
                 }
                 if (res.statusCode != 206)
-                {
                     recordError("Range request returned status "
                                 + std::to_string(res.statusCode));
-                    return;
-                }
-
-                auto expected = (size_t) (ranges[i].end - ranges[i].start + 1);
-                if (res.content.size() != expected)
-                {
-                    recordError("Range chunk size mismatch");
-                    return;
-                }
-
-                if (progress)
-                    progress->bytesReceived.fetch_add((std::int64_t) res.content.size());
-                chunks[i] = std::move(res.content);
             });
     }
 
+    auto sumChunkBytes = [&]
+    {
+        auto sum = std::int64_t(0);
+        for (const auto& cp: chunkProgress)
+            sum += cp.bytesReceived.load();
+        return sum;
+    };
+
+    auto aggregatorStop = std::atomic<bool>(false);
+    auto aggregator = std::thread(
+        [&]
+        {
+            while (!aggregatorStop.load())
+            {
+                if (progress)
+                {
+                    progress->bytesReceived.store(sumChunkBytes());
+
+                    if (progress->cancel.load())
+                        for (auto& cp: chunkProgress)
+                            cp.cancel.store(true);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            }
+        });
+
     for (auto& t: threads)
         t.join();
+
+    aggregatorStop.store(true);
+    aggregator.join();
+
+    if (progress)
+        progress->bytesReceived.store(sumChunkBytes());
 
     auto result = Response();
 
@@ -322,6 +333,7 @@ Response downloadFileParallel(const Request& req, const std::string& filePath)
 
     if (!firstError.empty())
     {
+        cleanupTempFiles();
         result.error = firstError;
         return result;
     }
@@ -329,12 +341,24 @@ Response downloadFileParallel(const Request& req, const std::string& filePath)
     auto out = std::ofstream(filePath, std::ios::binary | std::ios::trunc);
     if (!out)
     {
+        cleanupTempFiles();
         result.error = "Failed to open destination file";
         return result;
     }
-    for (const auto& c: chunks)
-        out.write(c.data(), (std::streamsize) c.size());
+    for (const auto& p: chunkPaths)
+    {
+        auto in = std::ifstream(p, std::ios::binary);
+        if (!in)
+        {
+            out.close();
+            cleanupTempFiles();
+            result.error = "Failed to read chunk file";
+            return result;
+        }
+        out << in.rdbuf();
+    }
     out.close();
+    cleanupTempFiles();
     if (!out)
     {
         result.error = "Failed to write destination file";
