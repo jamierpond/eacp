@@ -10,6 +10,10 @@ nano_add_executable(HttpDownloadProgressTests
         SOURCES HttpDownloadProgressTests.cpp
         TARGETS eacp-network)
 
+nano_add_executable(HttpParallelDownloadTests
+        SOURCES HttpParallelDownloadTests.cpp
+        TARGETS eacp-network)
+
 nano_add_executable(HttpJsonTests
         SOURCES HttpJsonTests.cpp
         TARGETS eacp-network-json)

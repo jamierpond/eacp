@@ -79,6 +79,7 @@ struct Request
     int remotePort = -1;
 
     DownloadProgress* progress = nullptr;
+    int parallelChunks = 1;
 };
 
 Response httpRequest(const Request& req);
