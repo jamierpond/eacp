@@ -1,7 +1,10 @@
 #include "HttpServer.h"
 #include "HttpServerDispatcher.h"
 
-#include <eacp/Core/Utils/Strings.h>
+#include <eacp/Network/HTTP/HttpProtocol.h>
+
+#include <ea_data_structures/Pointers/OwningPointer.h>
+#include <ea_data_structures/Structures/Vector.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -9,13 +12,9 @@
 #include <unistd.h>
 
 #include <atomic>
-#include <cstring>
-#include <ea_data_structures/Pointers/OwningPointer.h>
-#include <ea_data_structures/Structures/Vector.h>
-#include <memory>
-#include <mutex>
 #include <csignal>
-#include <sstream>
+#include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -35,33 +34,32 @@ void ignoreSigPipe()
     (void) once;
 }
 
-void writeResponseToFd(int fd, const Response& res)
+void sendAll(int fd, const std::string& payload)
 {
-    auto code = res.statusCode != 0 ? res.statusCode : 200;
-    auto ss = std::stringstream();
-    ss << "HTTP/1.1 " << code << " " << reasonPhrase(code) << "\r\n";
+    auto sent = std::size_t {0};
 
-    auto hasContentLength = false;
-    for (auto& [k, v]: res.headers)
+    while (sent < payload.size())
     {
-        if (Strings::toLower(k) == "content-length")
-            hasContentLength = true;
-        ss << k << ": " << v << "\r\n";
-    }
-    if (!hasContentLength)
-        ss << "Content-Length: " << res.content.size() << "\r\n";
-    ss << "Connection: close\r\n\r\n";
-    ss << res.content;
+        auto n =
+            ::send(fd, payload.data() + sent, payload.size() - sent, MSG_NOSIGNAL);
 
-    auto out = ss.str();
-    auto sent = size_t {0};
-    while (sent < out.size())
-    {
-        auto n = ::send(fd, out.data() + sent, out.size() - sent, MSG_NOSIGNAL);
         if (n <= 0)
             break;
-        sent += (size_t) n;
+
+        sent += (std::size_t) n;
     }
+}
+
+void writeResponseToFd(int fd, const Response& res)
+{
+    sendAll(fd, serializeResponse(res));
+}
+
+std::string remoteAddressString(const sockaddr_in& addr)
+{
+    char ip[INET_ADDRSTRLEN] = {0};
+    ::inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
+    return ip;
 }
 
 } // namespace
@@ -92,6 +90,7 @@ struct Server::Impl
 
     void acceptLoop();
     void handleConnection(int fd, const std::string& remoteAddr, int remotePort);
+    void dispatchRequest(int fd, Request request);
 };
 
 Server::Server(ServerOptions options)
@@ -207,9 +206,7 @@ void Server::Impl::acceptLoop()
         if (clientSocket < 0)
             break;
 
-        char ip[INET_ADDRSTRLEN] = {0};
-        ::inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
-        auto remoteAddr = std::string(ip);
+        auto remoteAddr = remoteAddressString(addr);
         auto remotePort = (int) ntohs(addr.sin_port);
 
         auto lock = std::lock_guard(clientMutex);
@@ -219,19 +216,25 @@ void Server::Impl::acceptLoop()
     }
 }
 
+void Server::Impl::dispatchRequest(int fd, Request request)
+{
+    auto sendResponse = [fd](const Response& res)
+    {
+        writeResponseToFd(fd, res);
+        ::close(fd);
+    };
+
+    dispatcher->dispatch(
+        DispatchTask {std::move(request), handler, std::move(sendResponse)});
+}
+
 void Server::Impl::handleConnection(int fd,
                                     const std::string& remoteAddr,
                                     int remotePort)
 {
-    auto buffer = std::string();
-    auto headersParsed = false;
-    auto bodyStart = size_t {0};
-    auto bodyExpected = size_t {0};
-    auto request = Request();
-    request.remoteAddr = remoteAddr;
-    request.remotePort = remotePort;
-
+    auto parser = RequestParser();
     char buf[4096];
+
     while (true)
     {
         auto n = ::recv(fd, buf, sizeof(buf), 0);
@@ -241,84 +244,20 @@ void Server::Impl::handleConnection(int fd,
             return;
         }
 
-        buffer.append(buf, (size_t) n);
+        auto state = parser.feed(buf, (std::size_t) n);
 
-        if (!headersParsed)
+        if (state == RequestParser::State::Invalid)
         {
-            auto end = buffer.find("\r\n\r\n");
-            if (end == std::string::npos)
-                continue;
-
-            auto stream = std::stringstream(buffer.substr(0, end));
-            auto line = std::string();
-
-            if (!std::getline(stream, line))
-            {
-                ::close(fd);
-                return;
-            }
-            if (!line.empty() && line.back() == '\r')
-                line.pop_back();
-
-            auto sp1 = line.find(' ');
-            auto sp2 = line.find(' ', sp1 + 1);
-            if (sp1 == std::string::npos || sp2 == std::string::npos)
-            {
-                ::close(fd);
-                return;
-            }
-
-            request.type = line.substr(0, sp1);
-            request.url = line.substr(sp1 + 1, sp2 - sp1 - 1);
-
-            auto query = request.url.find('?');
-            if (query != std::string::npos)
-                request.params = parseQueryString(request.url.substr(query + 1));
-
-            while (std::getline(stream, line))
-            {
-                if (!line.empty() && line.back() == '\r')
-                    line.pop_back();
-                if (line.empty())
-                    break;
-                auto colon = line.find(':');
-                if (colon == std::string::npos)
-                    continue;
-                request.headers[Strings::trim(line.substr(0, colon))] =
-                    Strings::trim(line.substr(colon + 1));
-            }
-
-            bodyStart = end + 4;
-            headersParsed = true;
-
-            for (auto& [k, v]: request.headers)
-            {
-                if (Strings::toLower(k) == "content-length")
-                {
-                    try
-                    {
-                        bodyExpected = (size_t) std::stoul(v);
-                    }
-                    catch (...)
-                    {
-                    }
-                    break;
-                }
-            }
+            ::close(fd);
+            return;
         }
 
-        if (headersParsed && buffer.size() - bodyStart >= bodyExpected)
+        if (state == RequestParser::State::Ready)
         {
-            request.body = buffer.substr(bodyStart, bodyExpected);
-
-            auto sendResponse = [fd](const Response& res)
-            {
-                writeResponseToFd(fd, res);
-                ::close(fd);
-            };
-
-            dispatcher->dispatch(
-                DispatchTask {std::move(request), handler, std::move(sendResponse)});
+            auto request = std::move(parser.request());
+            request.remoteAddr = remoteAddr;
+            request.remotePort = remotePort;
+            dispatchRequest(fd, std::move(request));
             return;
         }
     }

@@ -1,8 +1,16 @@
 #include "Http.h"
+#include "HttpProtocol.h"
+
+#include <eacp/Core/Utils/Files.h>
+#include <eacp/Core/Utils/Strings.h>
+
+#include <ea_data_structures/Structures/OwnedVector.h>
+#include <ea_data_structures/Structures/Vector.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <eacp/Core/Utils/Strings.h>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -11,7 +19,6 @@
 #include <system_error>
 #include <thread>
 #include <utility>
-#include <vector>
 
 namespace eacp::HTTP
 {
@@ -44,10 +51,7 @@ bool Request::hasHeader(const std::string& key) const
 
 std::string Request::getHeader(const std::string& key) const
 {
-    for (auto& [k, v]: headers)
-        if (Strings::equalsCaseInsensitive(k, key))
-            return v;
-    return {};
+    return findHeaderIgnoringCase(headers, key);
 }
 
 bool Request::hasParam(const std::string& key) const
@@ -69,6 +73,8 @@ std::string Request::pathWithoutQuery() const
     return url.substr(0, q);
 }
 
+namespace
+{
 std::string generateBoundary()
 {
     auto rd = std::random_device();
@@ -84,13 +90,53 @@ std::string generateBoundary()
     return ss.str();
 }
 
-std::string filenameFromPath(const std::string& path)
+void appendFormFields(std::stringstream& body,
+                      const std::string& boundary,
+                      const EA::Vector<FormField>& fields)
 {
-    auto pos = path.find_last_of("/\\");
-    if (pos != std::string::npos)
-        return path.substr(pos + 1);
-    return path;
+    for (const auto& field: fields)
+    {
+        body << "--" << boundary << "\r\n";
+        body << "Content-Disposition: form-data; name=\"" << field.name
+             << "\"\r\n\r\n";
+        body << field.value << "\r\n";
+    }
 }
+
+void appendFileFields(std::stringstream& body,
+                      const std::string& boundary,
+                      const EA::Vector<FileField>& files)
+{
+    for (const auto& file: files)
+    {
+        auto stream = std::ifstream(file.filePath, std::ios::binary);
+        auto content = std::string(std::istreambuf_iterator<char>(stream),
+                                   std::istreambuf_iterator<char>());
+
+        body << "--" << boundary << "\r\n";
+        body << "Content-Disposition: form-data; name=\"" << file.fieldName
+             << "\"; filename=\"" << file.fileName << "\"\r\n";
+        body << "Content-Type: " << file.contentType << "\r\n\r\n";
+        body << content << "\r\n";
+    }
+}
+
+void buildMultipartBody(Request& req)
+{
+    if (req.formFields.empty() && req.fileFields.empty())
+        return;
+
+    auto boundary = generateBoundary();
+    req.headers["Content-Type"] = "multipart/form-data; boundary=" + boundary;
+
+    auto body = std::stringstream();
+    appendFormFields(body, boundary, req.formFields);
+    appendFileFields(body, boundary, req.fileFields);
+    body << "--" << boundary << "--\r\n";
+
+    req.body = body.str();
+}
+} // namespace
 
 Request::Request(const std::string& urlToUse)
     : url(urlToUse)
@@ -116,45 +162,10 @@ Request& Request::addFileField(const std::string& fieldName,
                                const std::string& filePath,
                                const std::string& contentType)
 {
-    auto fileName = filenameFromPath(filePath);
+    auto fileName = Files::filenameFromPath(filePath);
     fileFields.add({fieldName, filePath, contentType, fileName});
     type = "POST";
     return *this;
-}
-
-void buildMultipartBody(Request& req)
-{
-    if (req.formFields.empty() && req.fileFields.empty())
-        return;
-
-    auto boundary = generateBoundary();
-    req.headers["Content-Type"] = "multipart/form-data; boundary=" + boundary;
-
-    auto ss = std::stringstream();
-
-    for (const auto& field: req.formFields)
-    {
-        ss << "--" << boundary << "\r\n";
-        ss << "Content-Disposition: form-data; name=\"" << field.name
-           << "\"\r\n\r\n";
-        ss << field.value << "\r\n";
-    }
-
-    for (const auto& file: req.fileFields)
-    {
-        auto stream = std::ifstream(file.filePath, std::ios::binary);
-        auto content = std::string(std::istreambuf_iterator<char>(stream),
-                                   std::istreambuf_iterator<char>());
-
-        ss << "--" << boundary << "\r\n";
-        ss << "Content-Disposition: form-data; name=\"" << file.fieldName
-           << "\"; filename=\"" << file.fileName << "\"\r\n";
-        ss << "Content-Type: " << file.contentType << "\r\n\r\n";
-        ss << content << "\r\n";
-    }
-
-    ss << "--" << boundary << "--\r\n";
-    req.body = ss.str();
 }
 
 Response Request::perform() const
@@ -175,199 +186,291 @@ struct ChunkRange
     std::int64_t end;
 };
 
-std::string getHeaderCI(const std::map<std::string, std::string>& headers,
-                        const std::string& key)
+struct RangeProbe
 {
-    for (const auto& [k, v]: headers)
-        if (Strings::equalsCaseInsensitive(k, key))
-            return v;
+    bool supportsRanges = false;
+    std::int64_t totalBytes = -1;
+    std::map<std::string, std::string> headers;
+};
 
-    return {};
-}
-
-bool acceptsRangeBytes(const std::string& value)
+RangeProbe probeRangeSupport(const Request& req)
 {
-    auto lower = Strings::toLower(value);
-    return lower.find("bytes") != std::string::npos;
-}
-} // namespace
-
-Response downloadFileParallel(const Request& req, const std::string& filePath)
-{
-    auto* progress = req.progress;
-
     auto head = req;
     head.type = "HEAD";
     head.parallelChunks = 1;
     head.progress = nullptr;
     head.headers.erase("Range");
-    auto headRes = httpRequest(head);
 
-    auto rangeOk =
-        headRes.error.empty() && headRes.statusCode >= 200
-        && headRes.statusCode < 300
-        && acceptsRangeBytes(getHeaderCI(headRes.headers, "Accept-Ranges"));
+    auto response = httpRequest(head);
 
-    auto total = std::int64_t(-1);
-    if (rangeOk)
+    auto probe = RangeProbe();
+    probe.headers = response.headers;
+
+    auto succeeded = response.error.empty() && response.statusCode >= 200
+                     && response.statusCode < 300;
+
+    if (!succeeded)
+        return probe;
+
+    probe.supportsRanges =
+        acceptsByteRanges(findHeaderIgnoringCase(response.headers, "Accept-Ranges"));
+
+    if (!probe.supportsRanges)
+        return probe;
+
+    auto contentLength = findHeaderIgnoringCase(response.headers, "Content-Length");
+    if (contentLength.empty())
+        return probe;
+
+    try
     {
-        auto cl = getHeaderCI(headRes.headers, "Content-Length");
-        if (!cl.empty())
-        {
-            try
-            {
-                total = std::stoll(cl);
-            }
-            catch (...)
-            {
-                total = -1;
-            }
-        }
+        probe.totalBytes = std::stoll(contentLength);
+    }
+    catch (...)
+    {
+        probe.totalBytes = -1;
     }
 
-    auto N = std::min(req.parallelChunks, kMaxParallelChunks);
+    return probe;
+}
 
-    if (!rangeOk || total < kMinParallelTotal || N < 2)
-        return downloadFile(req, filePath);
+EA::Vector<ChunkRange> computeChunkRanges(std::int64_t total, int chunkCount)
+{
+    auto chunkSize = total / chunkCount;
+    auto ranges = EA::Vector<ChunkRange>(chunkCount);
 
-    auto chunkSize = total / N;
-    auto ranges = std::vector<ChunkRange>(N);
-    for (auto i = 0; i < N; ++i)
+    for (auto i = 0; i < chunkCount; ++i)
     {
         ranges[i].start = i * chunkSize;
-        ranges[i].end = (i == N - 1) ? total - 1 : (i + 1) * chunkSize - 1;
+        ranges[i].end = (i == chunkCount - 1) ? total - 1 : (i + 1) * chunkSize - 1;
     }
 
-    if (progress)
-        progress->totalBytes.store(total);
+    return ranges;
+}
 
-    auto chunkProgress = std::vector<DownloadProgress>(N);
-    auto chunkPaths = std::vector<std::string>(N);
-    for (auto i = 0; i < N; ++i)
-        chunkPaths[i] = filePath + ".part" + std::to_string(i);
+EA::Vector<std::string> makeChunkPaths(const std::string& filePath, int chunkCount)
+{
+    auto paths = EA::Vector<std::string>(chunkCount);
 
-    auto cleanupTempFiles = [&]
+    for (auto i = 0; i < chunkCount; ++i)
+        paths[i] = filePath + ".part" + std::to_string(i);
+
+    return paths;
+}
+
+void removeChunkFiles(const EA::Vector<std::string>& chunkPaths)
+{
+    for (const auto& path: chunkPaths)
     {
-        for (const auto& p: chunkPaths)
-        {
-            auto ec = std::error_code();
-            std::filesystem::remove(p, ec);
-        }
-    };
+        auto ec = std::error_code();
+        std::filesystem::remove(path, ec);
+    }
+}
 
-    auto firstError = std::string();
-    auto errorMutex = std::mutex();
-    auto recordError = [&](std::string msg)
+std::string downloadChunk(const Request& sourceReq,
+                          const ChunkRange& range,
+                          DownloadProgress& progress,
+                          const std::string& destPath)
+{
+    auto worker = sourceReq;
+    worker.parallelChunks = 1;
+    worker.type = "GET";
+    worker.progress = &progress;
+    worker.headers["Range"] =
+        "bytes=" + std::to_string(range.start) + "-" + std::to_string(range.end);
+
+    auto res = downloadFile(worker, destPath);
+
+    if (!res.error.empty())
+        return res.error;
+
+    if (res.statusCode != 206)
+        return "Range request returned status " + std::to_string(res.statusCode);
+
+    return {};
+}
+
+class ErrorRecorder
+{
+public:
+    void record(std::string message)
     {
-        auto lock = std::lock_guard(errorMutex);
+        auto lock = std::lock_guard(mutex);
         if (firstError.empty())
-            firstError = std::move(msg);
-    };
-
-    auto threads = std::vector<std::thread>();
-    threads.reserve((size_t) N);
-    for (auto i = 0; i < N; ++i)
-    {
-        threads.emplace_back(
-            [&, i]
-            {
-                auto worker = req;
-                worker.parallelChunks = 1;
-                worker.type = "GET";
-                worker.progress = &chunkProgress[i];
-                worker.headers["Range"] = "bytes=" + std::to_string(ranges[i].start)
-                                          + "-" + std::to_string(ranges[i].end);
-
-                auto res = downloadFile(worker, chunkPaths[i]);
-
-                if (!res.error.empty())
-                {
-                    recordError(res.error);
-                    return;
-                }
-                if (res.statusCode != 206)
-                    recordError("Range request returned status "
-                                + std::to_string(res.statusCode));
-            });
+            firstError = std::move(message);
     }
 
-    auto sumChunkBytes = [&]
+    std::string take()
     {
-        auto sum = std::int64_t(0);
-        for (const auto& cp: chunkProgress)
-            sum += cp.bytesReceived.load();
-        return sum;
-    };
+        auto lock = std::lock_guard(mutex);
+        return firstError;
+    }
 
-    auto aggregatorStop = std::atomic<bool>(false);
-    auto aggregator = std::thread(
-        [&]
+private:
+    std::mutex mutex;
+    std::string firstError;
+};
+
+std::int64_t sumReceivedBytes(const EA::OwnedVector<DownloadProgress>& chunkProgress)
+{
+    auto sum = std::int64_t(0);
+    for (auto i = 0; i < chunkProgress.size(); ++i)
+        sum += chunkProgress[i]->bytesReceived.load();
+    return sum;
+}
+
+void propagateCancelToChunks(EA::OwnedVector<DownloadProgress>& chunkProgress)
+{
+    for (auto i = 0; i < chunkProgress.size(); ++i)
+        chunkProgress[i]->cancel.store(true);
+}
+
+std::thread
+    launchProgressAggregator(DownloadProgress* aggregate,
+                             EA::OwnedVector<DownloadProgress>& chunkProgress,
+                             std::atomic<bool>& shouldStop)
+{
+    return std::thread(
+        [aggregate, &chunkProgress, &shouldStop]
         {
-            while (!aggregatorStop.load())
+            while (!shouldStop.load())
             {
-                if (progress)
+                if (aggregate)
                 {
-                    progress->bytesReceived.store(sumChunkBytes());
+                    aggregate->bytesReceived.store(sumReceivedBytes(chunkProgress));
 
-                    if (progress->cancel.load())
-                        for (auto& cp: chunkProgress)
-                            cp.cancel.store(true);
+                    if (aggregate->cancel.load())
+                        propagateCancelToChunks(chunkProgress);
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(25));
             }
         });
+}
 
-    for (auto& t: threads)
-        t.join();
+EA::Vector<std::thread>
+    launchChunkWorkers(const Request& sourceReq,
+                       const EA::Vector<ChunkRange>& ranges,
+                       EA::OwnedVector<DownloadProgress>& progress,
+                       const EA::Vector<std::string>& chunkPaths,
+                       ErrorRecorder& errors)
+{
+    auto threads = EA::Vector<std::thread>();
+    threads.reserve(ranges.size());
 
-    aggregatorStop.store(true);
-    aggregator.join();
-
-    if (progress)
-        progress->bytesReceived.store(sumChunkBytes());
-
-    auto result = Response();
-
-    if (progress && progress->cancel.load() && firstError.empty())
-        firstError = "cancelled";
-
-    if (!firstError.empty())
+    for (auto i = 0; i < ranges.size(); ++i)
     {
-        cleanupTempFiles();
-        result.error = firstError;
-        return result;
+        threads.emplace_back(
+            [&sourceReq, &ranges, &progress, &chunkPaths, &errors, i]
+            {
+                auto message =
+                    downloadChunk(sourceReq, ranges[i], *progress[i], chunkPaths[i]);
+
+                if (!message.empty())
+                    errors.record(std::move(message));
+            });
     }
 
+    return threads;
+}
+
+std::string concatenateChunkFiles(const std::string& filePath,
+                                  const EA::Vector<std::string>& chunkPaths)
+{
     auto out = std::ofstream(filePath, std::ios::binary | std::ios::trunc);
+
     if (!out)
+        return "Failed to open destination file";
+
+    for (const auto& path: chunkPaths)
     {
-        cleanupTempFiles();
-        result.error = "Failed to open destination file";
-        return result;
-    }
-    for (const auto& p: chunkPaths)
-    {
-        auto in = std::ifstream(p, std::ios::binary);
+        auto in = std::ifstream(path, std::ios::binary);
+
         if (!in)
-        {
-            out.close();
-            cleanupTempFiles();
-            result.error = "Failed to read chunk file";
-            return result;
-        }
+            return "Failed to read chunk file";
+
         out << in.rdbuf();
     }
+
     out.close();
-    cleanupTempFiles();
+
     if (!out)
+        return "Failed to write destination file";
+
+    return {};
+}
+
+bool shouldUseSingleStreamDownload(const RangeProbe& probe, int requestedChunks)
+{
+    auto chunkCount = std::min(requestedChunks, kMaxParallelChunks);
+    return !probe.supportsRanges || probe.totalBytes < kMinParallelTotal
+           || chunkCount < 2;
+}
+
+Response makeParallelFailureResponse(const std::string& error,
+                                     const EA::Vector<std::string>& chunkPaths)
+{
+    removeChunkFiles(chunkPaths);
+    auto response = Response();
+    response.error = error;
+    return response;
+}
+} // namespace
+
+Response downloadFileParallel(const Request& req, const std::string& filePath)
+{
+    auto probe = probeRangeSupport(req);
+
+    if (shouldUseSingleStreamDownload(probe, req.parallelChunks))
+        return downloadFile(req, filePath);
+
+    auto chunkCount = std::min(req.parallelChunks, kMaxParallelChunks);
+    auto ranges = computeChunkRanges(probe.totalBytes, chunkCount);
+    auto chunkPaths = makeChunkPaths(filePath, chunkCount);
+
+    if (req.progress)
+        req.progress->totalBytes.store(probe.totalBytes);
+
+    auto chunkProgress = EA::OwnedVector<DownloadProgress>();
+    for (auto i = 0; i < chunkCount; ++i)
+        chunkProgress.createNew();
+    auto errors = ErrorRecorder();
+    auto workers =
+        launchChunkWorkers(req, ranges, chunkProgress, chunkPaths, errors);
+
+    auto stopAggregator = std::atomic<bool>(false);
+    auto aggregator =
+        launchProgressAggregator(req.progress, chunkProgress, stopAggregator);
+
+    for (auto& t: workers)
+        t.join();
+
+    stopAggregator.store(true);
+    aggregator.join();
+
+    if (req.progress)
+        req.progress->bytesReceived.store(sumReceivedBytes(chunkProgress));
+
+    auto error = errors.take();
+    if (req.progress && req.progress->cancel.load() && error.empty())
+        error = "cancelled";
+
+    if (!error.empty())
+        return makeParallelFailureResponse(error, chunkPaths);
+
+    auto mergeError = concatenateChunkFiles(filePath, chunkPaths);
+    removeChunkFiles(chunkPaths);
+
+    if (!mergeError.empty())
     {
-        result.error = "Failed to write destination file";
-        return result;
+        auto response = Response();
+        response.error = mergeError;
+        return response;
     }
 
-    result.statusCode = 200;
-    result.headers = headRes.headers;
-    return result;
+    auto response = Response();
+    response.statusCode = 200;
+    response.headers = probe.headers;
+    return response;
 }
 
 Response Request::downloadTo(const std::string& filePath) const
@@ -394,6 +497,23 @@ int hexValue(char c)
         return c - 'A' + 10;
     return -1;
 }
+
+void appendDecodedPercentEscape(std::string& out,
+                                const std::string& src,
+                                std::size_t& i)
+{
+    auto hi = hexValue(src[i + 1]);
+    auto lo = hexValue(src[i + 2]);
+
+    if (hi < 0 || lo < 0)
+    {
+        out.push_back('%');
+        return;
+    }
+
+    out.push_back((char) ((hi << 4) | lo));
+    i += 2;
+}
 } // namespace
 
 std::string urlDecode(const std::string& encoded)
@@ -401,54 +521,46 @@ std::string urlDecode(const std::string& encoded)
     auto result = std::string();
     result.reserve(encoded.size());
 
-    for (auto i = size_t {0}; i < encoded.size(); ++i)
+    for (auto i = std::size_t {0}; i < encoded.size(); ++i)
     {
         auto c = encoded[i];
+
         if (c == '+')
-        {
             result.push_back(' ');
-        }
         else if (c == '%' && i + 2 < encoded.size())
-        {
-            auto hi = hexValue(encoded[i + 1]);
-            auto lo = hexValue(encoded[i + 2]);
-            if (hi < 0 || lo < 0)
-            {
-                result.push_back(c);
-                continue;
-            }
-            result.push_back((char) ((hi << 4) | lo));
-            i += 2;
-        }
+            appendDecodedPercentEscape(result, encoded, i);
         else
-        {
             result.push_back(c);
-        }
     }
 
     return result;
 }
 
+namespace
+{
+void parseQueryPair(const std::string& pair, std::map<std::string, std::string>& out)
+{
+    if (pair.empty())
+        return;
+
+    auto eq = pair.find('=');
+    if (eq == std::string::npos)
+        out[urlDecode(pair)] = "";
+    else
+        out[urlDecode(pair.substr(0, eq))] = urlDecode(pair.substr(eq + 1));
+}
+} // namespace
+
 std::map<std::string, std::string> parseQueryString(const std::string& query)
 {
     auto result = std::map<std::string, std::string>();
+    auto pos = std::size_t {0};
 
-    auto pos = size_t {0};
     while (pos < query.size())
     {
         auto amp = query.find('&', pos);
         auto end = amp == std::string::npos ? query.size() : amp;
-        auto pair = query.substr(pos, end - pos);
-
-        if (!pair.empty())
-        {
-            auto eq = pair.find('=');
-            if (eq == std::string::npos)
-                result[urlDecode(pair)] = "";
-            else
-                result[urlDecode(pair.substr(0, eq))] =
-                    urlDecode(pair.substr(eq + 1));
-        }
+        parseQueryPair(query.substr(pos, end - pos), result);
 
         if (amp == std::string::npos)
             break;

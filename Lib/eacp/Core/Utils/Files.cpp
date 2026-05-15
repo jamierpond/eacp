@@ -15,4 +15,14 @@ std::string readFile(const std::string& path)
     buffer << stream.rdbuf();
     return buffer.str();
 }
+
+std::string filenameFromPath(const std::string& path)
+{
+    auto separator = path.find_last_of("/\\");
+
+    if (separator != std::string::npos)
+        return path.substr(separator + 1);
+
+    return path;
+}
 } // namespace eacp::Files

@@ -26,6 +26,4 @@ struct Dispatcher
 
 EA::OwningPointer<Dispatcher> makeDispatcher(const ServerOptions& options);
 
-const char* reasonPhrase(int code);
-
 } // namespace eacp::HTTP
