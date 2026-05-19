@@ -5,7 +5,9 @@ export type Invoke = (command: string, payload: unknown) => Promise<unknown>;
 export function makeBackend(invoke: Invoke)
 {
     return {
-        ping: (): Promise<T.PingResponse> =>
-            invoke('ping', {}) as Promise<T.PingResponse>,
+        getParameters: (): Promise<T.Parameters> =>
+            invoke('getParameters', {}) as Promise<T.Parameters>,
+        setParameters: (req: T.Parameters): Promise<void> =>
+            invoke('setParameters', req) as Promise<void>,
     };
 }

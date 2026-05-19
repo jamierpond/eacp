@@ -1,5 +1,6 @@
-export interface PingResponse {
-    pong: boolean;
-    serverTimeMs: number;
+export interface Parameters {
+    level: number;
+    autoCycle: boolean;
+    counter: number;
 }
 

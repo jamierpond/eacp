@@ -1,3 +1,6 @@
+#include "Types.h"
+
+#include <eacp/Core/Threads/Timer.h>
 #include <eacp/WebView/WebView.h>
 
 using namespace eacp;
@@ -14,6 +17,9 @@ struct MyApp
     WebView webView {embeddedOptions("WebApp")};
     WebViewBridge transport {webView};
     Window window;
+    StateValue<Parameters>::Subscription bridgeBinding =
+        bindToBridge(parametersState(), transport.getBridge(), "parameters");
+    Threads::Timer timer {[] { advanceTick(); }, 30};
 };
 
 int main()

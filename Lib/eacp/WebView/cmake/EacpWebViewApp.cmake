@@ -20,6 +20,8 @@
 #                                         # (cpp-miro and cpp-client are always
 #                                         # emitted so siblings can consume the
 #                                         # schema via eacp_target_uses_schema)
+#       [REACT]                           # emit React hook bindings into
+#                                         # ${WEB_DIR}/src/generated/react.ts
 #   )
 #
 # Schema layout:
@@ -33,9 +35,10 @@
 #     Both directories ride along on the schema's INTERFACE includes,
 #     so any consumer that links the schema picks them up automatically.
 function(eacp_add_webview_app TARGET)
+    set(options REACT)
     set(oneValueArgs WEB_DIR BUNDLE_ID BUNDLE_NAME NAMESPACE CATEGORY SCHEMA_NAME)
     set(multiValueArgs SOURCES COMMAND_SOURCES SCHEMA_FORMATS)
-    cmake_parse_arguments(ARG "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if (NOT ARG_SOURCES)
         message(FATAL_ERROR "eacp_add_webview_app(${TARGET}): SOURCES is required")
@@ -91,6 +94,18 @@ function(eacp_add_webview_app TARGET)
                 BASENAME ${ARG_SCHEMA_NAME})
 
         eacp_target_uses_schema(${TARGET} ${TARGET}Schema HANDLERS)
+
+        # Command sources may reach into eacp-core types (e.g.
+        # StateValue<T> declared in the app's Types.h). The codegen tool
+        # never *calls* runtime code, but it has to compile and link the
+        # same TU, so pull in eacp-core's include path and static lib.
+        if (TARGET ${TARGET}Schema_Codegen)
+            target_link_libraries(${TARGET}Schema_Codegen PRIVATE eacp-core)
+        endif ()
+    endif ()
+
+    if (ARG_REACT)
+        eacp_webview_generate_react_hooks(OUTPUT_DIR ${TS_GENERATED_DIR})
     endif ()
 
     eacp_webview_add_vite(${TARGET}

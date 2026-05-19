@@ -4,6 +4,7 @@ find_package(ResEmbed REQUIRED)
 find_package(Miro REQUIRED)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewVite.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewBackend.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewReact.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewApp.cmake)
 
 add_library(eacp-webview STATIC)

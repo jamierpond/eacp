@@ -2,3 +2,4 @@
 
 #include "WebView/Bridge.h"
 #include "WebView/MenuHelpers.h"
+#include "WebView/StateBridge.h"

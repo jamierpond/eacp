@@ -1,7 +1,8 @@
 import type * as T from './schema';
 
 export type Handlers = {
-    ping(): T.PingResponse | Promise<T.PingResponse>;
+    getParameters(): T.Parameters | Promise<T.Parameters>;
+    setParameters(req: T.Parameters): void | Promise<void>;
 };
 
 export class UnknownCommandError extends Error
@@ -13,11 +14,12 @@ export class UnknownCommandError extends Error
     }
 }
 
-export async function dispatch(handlers: Handlers, command: string, _payload: unknown): Promise<unknown>
+export async function dispatch(handlers: Handlers, command: string, payload: unknown): Promise<unknown>
 {
     switch (command)
     {
-        case 'ping': return await handlers.ping();
+        case 'getParameters': return await handlers.getParameters();
+        case 'setParameters': return await handlers.setParameters(payload as T.Parameters);
         default: throw new UnknownCommandError(command);
     }
 }
