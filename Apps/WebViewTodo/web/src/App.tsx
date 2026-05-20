@@ -1,24 +1,20 @@
-import { useMemo, useState } from 'react';
-import type { TodoItem } from './generated/schema';
+import { memo, useState } from 'react';
 import {
     addTodo,
     clearCompleted,
     editTodo,
     removeTodo,
     toggleTodo,
-    useTodoState,
-} from './state';
+    useTodoIds,
+    useTodoItem,
+    useTodoSummary,
+} from './store';
 
 export default function App()
 {
     console.log('render: App');
-    const state = useTodoState();
+    const ids = useTodoIds();
     const [draft, setDraft] = useState('');
-
-    const completedCount = useMemo(
-        () => state.items.filter((item) => item.completed).length,
-        [state.items]);
-    const remaining = state.items.length - completedCount;
 
     const submitDraft = () =>
     {
@@ -61,37 +57,26 @@ export default function App()
                 </form>
 
                 <ul className="list">
-                    {state.items.map((item) => (
-                        <TodoRow key={item.id} item={item} />
-                    ))}
-                    {state.items.length === 0 && (
+                    {ids.map((id) => <TodoRow key={id} id={id} />)}
+                    {ids.length === 0 && (
                         <li className="empty">Nothing here yet — add a todo above.</li>
                     )}
                 </ul>
 
-                <footer className="footer">
-                    <span className="count">
-                        {remaining} remaining · {completedCount} done
-                    </span>
-                    <button
-                        type="button"
-                        className="link"
-                        disabled={completedCount === 0}
-                        onClick={() => void clearCompleted()}
-                    >
-                        Clear completed
-                    </button>
-                </footer>
+                <TodoFooter />
             </section>
         </main>
     );
 }
 
-function TodoRow({ item }: { item: TodoItem })
+const TodoRow = memo(function TodoRow({ id }: { id: number })
 {
-    console.log('render: TodoRow', item.id);
+    console.log('render: TodoRow', id);
+    const item = useTodoItem(id);
     const [editing, setEditing] = useState(false);
-    const [draft, setDraft] = useState(item.text);
+    const [draft, setDraft] = useState('');
+
+    if (!item) return null;
 
     const beginEdit = () =>
     {
@@ -146,5 +131,28 @@ function TodoRow({ item }: { item: TodoItem })
                 ×
             </button>
         </li>
+    );
+});
+
+function TodoFooter()
+{
+    console.log('render: TodoFooter');
+    const summary = useTodoSummary();
+    const remaining = summary.total - summary.completed;
+
+    return (
+        <footer className="footer">
+            <span className="count">
+                {remaining} remaining · {summary.completed} done
+            </span>
+            <button
+                type="button"
+                className="link"
+                disabled={summary.completed === 0}
+                onClick={() => void clearCompleted()}
+            >
+                Clear completed
+            </button>
+        </footer>
     );
 }

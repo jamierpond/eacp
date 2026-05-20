@@ -9,7 +9,7 @@
 //     hook so consumer components look like:
 //         const [params, setParams] = useParameters();
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 
 export interface EventCapableBackend
 {
@@ -115,5 +115,69 @@ export function makeNativeState<T>(
     return function useState(): [T, (next: T) => void]
     {
         return useNativeState(backend, event, setCommand, initial);
+    };
+}
+
+// ---------- External-store factory ----------
+//
+// Bridges a C++-owned state value into a React `useSyncExternalStore`
+// hook. Compared with makeNativeState:
+//
+//   - Concurrent-mode safe: getSnapshot is read on every render, so
+//     React can never tear against the live store.
+//   - Initial fetch is built in: `fetch` is invoked once at module load
+//     so the first render has real data instead of waiting for the next
+//     C++ broadcast.
+//   - No setter is baked in. Action-style commands (add/toggle/remove)
+//     don't fit the "one set" shape; call typed commands on `backend`
+//     directly from event handlers.
+//
+// Selector hooks (re-render only on the slice you read) can be layered
+// on top by hand-writing a store with a Map-by-id + identity-preserving
+// apply step and exposing per-slice `useSyncExternalStore` hooks.
+//
+//   export const useParameters = makeBridgeStore<Parameters>({
+//       backend,
+//       event: 'parameters',
+//       fetch: backend.getParameters,
+//       initial: { level: 0.5, autoCycle: false, counter: 0 },
+//   });
+//
+//   function Component() { const params = useParameters(); ... }
+export interface BridgeStoreConfig<T>
+{
+    backend: EventCapableBackend;
+    event: string;
+    fetch: () => Promise<T>;
+    initial: T;
+}
+
+export function makeBridgeStore<T>(config: BridgeStoreConfig<T>): () => T
+{
+    let snapshot: T = config.initial;
+    const listeners = new Set<() => void>();
+
+    const setSnapshot = (next: T): void =>
+    {
+        snapshot = next;
+        for (const listener of listeners) listener();
+    };
+
+    const subscribe = (listener: () => void): (() => void) =>
+    {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+    };
+
+    const getSnapshot = (): T => snapshot;
+
+    void config.fetch().then(setSnapshot).catch(
+        (err) => console.error('makeBridgeStore: initial fetch failed', err));
+
+    config.backend.on?.(config.event, (payload) => setSnapshot(payload as T));
+
+    return function useStore(): T
+    {
+        return useSyncExternalStore(subscribe, getSnapshot);
     };
 }

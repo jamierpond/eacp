@@ -1,8 +1,8 @@
-import { useParameters } from './state';
+import { setParameters, useParameters } from './state';
 
 export default function App()
 {
-    const [params, setParams] = useParameters();
+    const params = useParameters();
 
     return (
         <main>
@@ -22,7 +22,7 @@ export default function App()
                     max={1000}
                     value={Math.round(params.level * 1000)}
                     onChange={(e) =>
-                        setParams({ ...params, level: Number(e.target.value) / 1000 })}
+                        void setParameters({ ...params, level: Number(e.target.value) / 1000 })}
                 />
                 <span className="readout">{params.level.toFixed(2)}</span>
             </div>
@@ -33,7 +33,7 @@ export default function App()
                         type="checkbox"
                         checked={params.autoCycle}
                         onChange={(e) =>
-                            setParams({ ...params, autoCycle: e.target.checked })}
+                            void setParameters({ ...params, autoCycle: e.target.checked })}
                     />
                     Auto-cycle (native drives the level)
                 </label>
