@@ -50,3 +50,19 @@ endif ()
 set_default_target_setting(eacp-webview)
 eacp_enable_unity_build(eacp-webview)
 add_ide_sources(eacp-webview)
+
+# Codegen-only object library — bundles the eacp events / hooks
+# formatters and their static-init registration with Miro's format
+# registry. Spliced into each app's ${TARGET}Schema_Codegen executable
+# by eacp_add_webview_app, so the format registrations only run inside
+# the build-time codegen tool, never in the shipping runtime.
+#
+# Skipped when cross-compiling — symmetric with MiroTypeExportMain.
+if (NOT CMAKE_CROSSCOMPILING)
+    add_library(eacp-webview-codegen OBJECT
+            Codegen/EventsFormat.cpp
+            Codegen/HooksFormat.cpp
+            Codegen/Register.cpp)
+    target_link_libraries(eacp-webview-codegen PUBLIC Miro)
+    set_default_target_setting(eacp-webview-codegen)
+endif ()

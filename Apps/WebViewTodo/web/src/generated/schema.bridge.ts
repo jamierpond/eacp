@@ -8,42 +8,25 @@
 // surfaces `on` with whatever shape the transport provided, so users
 // on event-capable transports get full typing and users on
 // request/response-only transports see `on` as undefined.
-//
-// The optional `E` type parameter is the event map (typically the
-// `ServerEvents` interface from the matching .events module). When
-// supplied, `on` enforces that the event name is a declared key and
-// infers the payload type. When omitted, defaults to the empty object
-// type — `keyof object` is `never`, so untyped transports can't call
-// `on` at all and have to opt in by parameterising explicitly.
-//
-// The constraint is `extends object` rather than the stricter
-// `Record<string, unknown>` so interfaces can satisfy it without
-// declaring an explicit index signature.
 
 export type Invoke = (command: string, payload: unknown) => Promise<unknown>;
+export type EventHandler = (payload: unknown) => void;
 export type Unsubscribe = () => void;
 
-export type TransportOn<E extends object> =
-    <K extends Extract<keyof E, string>>(
-        event: K,
-        handler: (payload: E[K]) => void,
-    ) => Unsubscribe;
-
-export interface Transport<E extends object = object>
+export interface Transport
 {
     invoke: Invoke;
-    on?: TransportOn<E>;
+    on?: (event: string, handler: EventHandler) => Unsubscribe;
 }
 
-export type Bridge<TBackend, E extends object = object>
-    = TBackend & { on: Transport<E>['on'] };
+export type Bridge<TBackend> = TBackend & { on: Transport['on'] };
 
-export function makeBridge<TBackend, E extends object = object>(
-    transport: Transport<E>,
+export function makeBridge<TBackend>(
+    transport: Transport,
     factory: (invoke: Invoke) => TBackend,
-): Bridge<TBackend, E>
+): Bridge<TBackend>
 {
-    const api = factory(transport.invoke.bind(transport)) as Bridge<TBackend, E>;
+    const api = factory(transport.invoke.bind(transport)) as Bridge<TBackend>;
     api.on = transport.on?.bind(transport);
     return api;
 }

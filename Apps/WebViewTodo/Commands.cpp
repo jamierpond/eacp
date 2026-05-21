@@ -2,94 +2,137 @@
 
 #include <eacp/WebView/WebView.h>
 
+#include <ea_data_structures/Pointers/Broadcaster.h>
+
+#include <string>
 #include <utility>
 
 namespace
 {
-long long nextTodoId = 1;
 
-TodoState makeInitialState()
+std::string trim(const std::string& input)
 {
-    auto state = TodoState {};
-    state.items.create(nextTodoId++, "Try editing me (double-click)", false);
-    state.items.create(nextTodoId++, "Toggle a checkbox", false);
-    state.items.create(nextTodoId++, "Add a new todo above", true);
-    return state;
+    auto start = input.find_first_not_of(" \t\n");
+
+    if (start == std::string::npos)
+        return {};
+
+    auto end = input.find_last_not_of(" \t\n");
+    return input.substr(start, end - start + 1);
 }
+
+class TodoStore
+{
+public:
+    TodoStore()
+    {
+        state.items.create(nextId++, "Try editing me (double-click)", false);
+        state.items.create(nextId++, "Toggle a checkbox", false);
+        state.items.create(nextId++, "Add a new todo above", true);
+    }
+
+    const TodoState& get() const { return state; }
+    EA::Broadcaster& getBroadcaster() { return broadcaster; }
+
+    void addTodo(const std::string& text)
+    {
+        auto trimmed = trim(text);
+
+        if (trimmed.empty())
+            return;
+
+        state.items.create(nextId++, std::move(trimmed), false);
+        broadcaster.trigger();
+    }
+
+    void toggleTodo(long long id)
+    {
+        for (auto& item: state.items)
+        {
+            if (item.id == id)
+            {
+                item.completed = !item.completed;
+                broadcaster.trigger();
+                return;
+            }
+        }
+    }
+
+    void editTodo(long long id, std::string text)
+    {
+        for (auto& item: state.items)
+        {
+            if (item.id == id)
+            {
+                item.text = std::move(text);
+                broadcaster.trigger();
+                return;
+            }
+        }
+    }
+
+    void removeTodo(long long id)
+    {
+        auto erased = state.items.eraseIf(
+            [&](const TodoItem& item) { return item.id == id; });
+
+        if (erased)
+            broadcaster.trigger();
+    }
+
+    void clearCompleted()
+    {
+        auto erased = state.items.eraseIf(
+            [](const TodoItem& item) { return item.completed; });
+
+        if (erased)
+            broadcaster.trigger();
+    }
+
+private:
+    TodoState state;
+    EA::Broadcaster broadcaster;
+    long long nextId = 1;
+};
+
 } // namespace
 
-EACP_KEYED_STATE(TodoState, todoState, todos, items, id, makeInitialState())
+TodoStore& todoStore()
+{
+    static auto store = TodoStore {};
+    return store;
+}
+
+EACP_KEYED_STATE(TodoState, todoStore, todos, items, id)
 
 TodoState getTodos()
 {
-    return todoState().get();
+    return todoStore().get();
 }
 
 void addTodo(const AddTodoRequest& req)
 {
-    auto trimmedStart = req.text.find_first_not_of(" \t\n");
-
-    if (trimmedStart == std::string::npos)
-        return;
-
-    auto trimmedEnd = req.text.find_last_not_of(" \t\n");
-    auto text = req.text.substr(trimmedStart, trimmedEnd - trimmedStart + 1);
-
-    todoState().modify([&](TodoState& s)
-                       { s.items.create(nextTodoId++, std::move(text), false); });
+    todoStore().addTodo(req.text);
 }
 
 void toggleTodo(const TodoIdRequest& req)
 {
-    todoState().modify(
-        [&](TodoState& s)
-        {
-            for (auto& item: s.items)
-            {
-                if (item.id == req.id)
-                {
-                    item.completed = !item.completed;
-                    return;
-                }
-            }
-        });
+    todoStore().toggleTodo(req.id);
 }
 
 void editTodo(const EditTodoRequest& req)
 {
-    todoState().modify(
-        [&](TodoState& s)
-        {
-            for (auto& item: s.items)
-            {
-                if (item.id == req.id)
-                {
-                    item.text = req.text;
-                    return;
-                }
-            }
-        });
+    todoStore().editTodo(req.id, req.text);
 }
 
 void removeTodo(const TodoIdRequest& req)
 {
-    todoState().modify(
-        [&](TodoState& s)
-        {
-            auto deleteFunc = [&](const TodoItem& item)
-            { return item.id == req.id; };
-            s.items.eraseIf(deleteFunc);
-        });
+    todoStore().removeTodo(req.id);
 }
 
 void clearCompleted()
 {
-    todoState().modify(
-        [](TodoState& s)
-        {
-            auto deleteFunc = [](const TodoItem& item) { return item.completed; };
-            s.items.eraseIf(deleteFunc);
-        });
+    todoStore().clearCompleted();
 }
 
 MIRO_EXPORT_COMMANDS(

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../Core/Utils/StateValue.h"
+#include "EventRegistry.h"
 
 #include <Miro/Miro.h>
 
@@ -14,21 +14,6 @@
 namespace eacp::Graphics
 {
 
-// Subscribes the bridge to a single state's onChange broadcaster and
-// re-emits the current value as an event whenever it fires. The
-// returned Listener keeps the subscription alive — drop it to
-// disconnect.
-template <typename T>
-eacp::Listener bindToBridge(eacp::StateValue<T>& state,
-                            Miro::Bridge& bridge,
-                            std::string eventName)
-{
-    return eacp::Listener {
-        state.onChange(),
-        [&state, &bridge, name = std::move(eventName)]
-        { bridge.emit(name, state.get()); }};
-}
-
 // ---------- Auto-bind registry ----------
 //
 // EACP_STATE(...) registers a binder into a process-wide list during
@@ -36,6 +21,12 @@ eacp::Listener bindToBridge(eacp::StateValue<T>& state,
 // attachStaticStateBinders() in its constructor to subscribe every
 // registered state at once. The transport owns the resulting Listener
 // pack — when it dies, the listeners unsubscribe.
+//
+// A "store" is any user-defined class that the macro can attach a
+// Listener to (i.e. it derives from EA::Broadcaster or exposes
+// `getBroadcaster()`) and exposes a `get()` returning the payload by
+// const-ref. The store owns its state, its mutators, and the choice of
+// when to call trigger() — the macro only wires it to the bridge.
 
 using StateBinder =
     std::function<EA::OwningPointer<EA::Listener>(Miro::Bridge&)>;
@@ -53,19 +44,18 @@ inline EA::Vector<StateBinder>& stateBinderRegistry()
     return registry;
 }
 
-template <typename T>
-inline void registerStateBinder(eacp::StateValue<T>& (*accessor)(),
-                                std::string eventName)
+template <typename Store>
+inline void registerStateBinder(Store& (*accessor)(), std::string eventName)
 {
     stateBinderRegistry().add(
         [accessor, eventName = std::move(eventName)](Miro::Bridge& bridge)
             -> EA::OwningPointer<EA::Listener>
         {
-            auto& state = accessor();
+            auto& store = accessor();
             return EA::makeOwned<EA::Listener>(
-                state.onChange(),
-                [&state, &bridge, eventName]
-                { bridge.emit(eventName, state.get()); },
+                store,
+                [&store, &bridge, eventName]
+                { bridge.emit(eventName, store.get()); },
                 EA::Listener::Modes::TriggerOnEvent);
         });
 }
@@ -80,74 +70,57 @@ EA::Vector<EA::OwningPointer<EA::Listener>>
 #define EACP_STATE_CAT2(a, b) a##b
 #define EACP_STATE_CAT(a, b) EACP_STATE_CAT2(a, b)
 
-// EACP_STATE — single-declaration state hub. Generates the StateValue
-// accessor, registers the typed bridge event, and registers an auto-
-// bind so any transport built later picks up changes automatically.
-// Replaces the old split across Types.h (declaration), Commands.cpp
-// (definition) and Main.cpp (bindToBridge).
+// EACP_STATE — expose a user-defined store to the bridge.
+//
+// The user declares the store class and its accessor themselves; this
+// macro only wires an auto-bind so any transport built later subscribes
+// to the store and re-emits store.get() under `eventName` whenever the
+// store's broadcaster fires.
 //
 // Usage (must be in a TU, not a header):
-//   EACP_STATE(TodoState, todoState, todos, makeInitialState())
+//   ParametersStore& parametersStore();   // user-defined
+//   EACP_STATE(Parameters, parametersStore, parameters)
 //
-// Generates:
-//   eacp::StateValue<TodoState>& todoState();   // function definition
-//   // ...and registers event "todos" with payload TodoState
-//   // ...and registers a binder so WebViewBridge construction
-//   //    auto-subscribes and starts broadcasting.
+// The store class is responsible for:
+//   - exposing a Broadcaster (inherit EA::Broadcaster or implement
+//     `EA::Broadcaster& getBroadcaster()`)
+//   - exposing `const T& get() const`
+//   - calling trigger() on its broadcaster after each mutation
+//   - providing whatever setters/mutators its callers need
 //
-// The user still owns the read-side command if the frontend needs to
-// fetch initial state:
-//   TodoState getTodos() { return todoState().get(); }
-//   MIRO_EXPORT_COMMAND(getTodos)
-//
-// If the initial expression contains top-level commas (e.g. a brace
-// init list with multiple fields), wrap it in an extra set of parens
-// so the preprocessor sees one argument.
-//
-// Event registration and binder registration both happen inside one
-// static-init lambda so the order is locked together — important when
-// other TUs also register events, since a split would expose us to
-// unspecified inter-TU init ordering.
-#define EACP_STATE(T, accessor, eventName, ...)                                     \
-    eacp::StateValue<T>& accessor()                                                 \
-    {                                                                               \
-        static auto state = eacp::StateValue<T> {__VA_ARGS__};                      \
-        return state;                                                               \
-    }                                                                               \
+// Two registries are populated on static init: the event registry
+// (header-only, drives codegen — emits the ServerEvents type map and
+// the React hooks module) and the binder registry (drives runtime —
+// every transport auto-subscribes to broadcast changes to clients).
+#define EACP_STATE(T, accessor, eventName)                                          \
     namespace                                                                       \
     {                                                                               \
     [[maybe_unused]] const auto EACP_STATE_CAT(eacpState_, __LINE__) = []           \
     {                                                                               \
-        ::Miro::CommandExport::Detail::registerEvent<T>(#eventName);                \
-        ::eacp::Graphics::Detail::registerStateBinder<T>(&accessor, #eventName);    \
+        ::eacp::Graphics::Detail::registerEvent<T>(#eventName);                     \
+        ::eacp::Graphics::Detail::registerStateBinder(&(accessor), #eventName);     \
         return 0;                                                                   \
     }();                                                                            \
     }
 
 // EACP_KEYED_STATE — same as EACP_STATE but additionally declares the
 // payload as a keyed collection (a vector field on the payload, each
-// element identified by an id field). The codegen `hooks` format uses
+// element identified by an id field). React-hooks codegen can read
 // this metadata to emit `useXxx` / `useXxxIds` / `useXxxItem` hooks
 // backed by `makeKeyedStore`, so the user gets per-id selector
 // re-renders for free.
 //
-//   EACP_KEYED_STATE(TodoState, todoState, todos,
+//   EACP_KEYED_STATE(TodoState, todoStore, todos,
 //                    items,            // collection field on TodoState
-//                    id,               // key field on TodoItem
-//                    makeInitialState())
-#define EACP_KEYED_STATE(T, accessor, eventName, collectionField, keyField, ...)    \
-    eacp::StateValue<T>& accessor()                                                 \
-    {                                                                               \
-        static auto state = eacp::StateValue<T> {__VA_ARGS__};                      \
-        return state;                                                               \
-    }                                                                               \
+//                    id)               // key field on TodoItem
+#define EACP_KEYED_STATE(T, accessor, eventName, collectionField, keyField)         \
     namespace                                                                       \
     {                                                                               \
     [[maybe_unused]] const auto EACP_STATE_CAT(eacpKeyedState_, __LINE__) = []      \
     {                                                                               \
-        ::Miro::CommandExport::Detail::registerKeyedEvent<T>(                       \
+        ::eacp::Graphics::Detail::registerKeyedEvent<T>(                            \
             #eventName, #collectionField, #keyField);                               \
-        ::eacp::Graphics::Detail::registerStateBinder<T>(&accessor, #eventName);    \
+        ::eacp::Graphics::Detail::registerStateBinder(&(accessor), #eventName);     \
         return 0;                                                                   \
     }();                                                                            \
     }

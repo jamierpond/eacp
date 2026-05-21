@@ -98,12 +98,24 @@ function(eacp_add_webview_app TARGET)
 
         eacp_target_uses_schema(${TARGET} ${TARGET}Schema HANDLERS)
 
-        # Command sources may reach into eacp-core types (e.g.
-        # StateValue<T> declared in the app's Types.h). The codegen tool
-        # never *calls* runtime code, but it has to compile and link the
-        # same TU, so pull in eacp-core's include path and static lib.
+        # Command sources may reach into eacp-core types. The codegen
+        # tool never *calls* runtime code, but it has to compile and
+        # link the same TU, so pull in eacp-core's include path and
+        # static lib.
+        #
+        # eacp-webview-codegen carries the events / hooks formatter
+        # registrations. Splicing its objects in directly (rather than
+        # just linking) keeps the static-init constructors alive
+        # through the linker — same pattern Miro uses for
+        # MiroTypeExportMain.
         if (TARGET ${TARGET}Schema_Codegen)
             target_link_libraries(${TARGET}Schema_Codegen PRIVATE eacp-core)
+            if (TARGET eacp-webview-codegen)
+                target_sources(${TARGET}Schema_Codegen PRIVATE
+                        $<TARGET_OBJECTS:eacp-webview-codegen>)
+                target_link_libraries(${TARGET}Schema_Codegen PRIVATE
+                        eacp-webview-codegen)
+            endif ()
         endif ()
     endif ()
 
