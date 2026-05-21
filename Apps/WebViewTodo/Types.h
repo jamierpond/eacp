@@ -16,7 +16,7 @@ struct TodoItem
 
 struct TodoState
 {
-    std::vector<TodoItem> items;
+    EA::Vector<TodoItem> items;
 
     MIRO_REFLECT(items)
 };

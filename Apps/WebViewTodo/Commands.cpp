@@ -11,9 +11,9 @@ long long nextTodoId = 1;
 TodoState makeInitialState()
 {
     auto state = TodoState {};
-    state.items.push_back({nextTodoId++, "Try editing me (double-click)", false});
-    state.items.push_back({nextTodoId++, "Toggle a checkbox", false});
-    state.items.push_back({nextTodoId++, "Add a new todo above", true});
+    state.items.create(nextTodoId++, "Try editing me (double-click)", false);
+    state.items.create(nextTodoId++, "Toggle a checkbox", false);
+    state.items.create(nextTodoId++, "Add a new todo above", true);
     return state;
 }
 } // namespace
@@ -35,9 +35,8 @@ void addTodo(const AddTodoRequest& req)
     auto trimmedEnd = req.text.find_last_not_of(" \t\n");
     auto text = req.text.substr(trimmedStart, trimmedEnd - trimmedStart + 1);
 
-    todoState().modify(
-        [&](TodoState& s)
-        { s.items.push_back({nextTodoId++, std::move(text), false}); });
+    todoState().modify([&](TodoState& s)
+                       { s.items.create(nextTodoId++, std::move(text), false); });
 }
 
 void toggleTodo(const TodoIdRequest& req)
@@ -77,8 +76,9 @@ void removeTodo(const TodoIdRequest& req)
     todoState().modify(
         [&](TodoState& s)
         {
-            std::erase_if(s.items,
-                          [&](const TodoItem& item) { return item.id == req.id; });
+            auto deleteFunc = [&](const TodoItem& item)
+            { return item.id == req.id; };
+            s.items.eraseIf(deleteFunc);
         });
 }
 
@@ -87,14 +87,10 @@ void clearCompleted()
     todoState().modify(
         [](TodoState& s)
         {
-            std::erase_if(s.items,
-                          [](const TodoItem& item) { return item.completed; });
+            auto deleteFunc = [](const TodoItem& item) { return item.completed; };
+            s.items.eraseIf(deleteFunc);
         });
 }
 
-MIRO_EXPORT_COMMANDS(getTodos,
-                     addTodo,
-                     toggleTodo,
-                     editTodo,
-                     removeTodo,
-                     clearCompleted)
+MIRO_EXPORT_COMMANDS(
+    getTodos, addTodo, toggleTodo, editTodo, removeTodo, clearCompleted)
