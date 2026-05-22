@@ -136,13 +136,17 @@ function(eacp_add_webview_app TARGET)
     if (ARG_PACKAGE_MANAGER)
         list(APPEND VITE_ARGS PACKAGE_MANAGER ${ARG_PACKAGE_MANAGER})
     endif ()
-    eacp_webview_add_vite(${TARGET} ${VITE_ARGS})
 
     # Vite imports the codegen'd TS modules, so the build-time vite step
-    # must run after the schema's codegen exec emits them.
-    if (TARGET ${TARGET}-vite-build AND TARGET ${TARGET}Schema_Codegen)
-        add_dependencies(${TARGET}-vite-build ${TARGET}Schema_Codegen)
+    # must run after the schema's codegen exec emits them. Passing the
+    # codegen target through DEPENDS gives both the ordering edge and a
+    # rebuild edge — vite re-runs whenever the codegen exe relinks (i.e.
+    # whenever a COMMAND_SOURCES file changes).
+    if (TARGET ${TARGET}Schema_Codegen)
+        list(APPEND VITE_ARGS DEPENDS ${TARGET}Schema_Codegen)
     endif ()
+
+    eacp_webview_add_vite(${TARGET} ${VITE_ARGS})
 
     set_target_properties(${TARGET} PROPERTIES
             MACOSX_BUNDLE TRUE

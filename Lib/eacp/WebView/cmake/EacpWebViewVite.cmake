@@ -5,7 +5,7 @@ set(EACP_WEBVIEW_PACKAGE_MANAGER "npm" CACHE STRING
 
 function(eacp_webview_add_vite TARGET)
     cmake_parse_arguments(PARSE_ARGV 1 ARG ""
-            "SOURCE_DIR;DIST_DIR;NAMESPACE;CATEGORY;PACKAGE_MANAGER" "")
+            "SOURCE_DIR;DIST_DIR;NAMESPACE;CATEGORY;PACKAGE_MANAGER" "DEPENDS")
 
     if (NOT ARG_PACKAGE_MANAGER)
         set(ARG_PACKAGE_MANAGER "${EACP_WEBVIEW_PACKAGE_MANAGER}")
@@ -83,7 +83,7 @@ function(eacp_webview_add_vite TARGET)
                         "${VITE_PLACEHOLDER_TEMPLATE}" "${VITE_PLACEHOLDER}"
                 COMMAND ${CMAKE_COMMAND} -E touch "${VITE_STAMP}"
                 WORKING_DIRECTORY "${ARG_SOURCE_DIR}"
-                DEPENDS ${VITE_SOURCES}
+                DEPENDS ${VITE_SOURCES} ${ARG_DEPENDS}
                 COMMENT "Building Vite project for ${TARGET} (${ARG_PACKAGE_MANAGER})"
                 VERBATIM)
 
