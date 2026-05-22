@@ -24,15 +24,20 @@ if (APPLE)
     target_link_libraries(eacp-core PRIVATE
             "-framework Foundation")
     if (IOS)
-        target_sources(eacp-core PRIVATE Threads/EventLoop-iOS.mm)
+        target_sources(eacp-core PRIVATE
+                App/App-iOS.mm
+                Threads/EventLoop-iOS.mm)
         target_link_libraries(eacp-core PRIVATE "-framework UIKit")
     else ()
-        target_sources(eacp-core PRIVATE Threads/EventLoop-macOS.mm)
+        target_sources(eacp-core PRIVATE
+                App/App-macOS.mm
+                Threads/EventLoop-macOS.mm)
         target_link_libraries(eacp-core PRIVATE
                 "-framework Cocoa")
     endif ()
 elseif (WIN32)
     target_sources(eacp-core PRIVATE
+            App/App-Windows.cpp
             Threads/EventLoop-Windows.cpp
             Threads/ThreadUtils-Windows.cpp
             Threads/Timer-Windows.cpp
@@ -40,6 +45,7 @@ elseif (WIN32)
     target_link_libraries(eacp-core PRIVATE windowsapp)
 elseif (UNIX AND NOT APPLE)
     target_sources(eacp-core PRIVATE
+            App/App-Linux.cpp
             Threads/EventLoop-Linux.cpp
             Threads/ThreadUtils-Linux.cpp
             Threads/Timer-Linux.cpp

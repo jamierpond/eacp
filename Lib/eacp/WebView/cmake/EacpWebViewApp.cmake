@@ -36,7 +36,7 @@
 #     so any consumer that links the schema picks them up automatically.
 function(eacp_add_webview_app TARGET)
     set(options REACT)
-    set(oneValueArgs WEB_DIR BUNDLE_ID BUNDLE_NAME NAMESPACE CATEGORY SCHEMA_NAME)
+    set(oneValueArgs WEB_DIR BUNDLE_ID BUNDLE_NAME NAMESPACE CATEGORY SCHEMA_NAME PACKAGE_MANAGER)
     set(multiValueArgs SOURCES COMMAND_SOURCES SCHEMA_FORMATS)
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
@@ -125,10 +125,18 @@ function(eacp_add_webview_app TARGET)
                 BASENAME ${ARG_SCHEMA_NAME})
     endif ()
 
-    eacp_webview_add_vite(${TARGET}
+    # PACKAGE_MANAGER (optional) — forwarded so callers can opt into pnpm/
+    # yarn/bun for the embedded vite build without flipping the global
+    # EACP_WEBVIEW_PACKAGE_MANAGER cache var. When unset, eacp_webview_add_vite
+    # falls back to its own default (the cache var, defaulting to npm).
+    set(VITE_ARGS
             SOURCE_DIR ${ARG_WEB_DIR}
             NAMESPACE ${ARG_NAMESPACE}
             CATEGORY ${ARG_CATEGORY})
+    if (ARG_PACKAGE_MANAGER)
+        list(APPEND VITE_ARGS PACKAGE_MANAGER ${ARG_PACKAGE_MANAGER})
+    endif ()
+    eacp_webview_add_vite(${TARGET} ${VITE_ARGS})
 
     # Vite imports the codegen'd TS modules, so the build-time vite step
     # must run after the schema's codegen exec emits them.
