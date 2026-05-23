@@ -17,7 +17,7 @@ struct Tick
 
 namespace Api
 {
-
+using namespace std::chrono;
 // The whole WebViewReactAnim API. The `reflect` method is the single
 // source of truth for codegen (DescribeReflector walks it) and runtime
 // (BindReflector walks the same body to install handlers + subscribe
@@ -29,15 +29,15 @@ public:
     // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
     void reflect(Miro::ApiReflector& r)
     {
-        r.command(&Clock::getCurrentTick, "getCurrentTick");
-        r.event(&Clock::tick, "tick");
+        using T = Clock;
+
+        r.commands<&T::getCurrentTick>();
+        r.events<&T::tick>();
     }
 
     Tick getCurrentTick() const
     {
-        auto seconds = std::chrono::duration<double>(
-                           std::chrono::steady_clock::now() - startTime)
-                           .count();
+        auto seconds = duration<double>(steady_clock::now() - startTime).count();
         return {.angle = std::fmod(seconds * 90.0, 360.0)};
     }
 
@@ -47,8 +47,7 @@ public:
     Miro::Event<Tick> tick;
 
 private:
-    std::chrono::steady_clock::time_point startTime =
-        std::chrono::steady_clock::now();
+    steady_clock::time_point startTime = steady_clock::now();
 };
 
 } // namespace Api
