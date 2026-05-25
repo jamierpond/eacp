@@ -41,6 +41,8 @@ public:
         return {.angle = std::fmod(seconds * 90.0, 360.0)};
     }
 
+    void update() { tick.publish(getCurrentTick()); }
+
     // Push channel for tick updates. The MyApp timer publishes here;
     // the transport's BindReflector listener forwards each payload over
     // the WebView bridge.
