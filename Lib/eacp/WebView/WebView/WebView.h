@@ -90,6 +90,11 @@ public:
     void evaluateJavaScript(const std::string& script,
                             JSCallback callback = nullptr);
 
+    using SnapshotCallback =
+        std::function<void(const EA::Vector<std::uint8_t>& pngBytes,
+                           const std::string& error)>;
+    void captureSnapshot(SnapshotCallback callback);
+
     void zoomIn();
     void zoomOut();
     void resetZoom();
