@@ -38,21 +38,27 @@ export default function App()
                     }}
                 >
                     <input
+                        data-testid="todo-input"
                         type="text"
                         placeholder="What needs to be done?"
                         value={draft}
                         autoFocus
                         onChange={(event) => setDraft(event.target.value)}
                     />
-                    <button type="submit" disabled={draft.trim().length === 0}>
+                    <button
+                        data-testid="todo-add"
+                        type="submit"
+                        disabled={draft.trim().length === 0}>
                         Add
                     </button>
                 </form>
 
-                <ul className="list">
+                <ul className="list" data-testid="todo-list">
                     {ids.map((id) => <TodoRow key={id} id={id} />)}
                     {ids.length === 0 && (
-                        <li className="empty">Nothing here yet — add a todo above.</li>
+                        <li className="empty" data-testid="todo-empty">
+                            Nothing here yet — add a todo above.
+                        </li>
                     )}
                 </ul>
 
@@ -86,14 +92,19 @@ const TodoRow = memo(function TodoRow({ id }: { id: number })
     };
 
     return (
-        <li className={item.completed ? 'item done' : 'item'}>
+        <li
+            data-testid="todo-item"
+            data-todo-id={item.id}
+            className={item.completed ? 'item done' : 'item'}>
             <input
+                data-testid="todo-toggle"
                 type="checkbox"
                 checked={item.completed}
                 onChange={() => void backend.toggleTodo({ id: item.id })}
             />
             {editing ? (
                 <input
+                    data-testid="todo-edit"
                     className="edit"
                     type="text"
                     value={draft}
@@ -111,11 +122,15 @@ const TodoRow = memo(function TodoRow({ id }: { id: number })
                     }}
                 />
             ) : (
-                <span className="text" onDoubleClick={beginEdit}>
+                <span
+                    data-testid="todo-text"
+                    className="text"
+                    onDoubleClick={beginEdit}>
                     {item.text}
                 </span>
             )}
             <button
+                data-testid="todo-remove"
                 type="button"
                 className="remove"
                 aria-label="Remove"
@@ -135,10 +150,12 @@ function TodoFooter()
 
     return (
         <footer className="footer">
-            <span className="count">
-                {remaining} remaining · {summary.completed} done
+            <span className="count" data-testid="todo-count">
+                <span data-testid="todo-remaining">{remaining}</span> remaining ·{' '}
+                <span data-testid="todo-completed">{summary.completed}</span> done
             </span>
             <button
+                data-testid="todo-clear-completed"
                 type="button"
                 className="link"
                 disabled={summary.completed === 0}

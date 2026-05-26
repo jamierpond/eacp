@@ -1,8 +1,10 @@
 add_subdirectory(Core)
 add_subdirectory(Network)
 
-if (APPLE OR WIN32)
+if ((APPLE OR WIN32) AND EACP_BUILD_GRAPHICS)
     add_subdirectory(Graphics)
-    add_subdirectory(WebView)
     add_subdirectory(SVG)
+    if (EACP_BUILD_WEBVIEW)
+        add_subdirectory(WebView)
+    endif ()
 endif ()

@@ -10,6 +10,13 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
 
 option(EACP_UNITY_BUILD "Compile eacp libraries as CMake unity builds" OFF)
+option(EACP_BUILD_GRAPHICS "Build the Graphics, SVG and WebView modules" ON)
+option(EACP_BUILD_WEBVIEW "Build the WebView module" ON)
+
+if (NOT EACP_BUILD_GRAPHICS)
+    set(EACP_BUILD_WEBVIEW OFF CACHE BOOL
+            "Build the WebView module" FORCE)
+endif ()
 
 include(TargetSetup)
 include(CPM)

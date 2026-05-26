@@ -6,6 +6,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewVite.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewBackend.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewReact.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewApp.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewNodeTests.cmake)
 
 add_library(eacp-webview STATIC)
 
@@ -97,3 +98,5 @@ if (NOT CMAKE_CROSSCOMPILING)
     target_link_libraries(eacp-webview-codegen PUBLIC Miro)
     set_default_target_setting(eacp-webview-codegen)
 endif ()
+
+add_subdirectory(Test)

@@ -1,6 +1,5 @@
 nano_add_executable(InversionCodegenTests
-        SOURCES InversionCodegenTests.cpp
-        TARGETS Miro)
+        SOURCES InversionCodegenTests.cpp)
 
 # MiroFormats: Miro's built-in zod/ts/backend/ts-server/bridge formats.
 # eacp-webview-codegen: eacp's events/hooks formats.
@@ -10,7 +9,5 @@ nano_add_executable(InversionCodegenTests
 target_link_libraries(InversionCodegenTests PRIVATE MiroFormats)
 
 if (TARGET eacp-webview-codegen)
-    target_sources(InversionCodegenTests PRIVATE
-            $<TARGET_OBJECTS:eacp-webview-codegen>)
     target_link_libraries(InversionCodegenTests PRIVATE eacp-webview-codegen)
 endif ()
