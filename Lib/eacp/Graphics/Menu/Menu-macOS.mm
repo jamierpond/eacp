@@ -100,7 +100,7 @@ NSMenu* buildNSMenu(const Menu& menu, InstalledMenuBar& store)
 }
 } // namespace
 
-void setApplicationMenuBar(MenuBar bar)
+void setApplicationMenuBar(const MenuBar& bar)
 {
     auto& store = installedBar();
     store.targets.clear();

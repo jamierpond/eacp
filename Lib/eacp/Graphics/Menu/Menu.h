@@ -60,7 +60,7 @@ public:
     EA::Vector<Menu> menus;
 };
 
-void setApplicationMenuBar(MenuBar bar);
+void setApplicationMenuBar(const MenuBar& bar);
 
 Menu standardApplicationMenu(std::string applicationName);
 

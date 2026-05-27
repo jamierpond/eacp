@@ -2,8 +2,7 @@
 
 namespace eacp::Graphics
 {
-// NOLINTNEXTLINE(performance-unnecessary-value-param)
-void setApplicationMenuBar([[maybe_unused]] MenuBar bar)
+void setApplicationMenuBar(const MenuBar&)
 {
 }
 
