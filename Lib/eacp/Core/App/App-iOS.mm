@@ -21,4 +21,11 @@ void openExternalURL(const std::string& url)
                                        options:@{}
                              completionHandler:nil];
 }
+
+// iOS has no synchronous folder picker (UIDocumentPickerViewController is
+// async + delegate-based); not supported under this blocking API.
+std::optional<std::string> chooseDirectory()
+{
+    return std::nullopt;
+}
 } // namespace eacp::Apps

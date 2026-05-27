@@ -19,4 +19,23 @@ void openExternalURL(const std::string& url)
 
     [[NSWorkspace sharedWorkspace] openURL:nsUrl];
 }
+
+std::optional<std::string> chooseDirectory()
+{
+    auto* panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = NO;
+    panel.canChooseDirectories = YES;
+    panel.allowsMultipleSelection = NO;
+    panel.resolvesAliases = YES;
+
+    if ([panel runModal] != NSModalResponseOK)
+        return std::nullopt;
+
+    auto* url = panel.URLs.firstObject;
+
+    if (url == nil)
+        return std::nullopt;
+
+    return std::string(url.fileSystemRepresentation);
+}
 } // namespace eacp::Apps
