@@ -1,6 +1,7 @@
 #include "Bridge.h"
 
 #include "StateBridge.h"
+#include "TestServer.h"
 
 #include <optional>
 
@@ -123,11 +124,12 @@ WebViewBridge::WebViewBridge(WebView& webViewToUse)
                    [this] { broadcast(); },
                    EA::Listener::Modes::TriggerOnEvent)
 {
-    bridge.useStaticRegistry();
     stateListeners = attachStaticStateBinders(bridge);
     webView.addUserScript(bridgeShim, true);
     webView.addScriptMessageHandler(
         bridgeChannel, [this](const std::string& body) { onMessage(body); });
+
+    testServer = Test::installIfEnabled(webView, bridge);
 }
 
 WebViewBridge::~WebViewBridge()

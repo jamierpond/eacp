@@ -44,8 +44,6 @@ inline EA::Vector<EventEntry>& eventRegistry()
 template <typename T>
 inline void registerEvent(const char* nameToUse)
 {
-    Miro::TypeExport::Detail::registerOne<T>();
-
     auto entry = EventEntry {};
     entry.name = nameToUse;
     entry.payloadTypeName = Miro::Detail::typeNameOf<T>();
