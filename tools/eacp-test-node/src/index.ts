@@ -2,9 +2,11 @@ export { createRpcClient, RpcError, type RpcClient } from './client.ts';
 export { AppDriver, type AppDriverOptions, type CallOptions } from './AppDriver.ts';
 export { launchApp, type LaunchOptions, type LaunchedApp } from './launch.ts';
 
-// Re-export the Playwright runner surface so app-side spec files can
-// pull everything from one place. Specs live in app dirs that don't
-// have their own node_modules, so importing @playwright/test directly
-// from a spec would fail Node's resolver — going through this barrel
-// resolves @playwright/test against the framework's node_modules.
-export { test, expect } from '@playwright/test';
+// Note: the Playwright runner surface (`test`, `expect`,
+// `defineConfig`) is intentionally NOT re-exported here. This
+// module is consumed from outside its own directory tree, so
+// re-exporting `@playwright/test` would force Node to resolve it
+// from the framework's real path (which has no node_modules).
+// Consumers re-export both this module and `@playwright/test`
+// from a small consumer-side shim — see the WebViewTodo app's
+// tests-node/eacp-test-node.ts for an example.

@@ -22,13 +22,14 @@
 #                                         # schema via eacp_target_uses_schema)
 #       [REACT]                           # emit React hook bindings into
 #                                         # ${WEB_DIR}/src/generated/react.ts
-#       [TEST_HOST_SOURCES <files>]       # if set, also produces
-#                                         # ${TARGET}TestHost — a sibling
-#                                         # executable sharing the schema +
-#                                         # web bundle, linking eacp-webview-
-#                                         # test so an external runner can
-#                                         # drive the WebView over /rpc.
 #   )
+#
+# Tests: every WebView app built with EACP_WEBVIEW_ENABLE_TEST_SERVER
+# (on by default) automatically exposes an HTTP RPC test server on an
+# ephemeral port at startup (port printed to stdout as
+# `EACP_RPC_PORT=<n>`). Drive it from a Node-side runner — see the
+# WebViewTodo app's tests-node/ directory for an example. No CMake
+# wiring is needed for tests; the test project owns itself.
 #
 # Schema layout:
 #   - ${TARGET}Schema is the INTERFACE library produced by miro_export.
@@ -43,7 +44,7 @@
 function(eacp_add_webview_app TARGET)
     set(options REACT)
     set(oneValueArgs WEB_DIR BUNDLE_ID BUNDLE_NAME NAMESPACE CATEGORY SCHEMA_NAME PACKAGE_MANAGER)
-    set(multiValueArgs SOURCES COMMAND_SOURCES SCHEMA_FORMATS API API_HEADER TEST_HOST_SOURCES)
+    set(multiValueArgs SOURCES COMMAND_SOURCES SCHEMA_FORMATS API API_HEADER)
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if (NOT ARG_SOURCES)
@@ -90,12 +91,6 @@ function(eacp_add_webview_app TARGET)
     add_executable(${TARGET} ${ARG_SOURCES})
     target_link_libraries(${TARGET} PRIVATE eacp-webview eacp-network-rpc)
 
-    if (ARG_TEST_HOST_SOURCES)
-        add_executable(${TARGET}TestHost ${ARG_TEST_HOST_SOURCES})
-        target_link_libraries(${TARGET}TestHost PRIVATE
-                eacp-webview eacp-network-rpc eacp-webview-test)
-    endif ()
-
     if (ARG_COMMAND_SOURCES OR ARG_API)
         # Two schema modes, picked by which arg the caller supplied.
         # SOURCES paths in miro_export are resolved against
@@ -135,14 +130,8 @@ function(eacp_add_webview_app TARGET)
         # generated headers — plain link, no source splicing.
         if (ARG_COMMAND_SOURCES)
             eacp_target_uses_schema(${TARGET} ${TARGET}Schema HANDLERS)
-            if (ARG_TEST_HOST_SOURCES)
-                eacp_target_uses_schema(${TARGET}TestHost ${TARGET}Schema HANDLERS)
-            endif ()
         else ()
             eacp_target_uses_schema(${TARGET} ${TARGET}Schema)
-            if (ARG_TEST_HOST_SOURCES)
-                eacp_target_uses_schema(${TARGET}TestHost ${TARGET}Schema)
-            endif ()
         endif ()
 
         # Schema codegen needs eacp's events / hooks formatter
@@ -195,16 +184,4 @@ function(eacp_add_webview_app TARGET)
             XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${ARG_BUNDLE_ID})
 
     set_default_target_setting(${TARGET})
-
-    if (ARG_TEST_HOST_SOURCES)
-        eacp_webview_add_vite(${TARGET}TestHost ${VITE_ARGS})
-
-        set_target_properties(${TARGET}TestHost PROPERTIES
-                MACOSX_BUNDLE TRUE
-                MACOSX_BUNDLE_BUNDLE_NAME "${ARG_BUNDLE_NAME} TestHost"
-                MACOSX_BUNDLE_GUI_IDENTIFIER ${ARG_BUNDLE_ID}.testhost
-                XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${ARG_BUNDLE_ID}.testhost)
-
-        set_default_target_setting(${TARGET}TestHost)
-    endif ()
 endfunction()
