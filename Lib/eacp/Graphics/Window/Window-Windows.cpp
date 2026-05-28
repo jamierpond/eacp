@@ -3,6 +3,7 @@
 #include "Window.h"
 #include "../Layers/NativeLayer-Windows.h"
 #include "../Helpers/StringUtils-Windows.h"
+#include <eacp/Core/App/AppEnvironment.h>
 
 #include <algorithm>
 #include <bitset>
@@ -346,7 +347,12 @@ void Window::Native::setContentView(View* view)
         if (rootVisual && viewVisual)
             rootVisual.Children().InsertAtTop(*viewVisual);
 
-        showWindow();
+        // Skip ShowWindow under headless mode (CI without an active
+        // session). The HWND + child visual tree are still set up,
+        // so WebView2 can initialize and load its page; only the
+        // visible surface is suppressed.
+        if (!eacp::Apps::getAppEnvironment().headless)
+            showWindow();
         ensureAllLayersRendered(view);
     }
 }

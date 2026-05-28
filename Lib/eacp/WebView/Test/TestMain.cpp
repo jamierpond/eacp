@@ -1,4 +1,5 @@
 #include <eacp/Core/App/App.h>
+#include <eacp/Core/App/AppEnvironment.h>
 
 #include <NanoTest/NanoTest.h>
 
@@ -19,15 +20,32 @@
 namespace
 {
 
-int gArgc = 0;
-char** gArgv = nullptr;
 int gExitCode = 0;
+
+nano::RunOptions parseRunOptions()
+{
+    auto& args = eacp::Apps::getAppEnvironment().commandLineArgs;
+    auto opts = nano::RunOptions {};
+
+    // Mirror NanoTest's argv parsing — same surface, sourced from
+    // AppEnvironment::commandLineArgs (populated in main()) instead
+    // of taking argc/argv from a global.
+    for (auto i = 1; i < args.size(); ++i)
+    {
+        if (args[i] == "--list-tests")
+            opts.listTests = true;
+        else if (args[i] == "--test" && i + 1 < args.size())
+            opts.test = args[++i];
+    }
+
+    return opts;
+}
 
 struct TestRunner
 {
     TestRunner()
     {
-        gExitCode = nano::run(gArgc, gArgv);
+        gExitCode = nano::run(parseRunOptions());
         eacp::Apps::quit();
     }
 };
@@ -36,8 +54,11 @@ struct TestRunner
 
 int main(int argc, char* argv[])
 {
-    gArgc = argc;
-    gArgv = argv;
-    eacp::Apps::run<TestRunner>();
+    // Skip Window's show/activate calls so test binaries can run on
+    // CI machines without an active windowing session. WebView/JS
+    // still functions; only the visible surface is suppressed.
+    eacp::Apps::getAppEnvironment().headless = true;
+
+    eacp::Apps::run<TestRunner>(argc, argv);
     return gExitCode;
 }

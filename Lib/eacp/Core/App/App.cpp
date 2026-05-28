@@ -1,4 +1,5 @@
 #include "App.h"
+#include "AppEnvironment.h"
 #include "../Utils/Singleton.h"
 
 namespace eacp::Apps
@@ -11,6 +12,20 @@ AppHandle& getGlobalApp()
 AppFactory& getAppFactory()
 {
     return Singleton::get<AppFactory>();
+}
+
+AppEnvironment& getAppEnvironment()
+{
+    return Singleton::get<AppEnvironment>();
+}
+
+void setCommandLineArgs(int argc, char* argv[])
+{
+    auto& args = getAppEnvironment().commandLineArgs;
+    args.clear();
+    args.reserve(argc);
+    for (auto i = 0; i < argc; ++i)
+        args.emplace_back(argv[i]);
 }
 
 void destroyApp()

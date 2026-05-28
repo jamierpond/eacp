@@ -1,6 +1,7 @@
 #include "Window.h"
 #include "../Graphics/Keyboard.h"
 #include "../Primitives/GraphicUtils.h"
+#include <eacp/Core/App/AppEnvironment.h>
 #import <Cocoa/Cocoa.h>
 
 @interface WindowDelegateBridge : NSObject <NSWindowDelegate>
@@ -117,10 +118,18 @@ struct Window::Native
         [getWindow() setTitleVisibility:options.showTitle ? NSWindowTitleVisible
                                                           : NSWindowTitleHidden];
         [getWindow() center];
-        [getWindow() makeKeyAndOrderFront:nil];
         [getWindow() setDelegate:delegate.get()];
 
-        [NSApp activateIgnoringOtherApps:YES];
+        // Skip the foreground activation calls under headless mode
+        // (CI machines without an active windowing session) — the
+        // NSWindow + its content view still exist, so attached
+        // WKWebViews load and JS runs; the only thing missing is the
+        // visible surface, which tests don't care about.
+        if (!eacp::Apps::getAppEnvironment().headless)
+        {
+            [getWindow() makeKeyAndOrderFront:nil];
+            [NSApp activateIgnoringOtherApps:YES];
+        }
     }
 
     void setTitle(const std::string& title)

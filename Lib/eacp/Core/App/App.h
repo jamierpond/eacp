@@ -2,6 +2,7 @@
 
 #include "../Threads/EventLoop.h"
 #include "../Utils/Common.h"
+#include "AppEnvironment.h"
 #include <ea_data_structures/Pointers/OwningPointer.h>
 #include <optional>
 #include <string>
@@ -64,6 +65,16 @@ void run()
     auto createFunc = [] { getGlobalApp().template create<App<T>>(); };
     getAppFactory() = createFunc;
     Threads::runEventLoop(createFunc);
+}
+
+// argc/argv-aware overload — captures the command line into
+// AppEnvironment::commandLineArgs before bringing the loop up, so
+// main() becomes a one-liner: `Apps::run<MyApp>(argc, argv);`.
+template <typename T>
+void run(int argc, char* argv[])
+{
+    setCommandLineArgs(argc, argv);
+    run<T>();
 }
 
 } // namespace eacp::Apps
