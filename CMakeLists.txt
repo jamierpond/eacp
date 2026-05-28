@@ -30,7 +30,10 @@ set(CMAKE_CXX_STANDARD 20)
 add_subdirectory(Lib)
 
 if (PROJECT_IS_TOP_LEVEL)
-    add_subdirectory(Apps)
+    # enable_testing() must precede add_subdirectory(Apps) so per-app
+    # test targets (registered via eacp_add_webview_test) get picked
+    # up by CTest. The Tests/ subtree is downstream, unaffected.
     enable_testing()
+    add_subdirectory(Apps)
     add_subdirectory(Tests)
 endif ()

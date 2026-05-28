@@ -8,16 +8,10 @@
 #include <ea_data_structures/Pointers/OwningPointer.h>
 #include <ea_data_structures/Structures/Vector.h>
 
-#include <memory>
 #include <string>
 
 namespace eacp::Graphics
 {
-
-namespace Test
-{
-class TestServer;
-}
 
 using EmptyMessage = Miro::EmptyValue;
 
@@ -36,17 +30,18 @@ using EmptyMessage = Miro::EmptyValue;
 // HTTP::Rpc::Server) so a single set of typed handlers — including
 // those declared via MIRO_EXPORT_COMMAND — is served over multiple
 // wires concurrently.
-//
-// When EACP_WEBVIEW_ENABLE_TEST_SERVER is non-zero, the bridge ctor
-// also stands up an embedded HTTP RPC test server (see TestServer.h)
-// that injects a `window.__test` DOM-driving agent and registers
-// `test.*` commands so external Node-side runners can drive the
-// WebView. The bound port is announced on stdout as
-// `EACP_RPC_PORT=<n>` so launchers can read it back.
 class WebViewBridge
 {
 public:
-    WebViewBridge(WebView& webView);
+    WebViewBridge(WebView& webViewToUse);
+
+    template <typename T>
+    WebViewBridge(WebView& webViewToUse, T& api)
+        : WebViewBridge(webViewToUse)
+    {
+        getBridge().use(api);
+    }
+
     ~WebViewBridge();
 
     Miro::Bridge& getBridge() { return bridge; }
@@ -62,11 +57,6 @@ private:
     Miro::Bridge bridge;
     EA::Listener emitListener;
     EA::Vector<EA::OwningPointer<EA::Listener>> stateListeners;
-
-    // shared_ptr (not unique_ptr) so this header can use an
-    // incomplete TestServer — the control block carries the
-    // type-aware deleter installed inside TestServer.cpp.
-    std::shared_ptr<Test::TestServer> testServer;
 };
 
 } // namespace eacp::Graphics
