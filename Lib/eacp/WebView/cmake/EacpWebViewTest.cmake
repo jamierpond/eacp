@@ -1,31 +1,21 @@
 # eacp_add_webview_test — define a NanoTest binary that drives a
-# WebView app over its embedded HTTP RPC test server.
+# WebView app in-process. The test exe statically links the app
+# (the ${APP}_app library produced by eacp_add_webview_app's library
+# mode), pre-initializes NSApplication, and runs each test directly
+# on the main thread.
 #
 # Usage:
 #   eacp_add_webview_test(<TARGET>
-#       APP     <app-target>          # WebView app the test spawns
+#       APP     <app-target>          # the eacp_add_webview_app target
+#                                     # (must have been built with
+#                                     # APP_HEADER for library mode)
 #       SOURCES <files>               # NanoTest source files
 #   )
 #
-# The app target's runtime binary path is baked into the test as the
-# EACP_WEBVIEW_TEST_APP_BINARY compile define (a quoted string), so
-# tests can spawn the app with one line and zero env-var setup:
-#
-#   #include <eacp/WebView/Test/Launch.h>
-#   auto app = eacp::WebView::Test::launchApp(
-#       {.bundle = EACP_WEBVIEW_TEST_APP_BINARY});
-#
-# The macro expands to the .app bundle's inner Mach-O on macOS (e.g.
-# `.../MyApp.app/Contents/MacOS/MyApp`) — Launch does not look inside
-# bundles. $<TARGET_FILE:...> gives the inner binary directly, which
-# is the path posix_spawn needs.
-#
-# Platform notes:
-#   - Apple iOS / Linux: eacp-webview-test is not built, so this
-#     function is a no-op. Apps can call it unconditionally from
-#     cross-platform CMakeLists.txt.
-#   - NanoTest is fetched lazily on first call so projects that
-#     never call this function don't drag it in.
+# The APP target must expose a STATIC `${APP}_app` companion (this
+# is what library-mode eacp_add_webview_app produces). On
+# unsupported platforms (iOS / Linux) eacp-webview-test is not
+# built and this function is a no-op.
 function(eacp_add_webview_test TARGET)
     set(oneValueArgs APP)
     set(multiValueArgs SOURCES)
@@ -43,23 +33,24 @@ function(eacp_add_webview_test TARGET)
     if (NOT TARGET eacp-webview-test)
         return ()
     endif ()
-
-    if (NOT COMMAND nano_add_executable)
-        find_package(NanoTest REQUIRED)
+    if (NOT TARGET ${ARG_APP}_app)
+        message(FATAL_ERROR
+                "eacp_add_webview_test(${TARGET}): ${ARG_APP}_app target "
+                "does not exist. The APP must be built with library mode "
+                "(pass APP_HEADER to eacp_add_webview_app).")
     endif ()
 
-    nano_add_executable(${TARGET}
-            SOURCES ${ARG_SOURCES}
-            TARGETS eacp-webview-test)
+    add_executable(${TARGET} ${ARG_SOURCES})
 
-    # SOURCES paths in nano_add_executable resolve against the
-    # caller's CMAKE_CURRENT_SOURCE_DIR, which inside this function
-    # is the test target's source dir — no extra plumbing needed.
+    # Link the app's static lib (gets MyApp's header + all the
+    # plumbing — schema, web resources, eacp-webview, etc.) plus the
+    # test driver and prebuilt main.
+    target_link_libraries(${TARGET} PRIVATE
+            ${ARG_APP}_app
+            eacp-webview-test
+            eacp-webview-test-main)
 
-    # Ensure the app binary exists and is current before any test
-    # in this target runs (the test spawns it as its first action).
-    add_dependencies(${TARGET} ${ARG_APP})
-
-    target_compile_definitions(${TARGET} PRIVATE
-            EACP_WEBVIEW_TEST_APP_BINARY="$<TARGET_FILE:${ARG_APP}>")
+    # CTest discovery uses NanoTest's --list-tests; reuses the
+    # discover step shipped with NanoTest.
+    nano_discover_tests(${TARGET})
 endfunction()

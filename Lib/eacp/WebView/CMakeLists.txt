@@ -8,28 +8,9 @@ include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewReact.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewApp.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/EacpWebViewTest.cmake)
 
-# Compiles a small HTTP RPC server into WebViewBridge that injects a
-# DOM-driving JS agent and exposes it as `test.*` commands. The
-# matching client lives in Test/ (eacp-webview-test) and is what
-# eacp_add_webview_test() consumers link against.
-# The flag is read at runtime by TestServer::shouldEnableTestServer()
-# so the surrounding code stays free of preprocessor branches —
-# enabling/disabling only flips whether the server is instantiated,
-# not whether the code compiles.
-option(EACP_WEBVIEW_ENABLE_TEST_SERVER
-        "Instantiate the embedded WebView test/RPC server at runtime" ON)
-
 add_library(eacp-webview STATIC)
 
 target_link_libraries(eacp-webview PUBLIC eacp-graphics ResEmbed Miro)
-
-# eacp-network-rpc pulls in eacp-network for HTTP::Server. Linked
-# unconditionally — the test server code is always compiled in; the
-# option above only gates whether the server runs.
-target_link_libraries(eacp-webview PRIVATE eacp-network-rpc)
-
-target_compile_definitions(eacp-webview PUBLIC
-        EACP_WEBVIEW_ENABLE_TEST_SERVER=$<BOOL:${EACP_WEBVIEW_ENABLE_TEST_SERVER}>)
 
 # WKUIDelegate's public camera/mic permission selector is macOS 12+. When the
 # macOS deployment target is older, opt into WebKit's private _WK SPI so
@@ -46,15 +27,7 @@ target_sources(eacp-webview PRIVATE
         WebView/DevServerProbe.cpp
         WebView/Bridge.cpp
         WebView/StateBridge.cpp
-        WebView/MenuHelpers.cpp
-        WebView/TestServer.cpp)
-
-# Embed the JS test agent so TestServer.cpp can pull it out at
-# runtime via ResEmbed::get("test-agent.js", "EacpTestServer").
-res_embed_add(eacp-webview
-        FILES     WebView/test-agent.js
-        NAMESPACE EacpTestServer
-        CATEGORY  EacpTestServer)
+        WebView/MenuHelpers.cpp)
 
 if (APPLE)
     target_sources(eacp-webview PRIVATE
@@ -110,6 +83,7 @@ if (NOT CMAKE_CROSSCOMPILING)
     set_default_target_setting(eacp-webview-codegen)
 endif ()
 
-# Client-side test driver — sibling of TestServer.cpp. Self-gates to
-# Apple-not-iOS + Windows; iOS / Linux are no-ops.
+# In-process test driver — links the app's MyApp into a NanoTest
+# binary and drives the WebView directly. Self-gates to Apple-not-iOS
+# + Windows; iOS / Linux are no-ops.
 add_subdirectory(Test)

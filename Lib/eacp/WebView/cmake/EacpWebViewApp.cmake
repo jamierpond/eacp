@@ -1,48 +1,43 @@
 # eacp_add_webview_app — single entry point for native + WebView + RPC apps.
 #
-# Folds the whole pipeline (executable, schema library + codegen, vite
-# build, ResEmbed, macOS bundle, transport binding) into one call.
-# Apps that don't need any cross-app glue should require nothing more
-# than this one function call in their CMakeLists.txt.
+# Folds the whole pipeline (app library, executable, schema library +
+# codegen, vite build, ResEmbed, macOS bundle) into one call.
 #
-# Usage:
+# Two modes, picked by whether APP_HEADER is passed:
+#
+#  - LEGACY: caller passes SOURCES <Main.cpp ...> where the file
+#    contains both MyApp's struct AND main(). The helper builds a
+#    single executable target. No companion library; the app cannot
+#    be driven from tests because the type isn't visible outside the
+#    executable's TUs.
+#
+#  - LIBRARY: caller additionally passes APP_HEADER <App.h>. MyApp
+#    lives in App.h with `int main()` factored into the (still
+#    user-supplied) SOURCES files. The helper builds a STATIC
+#    ${TARGET}_app library carrying the app's plumbing (schema, vite
+#    resources, link deps) and an executable that links it. Tests
+#    link ${TARGET}_app via eacp_add_webview_test().
+#
+# Usage (library mode):
 #   eacp_add_webview_app(<TARGET>
-#       SOURCES         <files>           # main() + non-RPC sources
-#       COMMAND_SOURCES <files>           # files with MIRO_EXPORT_COMMAND;
-#                                         # compiled into ${TARGET}Schema
-#       WEB_DIR         <path>            # vite project dir (must contain package.json)
+#       APP_HEADER      <header>          # header containing the app struct
+#       SOURCES         <files>           # at least Main.cpp (no MyApp body)
+#       [COMMAND_SOURCES <files>]         # MIRO_EXPORT_COMMAND TUs
+#       WEB_DIR         <path>
 #       BUNDLE_ID       <com.example.app>
 #       BUNDLE_NAME     "Display name"
 #       [NAMESPACE      <ns>]             # res-embed namespace; default WebResources
 #       [CATEGORY       <cat>]            # res-embed category; default WebApp
 #       [SCHEMA_NAME    <stem>]           # default: schema
 #       [SCHEMA_FORMATS <formats>]        # default: ts backend ts-server bridge
-#                                         # (cpp-miro and cpp-client are always
-#                                         # emitted so siblings can consume the
-#                                         # schema via eacp_target_uses_schema)
-#       [REACT]                           # emit React hook bindings into
-#                                         # ${WEB_DIR}/src/generated/react.ts
+#       [API            <type>]           # reflectable API class to bind
+#       [API_HEADER     <header>]         # header for API (required with API)
+#       [REACT]                           # emit React hook bindings
 #   )
-#
-# Tests: every WebView app built with EACP_WEBVIEW_ENABLE_TEST_SERVER
-# (on by default) exposes an HTTP RPC test server on an ephemeral
-# port at startup (port printed to stdout as `EACP_RPC_PORT=<n>`).
-# Drive it from a NanoTest binary via `eacp_add_webview_test(...)`
-# — see the WebViewTodo app's Tests/ directory for an example.
-#
-# Schema layout:
-#   - ${TARGET}Schema is the INTERFACE library produced by miro_export.
-#     It carries the generated-header include dirs and the registration
-#     source list. eacp_target_uses_schema(<consumer> ${TARGET}Schema
-#     HANDLERS) splices those sources into the consumer so the
-#     MIRO_EXPORT_COMMAND static initializers fire at startup.
-#   - Build-time codegen emits TS files into ${WEB_DIR}/src/generated
-#     and C++ headers into ${CMAKE_CURRENT_BINARY_DIR}/cpp-generated.
-#     Both directories ride along on the schema's INTERFACE includes,
-#     so any consumer that links the schema picks them up automatically.
 function(eacp_add_webview_app TARGET)
     set(options REACT)
-    set(oneValueArgs WEB_DIR BUNDLE_ID BUNDLE_NAME NAMESPACE CATEGORY SCHEMA_NAME PACKAGE_MANAGER)
+    set(oneValueArgs WEB_DIR BUNDLE_ID BUNDLE_NAME NAMESPACE CATEGORY SCHEMA_NAME
+            PACKAGE_MANAGER APP_HEADER)
     set(multiValueArgs SOURCES COMMAND_SOURCES SCHEMA_FORMATS API API_HEADER)
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
@@ -87,8 +82,33 @@ function(eacp_add_webview_app TARGET)
     set(TS_GENERATED_DIR "${ARG_WEB_DIR}/src/generated")
     set(CPP_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/cpp-generated")
 
-    add_executable(${TARGET} ${ARG_SOURCES})
-    target_link_libraries(${TARGET} PRIVATE eacp-webview eacp-network-rpc)
+    # Library mode adds a STATIC ${TARGET}_app carrying everything the
+    # test target needs to link. The executable links it for the
+    # plumbing; its sources are the user-supplied Main.cpp (+ any
+    # other exe-only files). The static lib gets no user sources by
+    # default — App.h ships through INTERFACE include propagation,
+    # not compilation.
+    if (ARG_APP_HEADER)
+        set(APP_LIB_TARGET "${TARGET}_app")
+        add_library(${APP_LIB_TARGET} STATIC)
+        target_link_libraries(${APP_LIB_TARGET} PUBLIC
+                eacp-webview eacp-network-rpc)
+        target_include_directories(${APP_LIB_TARGET} PUBLIC
+                ${CMAKE_CURRENT_SOURCE_DIR})
+
+        # APP_HEADER as a HEADER_FILE_ONLY source for IDE visibility.
+        target_sources(${APP_LIB_TARGET} PRIVATE ${ARG_APP_HEADER})
+        set_source_files_properties(${ARG_APP_HEADER} PROPERTIES
+                HEADER_FILE_ONLY TRUE)
+
+        add_executable(${TARGET} ${ARG_SOURCES})
+        target_link_libraries(${TARGET} PRIVATE ${APP_LIB_TARGET})
+    else ()
+        # Legacy single-executable layout.
+        set(APP_LIB_TARGET "${TARGET}")
+        add_executable(${TARGET} ${ARG_SOURCES})
+        target_link_libraries(${TARGET} PRIVATE eacp-webview eacp-network-rpc)
+    endif ()
 
     if (ARG_COMMAND_SOURCES OR ARG_API)
         # Two schema modes, picked by which arg the caller supplied.
@@ -124,13 +144,18 @@ function(eacp_add_webview_app TARGET)
                 BASENAME ${ARG_SCHEMA_NAME})
 
         # SOURCES mode needs HANDLERS splicing (so MIRO_EXPORT_COMMAND
-        # static initializers fire in the runtime executable). API mode
-        # binds at runtime via bridge.use(api), so it only needs the
-        # generated headers — plain link, no source splicing.
+        # static initializers fire). API mode binds at runtime via
+        # bridge.use(api), so only the generated headers are needed.
         if (ARG_COMMAND_SOURCES)
-            eacp_target_uses_schema(${TARGET} ${TARGET}Schema HANDLERS)
+            eacp_target_uses_schema(${APP_LIB_TARGET} ${TARGET}Schema HANDLERS)
         else ()
-            eacp_target_uses_schema(${TARGET} ${TARGET}Schema)
+            eacp_target_uses_schema(${APP_LIB_TARGET} ${TARGET}Schema)
+        endif ()
+        # eacp_target_uses_schema links PRIVATE. In library mode the
+        # schema's include dirs need to propagate to consumers (the
+        # exe + test exe), so re-link PUBLIC on the static lib.
+        if (ARG_APP_HEADER)
+            target_link_libraries(${APP_LIB_TARGET} PUBLIC ${TARGET}Schema)
         endif ()
 
         # Schema codegen needs eacp's hooks formatter registration to
@@ -174,7 +199,9 @@ function(eacp_add_webview_app TARGET)
         list(APPEND VITE_ARGS DEPENDS ${TARGET}Schema_Codegen)
     endif ()
 
-    eacp_webview_add_vite(${TARGET} ${VITE_ARGS})
+    # Embed resources on the static lib in library mode (tests inherit
+    # them), or on the executable in legacy mode.
+    eacp_webview_add_vite(${APP_LIB_TARGET} ${VITE_ARGS})
 
     set_target_properties(${TARGET} PROPERTIES
             MACOSX_BUNDLE TRUE
@@ -183,4 +210,7 @@ function(eacp_add_webview_app TARGET)
             XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${ARG_BUNDLE_ID})
 
     set_default_target_setting(${TARGET})
+    if (ARG_APP_HEADER)
+        set_default_target_setting(${APP_LIB_TARGET})
+    endif ()
 endfunction()

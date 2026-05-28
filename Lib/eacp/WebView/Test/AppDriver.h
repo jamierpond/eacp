@@ -1,46 +1,45 @@
 #pragma once
 
-#include <eacp/Network/HTTPRpc/RpcClient.h>
-
 #include <Miro/Miro.h>
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace eacp::Graphics
+{
+class WebView;
+}
 
 namespace eacp::WebView::Test
 {
 
 struct CallOptions
 {
-    // Override the driver-wide default for this one call. The server
-    // caps each command at this many ms. Unset -> use AppDriverOptions
-    // default; if that's also unset, the server applies its own 5s.
+    // Per-call timeout override. Empty -> driver default; if that's
+    // also empty, defaultTimeoutMs constant below.
     std::optional<int> timeoutMs;
 };
 
 struct AppDriverOptions
 {
-    // Default per-command timeout. Empty -> server's 5s default.
+    // Default per-command timeout for this driver. Empty -> the
+    // built-in 5s applies.
     std::optional<int> defaultTimeoutMs;
 
     // Directory snapshot() writes <name>.html + <name>.png into.
-    // Empty -> "<cwd>/test-results/snapshots". Created lazily on
-    // first write. Names may contain forward slashes; sub-directories
-    // are created as needed.
+    // Empty -> "<cwd>/test-results/snapshots". Created lazily.
     std::string snapshotDir;
 };
 
 struct ScreenshotOptions
 {
-    // Per-call timeout (mirrors CallOptions for ergonomics — a
-    // screenshot is one round-trip too).
     std::optional<int> timeoutMs;
 
-    // Write the decoded PNG bytes here. Parent directories are
-    // created. Empty -> do not write.
+    // Decode + write the PNG to this path. Empty -> do not write.
     std::string path;
 };
 
@@ -71,64 +70,70 @@ struct SnapshotResult
     std::string screenshotPath;
 };
 
-// Drives a WebView app via its embedded test RPC server. Methods
-// throw eacp::HTTP::Error (or std::runtime_error for client-side
-// failures) on RPC failures, JS exceptions, timeouts, and missing
-// selectors. Use `exists` / `waitFor` to gate optional behaviour
-// instead of catching.
+// In-process driver for a WebView app. Lives on the main thread
+// (same thread the WebView and its bridge run on). Each operation
+// schedules work on the WebView, then pumps the event loop via
+// runEventLoopFor() until the callback completes. No threading,
+// no HTTP — everything is direct calls.
+//
+// Methods throw std::runtime_error on JS exceptions, timeouts, or
+// missing selectors. Use exists()/waitFor() to gate optional
+// behaviour instead of catching.
 class AppDriver
 {
 public:
-    explicit AppDriver(std::string rpcUrl, AppDriverOptions options = {});
+    AppDriver(eacp::Graphics::WebView& webViewToUse,
+              Miro::Bridge& bridgeToUse,
+              AppDriverOptions options = {});
+    ~AppDriver();
 
-    const std::string& rpcUrl() const;
+    AppDriver(const AppDriver&) = delete;
+    AppDriver& operator=(const AppDriver&) = delete;
+    AppDriver(AppDriver&&) = delete;
+    AppDriver& operator=(AppDriver&&) = delete;
 
-    // Underlying RPC call — useful for hitting application commands
-    // (the ones the app registers itself), not just test.* helpers.
+    // Application bridge commands — direct dispatch, no JS hop.
     Miro::JSON invoke(const std::string& command,
-                      const Miro::JSON& payload = {}) const;
+                      const Miro::JSON& payload = {});
 
     template <typename Resp, typename Req>
-    Resp invoke(const std::string& command, const Req& req) const
+    Resp invoke(const std::string& command, const Req& req)
     {
-        auto json = client.invokeRaw(command, Miro::toJSON(req));
+        auto json = invoke(command, Miro::toJSON(req));
         auto out = Resp {};
         Miro::fromJSON(out, json);
         return out;
     }
 
     template <typename Resp>
-    Resp invoke(const std::string& command) const
+    Resp invoke(const std::string& command)
     {
-        auto json = client.invokeRaw(command, Miro::JSON {Miro::Json::Object {}});
+        auto json = invoke(command, Miro::JSON {Miro::Json::Object {}});
         auto out = Resp {};
         Miro::fromJSON(out, json);
         return out;
     }
 
-    bool click(const std::string& selector, CallOptions opts = {}) const;
+    bool click(const std::string& selector, CallOptions opts = {});
     bool fill(const std::string& selector, const std::string& value,
-              CallOptions opts = {}) const;
+              CallOptions opts = {});
     bool press(const std::string& selector, const std::string& key,
-               CallOptions opts = {}) const;
-    bool submit(const std::string& selector, CallOptions opts = {}) const;
-    std::string text(const std::string& selector, CallOptions opts = {}) const;
+               CallOptions opts = {});
+    bool submit(const std::string& selector, CallOptions opts = {});
+    std::string text(const std::string& selector, CallOptions opts = {});
     std::optional<std::string> attr(const std::string& selector,
                                     const std::string& name,
-                                    CallOptions opts = {}) const;
-    bool exists(const std::string& selector, CallOptions opts = {}) const;
-    int count(const std::string& selector, CallOptions opts = {}) const;
-    bool waitFor(const std::string& selector, CallOptions opts = {}) const;
+                                    CallOptions opts = {});
+    bool exists(const std::string& selector, CallOptions opts = {});
+    int count(const std::string& selector, CallOptions opts = {});
+    bool waitFor(const std::string& selector, CallOptions opts = {});
 
-    // Evaluates an arbitrary JS expression in the page. The
-    // expression is wrapped in a function body so it can reference
-    // window / document / page globals. Result must be JSON-
-    // serialisable.
-    Miro::JSON evaluate(const std::string& expression,
-                        CallOptions opts = {}) const;
+    // Evaluates an arbitrary JS expression. Wrapped so the result is
+    // round-trip JSON-shaped; the unwrapped value is returned.
+    Miro::JSON evaluate(const std::string& expression, CallOptions opts = {});
 
     template <typename T>
-    T evaluate(const std::string& expression, CallOptions opts = {}) const
+    T evaluate(const std::string& expression, CallOptions opts = {})
     {
         auto result = evaluate(expression, opts);
         auto out = T {};
@@ -136,29 +141,19 @@ public:
         return out;
     }
 
-    // Returns the serialised outerHTML of `selector`, or the full
-    // document when selector is empty.
-    std::string dom(std::string_view selector = {}, CallOptions opts = {}) const;
+    std::string dom(std::string_view selector = {}, CallOptions opts = {});
 
-    // Captures a PNG of the visible WebView area. Returns the
-    // decoded bytes; also writes to `options.path` when set.
-    ScreenshotResult screenshot(const ScreenshotOptions& options = {}) const;
-
-    // Captures DOM HTML + screenshot under one label, written into
-    // <snapshotDir>/<name>.html and <name>.png.
+    ScreenshotResult screenshot(const ScreenshotOptions& options = {});
     SnapshotResult snapshot(const std::string& name,
-                            const SnapshotOptions& options = {}) const;
+                            const SnapshotOptions& options = {});
 
-    // Runs `action`, then `snapshot(name)`, then returns the action's
-    // result. The snapshot is taken even if `action` throws, so a
-    // failing step still leaves an audit trail on disk.
     template <typename Fn>
     auto withSnapshot(const std::string& name, Fn&& action,
-                      SnapshotOptions options = {}) const
+                      const SnapshotOptions& options = {})
     {
         struct SnapshotOnExit
         {
-            const AppDriver& driver;
+            AppDriver& driver;
             const std::string& name;
             const SnapshotOptions& options;
 
@@ -170,8 +165,7 @@ public:
                 }
                 catch (...)
                 {
-                    // Swallow — we don't want a snapshot failure to
-                    // mask the original test failure.
+                    // Don't mask the original failure.
                 }
             }
         };
@@ -181,13 +175,18 @@ public:
     }
 
 private:
-    Miro::JSON runCommand(const std::string& command, Miro::JSON payload,
-                          const CallOptions& opts) const;
+    Miro::JSON runJs(const std::string& expression, const CallOptions& opts);
+    std::vector<std::uint8_t> runSnapshotBytes(const CallOptions& opts);
+    void waitForFirstNavigation(const CallOptions& opts);
+    int effectiveTimeoutMs(const CallOptions& opts) const;
 
-    HTTP::Rpc::Client client;
-    std::string rpcUrlValue;
+    eacp::Graphics::WebView& webView;
+    Miro::Bridge& bridge;
     std::optional<int> defaultTimeoutMs;
     std::string snapshotDir;
+
+    bool navigationFinished = false;
+    std::function<void(const std::string&)> previousFinishedHandler;
 };
 
 } // namespace eacp::WebView::Test

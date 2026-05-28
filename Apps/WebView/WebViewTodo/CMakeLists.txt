@@ -1,4 +1,5 @@
 eacp_add_webview_app(WebViewTodo
+        APP_HEADER  App.h
         SOURCES     Main.cpp
         API         Api::TodosApi
         API_HEADER  Types.h
