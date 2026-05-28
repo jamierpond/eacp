@@ -14,13 +14,13 @@ using namespace eacp::WebView::Test;
 namespace
 {
 
-constexpr auto inputSelector = "[data-testid=\"todo-input\"]";
-constexpr auto addSelector = "[data-testid=\"todo-add\"]";
-constexpr auto itemSelector = "[data-testid=\"todo-item\"]";
-constexpr auto textSelector = "[data-testid=\"todo-text\"]";
-constexpr auto toggleSelector = "[data-testid=\"todo-toggle\"]";
-constexpr auto removeSelector = "[data-testid=\"todo-remove\"]";
-constexpr auto remainingSelector = "[data-testid=\"todo-remaining\"]";
+constexpr auto inputSelector = R"([data-testid="todo-input"])";
+constexpr auto addSelector = R"([data-testid="todo-add"])";
+constexpr auto itemSelector = R"([data-testid="todo-item"])";
+constexpr auto textSelector = R"([data-testid="todo-text"])";
+constexpr auto toggleSelector = R"([data-testid="todo-toggle"])";
+constexpr auto removeSelector = R"([data-testid="todo-remove"])";
+constexpr auto remainingSelector = R"([data-testid="todo-remaining"])";
 
 std::string lastItemDescendant(const std::string& child)
 {
