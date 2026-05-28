@@ -1,4 +1,4 @@
-option(EACP_WEBVIEW_VITE_BUILD "Let CMake drive '<pm> install' + 'vite build' for embedded webview apps. When OFF, the prebuilt dist committed at SOURCE_DIR/dist is embedded as-is. NOTE: when ON, the first 'cmake --build' produces the dist but embeds an empty resource registry (configure-time glob saw no files); CONFIGURE_DEPENDS makes the next build invocation reglob and embed for real." ON)
+option(EACP_WEBVIEW_VITE_BUILD "Let CMake drive '<pm> install' + 'vite build' for embedded webview apps. When OFF, the prebuilt dist committed at SOURCE_DIR/dist is embedded as-is." ON)
 
 set(EACP_WEBVIEW_PACKAGE_MANAGER "npm" CACHE STRING
         "Package manager used to drive embedded vite builds (e.g. npm, pnpm, yarn, bun). Can be overridden per-call via the PACKAGE_MANAGER argument to eacp_webview_add_vite.")
@@ -44,19 +44,15 @@ function(eacp_webview_add_vite TARGET)
             endif ()
         endif ()
 
-        # ResourceGenerator rejects an empty input list, so seed BUILD_DIST_DIR
-        # with a placeholder. Vite's --emptyOutDir wipes the dist dir at build
-        # time, so the custom_command copies the template back afterwards.
-        # Copying (rather than touching) keeps the placeholder non-empty, so
-        # the embedded C array isn't a zero-length extension.
         file(MAKE_DIRECTORY "${BUILD_DIST_DIR}")
-        set(VITE_PLACEHOLDER_TEMPLATE
-                "${CMAKE_CURRENT_BINARY_DIR}/${TARGET}-vite-placeholder.txt")
-        set(VITE_PLACEHOLDER "${BUILD_DIST_DIR}/placeholder.txt")
-        file(WRITE "${VITE_PLACEHOLDER_TEMPLATE}"
-                "Vite build placeholder — kept so the embedded resource list is non-empty.\n")
-        configure_file("${VITE_PLACEHOLDER_TEMPLATE}" "${VITE_PLACEHOLDER}" COPYONLY)
 
+        # Glob over user-editable web sources so vite re-runs when one
+        # changes. Generated TS files (codegen output under src/generated)
+        # are also picked up here — they exist on disk after the first
+        # build, and CONFIGURE_DEPENDS reglobs on subsequent invocations.
+        # The actual ordering edge to the codegen target is provided via
+        # ARG_DEPENDS below, so vite is correctly sequenced even on the
+        # very first build when the generated files don't yet exist.
         file(GLOB_RECURSE VITE_SOURCES CONFIGURE_DEPENDS
                 "${ARG_SOURCE_DIR}/src/*"
                 "${ARG_SOURCE_DIR}/public/*"
@@ -79,27 +75,28 @@ function(eacp_webview_add_vite TARGET)
         add_custom_command(
                 OUTPUT "${VITE_STAMP}"
                 COMMAND ${BUILD_CMD}
-                COMMAND ${CMAKE_COMMAND} -E copy
-                        "${VITE_PLACEHOLDER_TEMPLATE}" "${VITE_PLACEHOLDER}"
                 COMMAND ${CMAKE_COMMAND} -E touch "${VITE_STAMP}"
                 WORKING_DIRECTORY "${ARG_SOURCE_DIR}"
                 DEPENDS ${VITE_SOURCES} ${ARG_DEPENDS}
                 COMMENT "Building Vite project for ${TARGET} (${ARG_PACKAGE_MANAGER})"
                 VERBATIM)
 
-        target_sources(${TARGET} PRIVATE "${VITE_STAMP}")
-        set_source_files_properties("${VITE_STAMP}" PROPERTIES
-                GENERATED TRUE HEADER_FILE_ONLY TRUE)
-
         # BASE_DIRECTORY preserves the relative path of each file under the
         # vite dist (e.g. "assets/foo.js" rather than just "foo.js"), so the
         # WebView scheme handler can resolve URLs like `app://local/assets/foo.js`.
         # Without this, ResEmbed flattens to basenames and nested assets 404.
+        #
+        # SCAN_DIR + DEPENDS=VITE_STAMP is the build-time-only chain: when
+        # vite re-runs it touches the stamp, which triggers
+        # ResourceGenerator to re-scan BUILD_DIST_DIR. Combined with the
+        # depfile ResourceGenerator writes, content changes to any single
+        # asset also re-embed without a CMake reconfigure.
         res_embed_add(${TARGET}
-                DIRECTORY      "${BUILD_DIST_DIR}"
+                SCAN_DIR       "${BUILD_DIST_DIR}"
                 BASE_DIRECTORY "${BUILD_DIST_DIR}"
                 NAMESPACE      ${ARG_NAMESPACE}
-                CATEGORY       ${ARG_CATEGORY})
+                CATEGORY       ${ARG_CATEGORY}
+                DEPENDS        "${VITE_STAMP}")
         return()
     endif ()
 
