@@ -10,4 +10,16 @@ void openExternalURL(const std::string&)
 {
     assert(false && "openExternalURL not implemented on Linux");
 }
+
+// TODO: wire to a portal (xdg-desktop-portal FileChooser) or GTK dialog.
+std::optional<std::string> chooseFile(const FilePickerOptions&)
+{
+    return std::nullopt;
+}
+
+// TODO: wire to a portal (xdg-desktop-portal FileChooser) or GTK dialog.
+std::optional<std::string> chooseDirectory()
+{
+    return std::nullopt;
+}
 } // namespace eacp::Apps

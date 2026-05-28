@@ -16,4 +16,16 @@ void openExternalURL(const std::string& url)
 
     ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
+
+// TODO: implement with IFileOpenDialog.
+std::optional<std::string> chooseFile(const FilePickerOptions&)
+{
+    return std::nullopt;
+}
+
+// TODO: implement with IFileOpenDialog (FOS_PICKFOLDERS).
+std::optional<std::string> chooseDirectory()
+{
+    return std::nullopt;
+}
 } // namespace eacp::Apps

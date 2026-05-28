@@ -33,7 +33,8 @@ if (APPLE)
                 App/App-macOS.mm
                 Threads/EventLoop-macOS.mm)
         target_link_libraries(eacp-core PRIVATE
-                "-framework Cocoa")
+                "-framework Cocoa"
+                "-framework UniformTypeIdentifiers")
     endif ()
 elseif (WIN32)
     target_sources(eacp-core PRIVATE
