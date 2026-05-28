@@ -175,3 +175,82 @@ auto icAllFormatsTogether =
     check(findFile(files, ".events.ts") != nullptr);
     check(findFile(files, ".hooks.ts") != nullptr);
 };
+
+// ---------- Nested sub-API: composite codegen ----------
+//
+// Regression for the "prefix::name" bug path. A sub-API installed via
+// r.use()/MIRO_API contributes commands and events under a namespaced
+// wire name ("files::stat", "files::changed"). Two codegen paths key on
+// that, and both regressed the first time a sub-API met the TS
+// generators:
+//   - the backend module must NEST the command into `files: { stat: ...}`
+//     — a bare `files::stat:` object key is invalid JS;
+//   - the events module must QUOTE the key (`"files::changed": T...`),
+//     since it's looked up by string in backend.on(name, cb).
+// CompositeClock mirrors a real composite (Clock + a files sub-API).
+
+class FilesSubApi
+{
+public:
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void reflect(ApiReflector& r)
+    {
+        using T = FilesSubApi;
+        r.commands<&T::stat>();
+        r.events<&T::changed>();
+    }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    Tick stat() const { return Tick {}; }
+
+    Event<Tick> changed;
+};
+
+class CompositeClock
+{
+public:
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    void reflect(ApiReflector& r)
+    {
+        using T = CompositeClock;
+        r.commands<&T::getCurrentTick>();
+        MIRO_API(r, files)
+    }
+
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    Tick getCurrentTick() const { return Tick {}; }
+
+    FilesSubApi files;
+};
+
+auto icNestedBackendNestsSubApi = test(
+    "Inversion: sub-API commands nest under the prefix in the backend module") = []
+{
+    auto files = buildCodegen<CompositeClock>(
+        "schema", EA::Vector<std::string> {"backend"});
+    auto* backend = findFile(files, ".backend.ts");
+
+    check(backend != nullptr);
+    // Top-level command stays flat.
+    check(contains(backend->contents, "getCurrentTick: (): Promise<T.Tick>"));
+    // Sub-API command nests into `files: { stat: ... }`, wire name "files::stat".
+    check(contains(backend->contents, "files: {"));
+    check(contains(backend->contents, "invoke('files::stat', {})"));
+    // The broken bare-key forms (dotted or colon'd) must not appear.
+    check(! contains(backend->contents, "files::stat: ("));
+    check(! contains(backend->contents, "files.stat: ("));
+};
+
+auto icNestedEventKeyQuoted = test(
+    "Inversion: sub-API event key is quoted in the events module") = []
+{
+    auto files = buildCodegen<CompositeClock>(
+        "schema", EA::Vector<std::string> {"events"});
+    auto* events = findFile(files, ".events.ts");
+
+    check(events != nullptr);
+    // Quoted string key — the only form valid for backend.on(name, cb).
+    check(contains(events->contents, "\"files::changed\": T.Tick;"));
+    // The broken bare (unquoted) key must not appear.
+    check(! contains(events->contents, "files::changed: T."));
+};

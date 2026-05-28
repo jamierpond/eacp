@@ -1,6 +1,7 @@
 #include "EventsFormat.h"
 
 #include <Miro/CommandExport/ResolvedTypes.h>
+#include <Miro/TypeScript/TypeScript.h>
 
 #include <sstream>
 
@@ -32,7 +33,8 @@ std::string formatEventsModule(std::span<Miro::TypeTree::TypeNode> typeRoots,
     {
         auto payloadName =
             resolved.nameFor(event.payloadQualifiedName, event.payloadTypeName);
-        out << "    " << event.name << ": T." << payloadName << ";\n";
+        out << "    " << Miro::TypeScript::formatPropertyKey(event.name) << ": T."
+            << payloadName << ";\n";
     }
 
     out << "}\n";

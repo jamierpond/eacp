@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNativeTick } from './bridge';
+import { useNativeStats, useNativeTick } from './bridge';
 import ShaderCanvas from './ShaderCanvas';
 
 const petals = [0, 60, 120, 180, 240, 300];
@@ -33,12 +33,16 @@ const visualOptions: ViewOption[] = [
 export default function App()
 {
     const { angle, hz } = useNativeTick();
+    const { ticks } = useNativeStats();
     const [view, setView] = useState<ViewId>('pinwheel');
 
     return (
         <div className="stage">
             <h1>Native-driven React animation</h1>
-            <p>The angle is pushed from native ticks ({hz} Hz measured).</p>
+            <p>
+                The angle is pushed from native ticks ({hz} Hz measured,{' '}
+                {ticks} recorded via the stats sub-API).
+            </p>
 
             <Toggle value={view} onChange={setView} options={visualOptions} />
 

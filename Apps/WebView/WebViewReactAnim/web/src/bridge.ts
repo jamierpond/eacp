@@ -1,10 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
 import { backend } from './generated/backend';
-import type { Tick } from './generated/schema';
+import type { Stats, Tick } from './generated/schema';
 
 export interface NativeTick extends Tick
 {
     hz: number;
+}
+
+// Reads the `stats` sub-API: seeds from the nested command
+// backend.stats.getStats(), then tracks the quoted "stats::updated" event.
+// Demonstrates both nested-API codegen forms from one hook.
+export function useNativeStats(): Stats
+{
+    const [stats, setStats] = useState<Stats>({ ticks: 0 });
+
+    useEffect(() =>
+    {
+        backend.stats.getStats().then(setStats).catch(() => {});
+        return backend.on?.('stats::updated', setStats);
+    }, []);
+
+    return stats;
 }
 
 const windowMs = 1000;

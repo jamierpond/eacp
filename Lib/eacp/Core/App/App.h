@@ -4,6 +4,7 @@
 #include <ea_data_structures/Pointers/OwningPointer.h>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace eacp::Apps
 {
@@ -30,6 +31,17 @@ void quit();
 // escape to the system browser. Linux has no backend yet and will
 // assert if called.
 void openExternalURL(const std::string& url);
+
+struct FilePickerOptions
+{
+    std::vector<std::string> allowedExtensions;
+};
+
+// Shows the OS's native file chooser, blocking until the user picks a file
+// or cancels. Returns the chosen absolute path, or std::nullopt on cancel.
+// Must be called on the UI thread. Implemented on macOS; other backends
+// return std::nullopt for now.
+std::optional<std::string> chooseFile(const FilePickerOptions& options = {});
 
 // Shows the OS's native folder chooser, blocking until the user picks a
 // directory or cancels. Returns the chosen absolute path, or std::nullopt

@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include "App.h"
 
@@ -18,6 +19,41 @@ void openExternalURL(const std::string& url)
         return;
 
     [[NSWorkspace sharedWorkspace] openURL:nsUrl];
+}
+
+std::optional<std::string> chooseFile(const FilePickerOptions& options)
+{
+    auto* panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = YES;
+    panel.canChooseDirectories = NO;
+    panel.allowsMultipleSelection = NO;
+    panel.resolvesAliases = YES;
+
+    if (! options.allowedExtensions.empty())
+    {
+        auto* types = [NSMutableArray<UTType*> array];
+        for (const auto& extension : options.allowedExtensions)
+        {
+            auto* ext = [NSString stringWithUTF8String:extension.c_str()];
+            if (ext == nil)
+                continue;
+
+            auto* type = [UTType typeWithFilenameExtension:ext];
+            if (type != nil)
+                [types addObject:type];
+        }
+        panel.allowedContentTypes = types;
+    }
+
+    if ([panel runModal] != NSModalResponseOK)
+        return std::nullopt;
+
+    auto* url = panel.URLs.firstObject;
+
+    if (url == nil)
+        return std::nullopt;
+
+    return std::string(url.fileSystemRepresentation);
 }
 
 std::optional<std::string> chooseDirectory()

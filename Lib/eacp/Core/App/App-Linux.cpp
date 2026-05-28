@@ -12,6 +12,12 @@ void openExternalURL(const std::string&)
 }
 
 // TODO: wire to a portal (xdg-desktop-portal FileChooser) or GTK dialog.
+std::optional<std::string> chooseFile(const FilePickerOptions&)
+{
+    return std::nullopt;
+}
+
+// TODO: wire to a portal (xdg-desktop-portal FileChooser) or GTK dialog.
 std::optional<std::string> chooseDirectory()
 {
     return std::nullopt;
