@@ -29,23 +29,15 @@ namespace eacp::WebView::Test
 // before the first navigation finishes, so test commands work as
 // soon as the page has rendered.
 template <typename T>
-class TestApp
+struct TestApp
 {
-public:
     TestApp()
     {
-        instance = std::make_unique<T>();
+        instance.create();
         instance->webView.addUserScript(loadTestAgentSource(), true);
         driverImpl.emplace(instance->webView,
                            instance->transport.getBridge());
     }
-
-    ~TestApp() = default;
-
-    TestApp(const TestApp&) = delete;
-    TestApp& operator=(const TestApp&) = delete;
-    TestApp(TestApp&&) = delete;
-    TestApp& operator=(TestApp&&) = delete;
 
     T& app() { return *instance; }
     const T& app() const { return *instance; }
@@ -54,10 +46,8 @@ public:
     const AppDriver& driver() const { return *driverImpl; }
 
 private:
-    // Order matters: driver references instance->webView. Driver
-    // declared second → destructed first, freeing its hook on
-    // webView.onNavigationFinished before webView itself goes away.
-    std::unique_ptr<T> instance;
+
+    EA::OwningPointer<T> instance;
     std::optional<AppDriver> driverImpl;
 };
 

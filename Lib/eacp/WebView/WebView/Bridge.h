@@ -33,7 +33,15 @@ using EmptyMessage = Miro::EmptyValue;
 class WebViewBridge
 {
 public:
-    WebViewBridge(WebView& webView);
+    WebViewBridge(WebView& webViewToUse);
+
+    template <typename T>
+    WebViewBridge(WebView& webViewToUse, T& api)
+        : WebViewBridge(webViewToUse)
+    {
+        getBridge().use(api);
+    }
+
     ~WebViewBridge();
 
     Miro::Bridge& getBridge() { return bridge; }

@@ -82,7 +82,7 @@ struct SnapshotResult
 class AppDriver
 {
 public:
-    AppDriver(eacp::Graphics::WebView& webViewToUse,
+    AppDriver(Graphics::WebView& webViewToUse,
               Miro::Bridge& bridgeToUse,
               AppDriverOptions options = {});
     ~AppDriver();

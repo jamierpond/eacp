@@ -144,7 +144,7 @@ int asInt(const Miro::JSON& v)
 
 } // namespace
 
-AppDriver::AppDriver(eacp::Graphics::WebView& webViewToUse,
+AppDriver::AppDriver(Graphics::WebView& webViewToUse,
                      Miro::Bridge& bridgeToUse, AppDriverOptions options)
     : webView(webViewToUse)
     , bridge(bridgeToUse)
@@ -167,7 +167,7 @@ AppDriver::AppDriver(eacp::Graphics::WebView& webViewToUse,
 
         navigationFinished = true;
         // Wake any pending waitForFirstNavigation pump.
-        eacp::Threads::stopEventLoop();
+        Threads::stopEventLoop();
     };
 }
 
@@ -207,7 +207,7 @@ void AppDriver::waitForFirstNavigation(const CallOptions& opts)
         // before timeout. Our onNavigationFinished hook above calls
         // stopEventLoop, so a true return means the navigation
         // probably fired.
-        eacp::Threads::runEventLoopFor(remaining);
+        Threads::runEventLoopFor(remaining);
     }
 
     if (!navigationFinished)
@@ -250,12 +250,12 @@ Miro::JSON AppDriver::runJs(const std::string& expression,
             state.result = result;
             state.error = error;
             state.done = true;
-            eacp::Threads::stopEventLoop();
+            Threads::stopEventLoop();
         });
 
     if (!state.done)
     {
-        if (!eacp::Threads::runEventLoopFor(timeout) && !state.done)
+        if (!Threads::runEventLoopFor(timeout) && !state.done)
             throw std::runtime_error("AppDriver: JS evaluation timed out "
                                      "after " + std::to_string(timeout.count())
                                      + "ms");
@@ -301,12 +301,12 @@ AppDriver::runSnapshotBytes(const CallOptions& opts)
             state.bytes = std::move(bytes);
             state.error = error;
             state.done = true;
-            eacp::Threads::stopEventLoop();
+            Threads::stopEventLoop();
         });
 
     if (!state.done)
     {
-        if (!eacp::Threads::runEventLoopFor(timeout) && !state.done)
+        if (!Threads::runEventLoopFor(timeout) && !state.done)
             throw std::runtime_error("AppDriver: screenshot timed out after "
                                      + std::to_string(timeout.count()) + "ms");
     }
