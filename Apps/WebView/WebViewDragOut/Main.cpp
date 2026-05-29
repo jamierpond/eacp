@@ -1,5 +1,4 @@
 #include <eacp/WebView/WebView.h>
-#include <ResEmbed/ResEmbed.h>
 #include <WebResources.h>
 
 #include <algorithm>
@@ -7,125 +6,69 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
-#include <string>
-#include <vector>
 
 using namespace eacp;
 using namespace Graphics;
+
+namespace fs = std::filesystem;
 
 namespace
 {
 constexpr auto category = "DragOutApp";
 
-// Audio, video, and image extensions -- the page renders each kind in its own
-// preview (transport bar / video stage / image stage), all streamed off disk
-// through the same `audiofile://` ByteSource scheme.
-constexpr std::array mediaExtensions = {
-    ".wav",  ".mp3", ".aif", ".aiff", ".flac", ".m4a", ".aac", ".ogg", ".opus",
-    ".mp4",  ".m4v", ".mov", ".webm", ".ogv",  ".png", ".jpg", ".jpeg",
-    ".gif",  ".webp", ".svg"};
-
-bool isMediaFile(const std::filesystem::path& path)
+fs::path downloads()
 {
+    const auto* home = std::getenv("HOME");
+    return fs::path {home != nullptr ? home : ""} / "Downloads";
+}
+
+bool isMedia(const fs::path& path)
+{
+    static constexpr std::array exts = {
+        ".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".aif", ".aiff",
+        ".mp4", ".mov", ".m4v",  ".webm", ".png", ".jpg", ".jpeg", ".gif",
+        ".webp", ".svg"};
+
     auto ext = path.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c)
                    { return static_cast<char>(std::tolower(c)); });
-    return std::find(mediaExtensions.begin(), mediaExtensions.end(), ext)
-        != mediaExtensions.end();
+    return std::find(exts.begin(), exts.end(), ext) != exts.end();
 }
 
-std::filesystem::path downloadsDir()
-{
-    const auto* home = std::getenv("HOME");
-    return std::filesystem::path {home != nullptr ? home : ""} / "Downloads";
-}
-
-std::filesystem::path bundledAssetDir()
-{
-    return std::filesystem::temp_directory_path() / "eacp-dragout";
-}
-
-// Embedded app resources + an `audiofile://` scheme that streams the listed
-// files off disk into the page's media elements. The roots bound which
-// directories the page may read: only ~/Downloads and the extracted bundled
-// assets, nothing else on disk.
-WebView::Options dragOutOptions()
-{
-    auto options = embeddedOptions(category);
-    options.streamSchemes["audiofile"] =
-        diskByteSource({downloadsDir().string(), bundledAssetDir().string()});
-    return options;
-}
-
-// Materialise an embedded resource to a temp file so it has a real path the OS
-// can copy when dragged out. Returns the absolute path, or empty if missing.
-std::string extractBundledAsset(const std::string& name)
-{
-    auto asset = ResEmbed::get(name, category);
-
-    if (! asset)
-        return {};
-
-    auto ec = std::error_code {};
-    auto dir = bundledAssetDir();
-    std::filesystem::create_directories(dir, ec);
-
-    auto path = dir / name;
-    auto out = std::ofstream {path, std::ios::binary};
-    out.write(asset.asCharPointer(), static_cast<std::streamsize>(asset.size()));
-
-    return path.string();
-}
-
-WebView::DraggableFileList buildFileList()
+WebView::DraggableFileList mediaInDownloads()
 {
     auto list = WebView::DraggableFileList {};
-
-    // Bundled ResEmbed assets first, to show embedded resources drag out too.
-    for (const auto* name: {"sample.png", "sample.mp3"})
-    {
-        auto path = extractBundledAsset(name);
-        if (! path.empty())
-            list.files.push_back({path, name});
-    }
-
-    // Then real media files from ~/Downloads.
     auto ec = std::error_code {};
-    auto downloads = std::vector<std::string> {};
 
-    for (const auto& entry: std::filesystem::directory_iterator(downloadsDir(), ec))
-    {
-        if (entry.is_regular_file(ec) && isMediaFile(entry.path()))
-            downloads.push_back(entry.path().string());
-    }
+    for (const auto& entry: fs::directory_iterator(downloads(), ec))
+        if (entry.is_regular_file(ec) && isMedia(entry.path()))
+            list.files.push_back(
+                {entry.path().string(), entry.path().filename().string()});
 
-    std::sort(downloads.begin(), downloads.end());
-
-    for (const auto& path: downloads)
-        list.files.push_back({path, std::filesystem::path {path}.filename().string()});
-
+    std::sort(list.files.begin(), list.files.end(),
+              [](const auto& a, const auto& b) { return a.name < b.name; });
     return list;
+}
+
+// The embedded page + a `media://` scheme that streams files straight off disk,
+// range-by-range -- so even huge media plays and seeks with no copy. The page
+// loads a file as `media:///absolute/path`; only ~/Downloads is exposed.
+WebView::Options mediaOptions()
+{
+    auto options = embeddedOptions(category);
+    options.streamSchemes["media"] = diskByteSource({downloads().string()});
+    return options;
 }
 } // namespace
 
-// App API exposed over the bridge. `listFiles` is the only app-specific
-// command; `armFileDrag` is a built-in the WebViewBridge registers for every
-// app. The page invokes both via window.eacp.invoke(...).
-class DragOutApi
+// The entire app-specific API the page can call via window.eacp.invoke(...).
+// Native drag-out (`armFileDrag`) is built into every WebViewBridge for free.
+struct MediaApi
 {
-public:
-    DragOutApi()
-        : fileList(buildFileList())
-    {
-    }
+    void reflect(Miro::ApiReflector& r) { r.commands<&MediaApi::listFiles>(); }
+    WebView::DraggableFileList listFiles() const { return files; }
 
-    void reflect(Miro::ApiReflector& r) { r.commands<&DragOutApi::listFiles>(); }
-
-    WebView::DraggableFileList listFiles() const { return fileList; }
-
-private:
-    WebView::DraggableFileList fileList;
+    WebView::DraggableFileList files = mediaInDownloads();
 };
 
 struct MyApp
@@ -136,10 +79,9 @@ struct MyApp
         window.setContentView(webView);
     }
 
-    // api declared first -> destructed last (after the bridge tears down its
-    // handlers/listeners, which hold &api).
-    DragOutApi api;
-    WebView webView {dragOutOptions()};
+    // api before transport: the bridge holds &api, so it must tear down first.
+    MediaApi api;
+    WebView webView {mediaOptions()};
     WebViewBridge transport {webView, api};
     Window window;
 };

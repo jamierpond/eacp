@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>Media Zoo</title>
+    <title>eacp media</title>
     <style>
         :root { color-scheme: dark; }
 
@@ -11,654 +11,85 @@
         {
             font-family: -apple-system, sans-serif;
             margin: 0;
-            /* Bottom padding clears the fixed transport bar. */
-            padding: 2rem 2rem 7rem;
-            background: radial-gradient(120% 100% at 50% 0%, #1b1b2a 0%, #14141c 60%);
+            padding: 2rem;
+            background: #14141c;
             color: #e6e6f0;
-            user-select: none;
-            cursor: default;
         }
 
-        h1 { margin: 0 0 0.25rem; font-size: 1.5rem; }
+        h1 { font-size: 1.1rem; margin: 0 0 0.25rem; }
+        p { color: #9a9ab2; font-size: 0.85rem; margin: 0 0 1.25rem; max-width: 520px; }
+        code { color: #b9a9ff; }
 
-        p.lead { color: #9a9ab2; margin: 0 0 0.75rem; font-size: 0.85rem; max-width: 640px; }
+        ul { list-style: none; margin: 0; padding: 0; max-width: 520px; }
 
-        .stats
+        li
         {
-            font-family: monospace;
-            font-size: 0.75rem;
-            color: #6f6f88;
-            margin-bottom: 1.25rem;
-        }
-
-        /* --- media grid --- */
-        .grid
-        {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-            gap: 0.75rem;
-            max-width: 760px;
-        }
-
-        .card
-        {
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            gap: 0.35rem;
-            padding: 0.9rem;
+            padding: 0.5rem 0.75rem;
+            margin-bottom: 0.4rem;
             border: 1px solid #2c2c3c;
-            border-radius: 12px;
-            background: #181822;
-            cursor: grab;
-            overflow: hidden;
-            transition: transform 0.08s ease, border-color 0.12s ease;
+            border-radius: 8px;
+            cursor: grab;          /* the whole row drags out to Finder / a DAW */
         }
 
-        .card::before
+        li:hover { background: #1c1c28; }
+
+        #preview { position: fixed; right: 1.5rem; bottom: 1.5rem; z-index: 5; }
+        #preview:empty { display: none; }
+
+        #preview > *
         {
-            content: "";
-            position: absolute;
-            inset: 0 auto 0 0;
-            width: 3px;
-            background: var(--accent, #5a6cff);
-        }
-
-        .card:hover { transform: translateY(-2px); border-color: var(--accent, #5a6cff); }
-        .card:active { cursor: grabbing; transform: none; }
-        .card.selected { border-color: var(--accent, #5a6cff); background: #20203040; box-shadow: 0 0 0 1px var(--accent); }
-        .card.playing { box-shadow: 0 0 0 2px var(--accent), 0 6px 20px #0008; }
-
-        .card .badge
-        {
-            position: absolute;
-            top: 0.6rem;
-            right: 0.6rem;
-            font-size: 0.55rem;
-            font-weight: 700;
-            letter-spacing: 0.06em;
-            padding: 0.12rem 0.4rem;
-            border-radius: 999px;
-            color: #14141c;
-            background: var(--accent, #5a6cff);
-        }
-
-        .card .thumb
-        {
-            font-size: 1.9rem;
-            line-height: 1;
-            color: var(--accent, #5a6cff);
-        }
-
-        .card .name
-        {
-            font-size: 0.82rem;
-            font-weight: 500;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .card .src { font-size: 0.66rem; font-family: monospace; color: #7e7e94; }
-        .card.remote { cursor: default; }
-
-        .empty { padding: 1.5rem; color: #7e7e94; font-size: 0.85rem; }
-
-        /* --- stage: a floating panel showing the current visual. Fixed so it
-           stays in view no matter how far down the grid you clicked. --- */
-        .stage
-        {
-            position: fixed;
-            right: 1.25rem;
-            bottom: 5.5rem;   /* clear the transport bar */
-            z-index: 11;
-            width: min(460px, 46vw);
-            border: 1px solid #2c2c3c;
-            border-radius: 14px;
-            overflow: hidden;
-            background: #0d0d14;
+            display: block;
+            max-width: min(440px, 80vw);
+            max-height: 55vh;
+            border-radius: 10px;
             box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+            background: #000;
         }
 
-        .stage[hidden] { display: none; }
-        .stage video, .stage img { width: 100%; display: block; max-height: 50vh; object-fit: contain; background: #000; }
-
-        .stage-close
-        {
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            z-index: 2;
-            width: 26px;
-            height: 26px;
-            border: 0;
-            border-radius: 50%;
-            cursor: pointer;
-            font-size: 1.05rem;
-            line-height: 1;
-            color: #fff;
-            background: rgba(0, 0, 0, 0.55);
-        }
-
-        .stage-close:hover { background: rgba(0, 0, 0, 0.8); }
-
-        .viz
-        {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 1.1rem;
-            padding: 2.5rem 1rem;
-        }
-
-        .viz[hidden] { display: none; }
-
-        .viz-bars { display: flex; align-items: flex-end; gap: 5px; height: 56px; }
-
-        .viz-bars span
-        {
-            width: 7px;
-            height: 30%;
-            border-radius: 4px;
-            background: linear-gradient(180deg, #5a6cff, #b14cff);
-            animation: eq 0.7s ease-in-out infinite alternate;
-            animation-play-state: paused;
-        }
-
-        body.is-playing .viz-bars span { animation-play-state: running; }
-        .viz-bars span:nth-child(2) { animation-delay: 0.12s; }
-        .viz-bars span:nth-child(3) { animation-delay: 0.24s; }
-        .viz-bars span:nth-child(4) { animation-delay: 0.36s; }
-        .viz-bars span:nth-child(5) { animation-delay: 0.18s; }
-        .viz-bars span:nth-child(6) { animation-delay: 0.30s; }
-        .viz-bars span:nth-child(7) { animation-delay: 0.06s; }
-
-        @keyframes eq { from { height: 18%; } to { height: 100%; } }
-
-        .viz-name { font-size: 0.85rem; color: #c9c9e0; }
-
-        /* --- sticky transport bar --- */
-        #player
-        {
-            position: fixed;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            z-index: 10;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            padding: 0.7rem 1.25rem;
-            background: rgba(20, 20, 28, 0.96);
-            border-top: 1px solid #2c2c3c;
-            backdrop-filter: blur(14px);
-            -webkit-backdrop-filter: blur(14px);
-        }
-
-        #player[hidden] { display: none; }
-
-        .pl-meta { flex: 0 0 180px; min-width: 0; }
-
-        .pl-toggle
-        {
-            flex: 0 0 auto;
-            width: 40px;
-            height: 40px;
-            border: 0;
-            border-radius: 50%;
-            cursor: pointer;
-            font-size: 0.95rem;
-            color: #14141c;
-            background: linear-gradient(135deg, #5a6cff, #b14cff);
-        }
-
-        .pl-toggle:active { transform: scale(0.94); }
-
-        .pl-title
-        {
-            font-size: 0.85rem;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .pl-time { font-family: monospace; font-size: 0.72rem; color: #9a9ab2; margin-top: 0.15rem; }
-
-        .pl-track { position: relative; flex: 1 1 auto; height: 18px; cursor: pointer; touch-action: none; }
-
-        .pl-rail, .pl-buffered, .pl-fill
-        {
-            position: absolute;
-            top: 50%;
-            left: 0;
-            height: 5px;
-            border-radius: 999px;
-            transform: translateY(-50%);
-        }
-
-        .pl-rail { width: 100%; background: #33333f; }
-        .pl-buffered { background: #3d3d52; width: 0; }
-        .pl-fill { background: linear-gradient(90deg, #5a6cff, #b14cff); width: 0; }
-
-        .pl-thumb
-        {
-            position: absolute;
-            top: 50%;
-            left: 0;
-            width: 14px;
-            height: 14px;
-            border-radius: 50%;
-            background: #fff;
-            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
-            transform: translate(-50%, -50%);
-        }
-
-        .pl-track:hover .pl-thumb,
-        .pl-track.scrubbing .pl-thumb { transform: translate(-50%, -50%) scale(1.25); }
-
-        #status
-        {
-            margin-top: 1.25rem;
-            font-family: monospace;
-            font-size: 0.78rem;
-            color: #9bffb1;
-            min-height: 1rem;
-        }
+        #preview audio { width: min(440px, 80vw); background: none; }
     </style>
 </head>
 <body>
-<h1>🎪 Media Zoo</h1>
-<p class="lead">Every file in <code>~/Downloads</code> plus bundled assets, streamed straight off disk over
-   one <code>audiofile://</code> byte-range scheme. Click a card to play/preview in-app (scrub the playhead
-   to seek), or drag it — or a ⌘/⇧-click multi-selection — into a DAW, Finder, or the desktop.</p>
-<div id="stats" class="stats"></div>
+<h1>🎬 eacp media</h1>
+<p>Media in <code>~/Downloads</code>, streamed off disk over a custom <code>media://</code>
+   scheme. Click a row to play (the scrubber seeks via byte-range reads — try a big file).
+   Drag a row into Finder or a DAW.</p>
 
-<div id="grid" class="grid"><div class="empty">Loading…</div></div>
-
-<div id="stage" class="stage" hidden>
-    <button id="stage-close" class="stage-close" title="Close">×</button>
-    <video id="video-el" playsinline hidden></video>
-    <img id="img-el" alt="" hidden/>
-    <div id="viz" class="viz" hidden>
-        <div class="viz-bars">
-            <span></span><span></span><span></span><span></span>
-            <span></span><span></span><span></span>
-        </div>
-        <div id="viz-name" class="viz-name"></div>
-    </div>
-</div>
-
-<div id="player" hidden>
-    <button id="pl-toggle" class="pl-toggle" title="Play / pause">▶</button>
-    <div class="pl-meta">
-        <div id="pl-title" class="pl-title"></div>
-        <div class="pl-time"><span id="pl-cur">0:00</span> / <span id="pl-dur">0:00</span></div>
-    </div>
-    <div id="pl-track" class="pl-track">
-        <div class="pl-rail"></div>
-        <div id="pl-buffered" class="pl-buffered"></div>
-        <div id="pl-fill" class="pl-fill"></div>
-        <div id="pl-thumb" class="pl-thumb"></div>
-    </div>
-</div>
-
-<audio id="audio-el"></audio>
-<div id="status"></div>
+<ul id="list"></ul>
+<div id="preview"></div>
 
 <script>
-    (function ()
+    const list = document.getElementById('list');
+    const preview = document.getElementById('preview');
+
+    const VIDEO = ['.mp4', '.mov', '.m4v', '.webm'];
+    const IMAGE = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+    const ext = (name) => name.slice(name.lastIndexOf('.')).toLowerCase();
+
+    // Show a file: pick the right element, point it at the scheme URL. Native
+    // <audio>/<video> controls give play + a seekable playhead for free.
+    function show(file)
     {
-        const grid = document.getElementById('grid');
-        const stats = document.getElementById('stats');
-        const status = document.getElementById('status');
-        const stage = document.getElementById('stage');
-        const stageClose = document.getElementById('stage-close');
-        const videoEl = document.getElementById('video-el');
-        const imgEl = document.getElementById('img-el');
-        const viz = document.getElementById('viz');
-        const vizName = document.getElementById('viz-name');
-        const audioEl = document.getElementById('audio-el');
-        const playerUI = document.getElementById('player');
-        const toggle = document.getElementById('pl-toggle');
-        const titleEl = document.getElementById('pl-title');
-        const curEl = document.getElementById('pl-cur');
-        const durEl = document.getElementById('pl-dur');
-        const track = document.getElementById('pl-track');
-        const fill = document.getElementById('pl-fill');
-        const buffered = document.getElementById('pl-buffered');
-        const thumb = document.getElementById('pl-thumb');
+        const tag = VIDEO.includes(ext(file.name)) ? 'video'
+                  : IMAGE.includes(ext(file.name)) ? 'img' : 'audio';
+        const el = document.createElement(tag);
+        el.src = 'media://' + encodeURI(file.path);
+        if (tag !== 'img') { el.controls = true; el.autoplay = true; }
+        preview.replaceChildren(el);
+    }
 
-        const selected = new Set();
-        let files = [];
-        let playingIndex = -1;
-        let media = null;   // active HTMLMediaElement (audio or video), or null
-        let scrubbing = false;
-
-        if (!window.eacp || typeof window.eacp.invoke !== 'function')
+    // Ask the C++ side for the file list, then wire each row.
+    window.eacp.invoke('listFiles').then(({ files }) =>
+    {
+        files.forEach((file) =>
         {
-            grid.innerHTML = '<div class="empty">Not running in the eacp host.</div>';
-            return;
-        }
-
-        const AUDIO = /\.(wav|mp3|aif|aiff|flac|m4a|aac|ogg|opus)$/i;
-        const VIDEO = /\.(mp4|m4v|mov|webm|ogv)$/i;
-        const IMAGE = /\.(png|jpe?g|gif|webp|svg)$/i;
-
-        const KINDS = {
-            audio: { icon: '♪', label: 'AUDIO', color: '#b14cff' },
-            video: { icon: '▶', label: 'VIDEO', color: '#4c9cff' },
-            image: { icon: '▣', label: 'IMAGE', color: '#3ddc97' },
-            file:  { icon: '•', label: 'FILE',  color: '#7e7e94' }
-        };
-
-        // Remote media played straight from the web -- WKWebView streams https
-        // (with its own Range support) into the very same player, no local copy.
-        const WEB_MEDIA = [
-            { name: 'rick.mp4', url: 'https://pond.audio/rick.mp4' }
-        ];
-
-        function kindOf(name)
-        {
-            if (VIDEO.test(name)) return 'video';
-            if (IMAGE.test(name)) return 'image';
-            if (AUDIO.test(name)) return 'audio';
-            return 'file';
-        }
-
-        // Local files are served off disk by the built-in `audiofile` scheme;
-        // the path is absolute, so `audiofile://` + encoded -> audiofile:///...
-        function fileURL(path) { return 'audiofile://' + encodeURI(path); }
-
-        const SOURCES = {
-            web:       { label: 'web',        color: '#39d3e0' },
-            bundled:   { label: 'bundled',    color: '#9bffb1' },
-            downloads: { label: '~/Downloads', color: '#7e7e94' }
-        };
-
-        function fmt(s)
-        {
-            if (!isFinite(s) || s < 0) return '0:00';
-            const t = Math.floor(s), m = Math.floor(t / 60), x = t % 60;
-            return m + ':' + String(x).padStart(2, '0');
-        }
-
-        function setProgress(r)
-        {
-            const p = (Math.min(1, Math.max(0, r)) * 100) + '%';
-            fill.style.width = p;
-            thumb.style.left = p;
-        }
-
-        function paint()
-        {
-            if (!media) return;
-            const d = media.duration;
-            if (!scrubbing) setProgress(d ? media.currentTime / d : 0);
-            curEl.textContent = fmt(media.currentTime);
-            if (media.buffered.length > 0 && d)
-            {
-                const ahead = media.buffered.end(media.buffered.length - 1);
-                buffered.style.width = (Math.min(1, ahead / d) * 100) + '%';
-            }
-        }
-
-        // Shows exactly one stage face (or hides the stage).
-        function showStage(mode)   // 'video' | 'image' | 'audio' | null
-        {
-            stage.hidden = mode === null;
-            videoEl.hidden = mode !== 'video';
-            imgEl.hidden = mode !== 'image';
-            viz.hidden = mode !== 'audio';
-        }
-
-        function playMedia(el, file, stageMode)
-        {
-            if (media && media !== el) media.pause();
-            media = el;
-            toggle.textContent = '▶';
-            curEl.textContent = durEl.textContent = '0:00';
-            setProgress(0);
-            buffered.style.width = '0';
-            titleEl.textContent = file.name;
-            vizName.textContent = file.name;
-            playerUI.hidden = false;
-            showStage(stageMode);
-            el.src = file.url;
-            el.play().catch((err) => { status.textContent = 'Playback failed: ' + err; });
-            status.textContent = 'Playing ' + file.name;
-        }
-
-        function preview(index)
-        {
-            const file = files[index];
-            const kind = kindOf(file.name);
-            playingIndex = index;
-
-            if (kind === 'video')
-            {
-                playMedia(videoEl, file, 'video');
-            }
-            else if (kind === 'audio')
-            {
-                playMedia(audioEl, file, 'audio');
-            }
-            else if (kind === 'image')
-            {
-                if (media) media.pause();
-                media = null;
-                document.body.classList.remove('is-playing');
-                playerUI.hidden = true;
-                imgEl.src = file.url;
-                showStage('image');
-                status.textContent = 'Viewing ' + file.name;
-            }
-            else
-            {
-                status.textContent = "Can't preview " + file.name + " — drag it out instead.";
-            }
-        }
-
-        // Transport listeners on both media elements; handlers act on the active
-        // one. `body.is-playing` drives the audio equalizer animation.
-        [audioEl, videoEl].forEach((el) =>
-        {
-            const sync = () =>
-            {
-                if (el !== media) return;
-                toggle.textContent = el.paused ? '▶' : '❚❚';
-                document.body.classList.toggle('is-playing', !el.paused);
-            };
-            el.addEventListener('play', sync);
-            el.addEventListener('pause', sync);
-            el.addEventListener('ended', sync);
-            el.addEventListener('timeupdate', () => { if (el === media) paint(); });
-            el.addEventListener('progress', () => { if (el === media) paint(); });
-            el.addEventListener('loadedmetadata', () =>
-            {
-                if (el !== media) return;
-                durEl.textContent = fmt(media.duration);
-                paint();
-            });
+            const li = document.createElement('li');
+            li.textContent = file.name;
+            li.onclick = () => show(file);
+            li.onmousedown = () => window.eacp.invoke('armFileDrag', { files: [file] });
+            list.appendChild(li);
         });
-
-        toggle.addEventListener('click', () =>
-        {
-            if (!media) return;
-            media.paused ? media.play() : media.pause();
-        });
-
-        // Dismiss the floating stage: stop playback and clear the player.
-        stageClose.addEventListener('click', () =>
-        {
-            if (media) media.pause();
-            media = null;
-            document.body.classList.remove('is-playing');
-            playerUI.hidden = true;
-            showStage(null);
-            playingIndex = -1;
-            render();
-        });
-
-        videoEl.addEventListener('click', () =>
-        {
-            if (media === videoEl) videoEl.paused ? videoEl.play() : videoEl.pause();
-        });
-
-        // Click / drag anywhere on the track to seek. Setting currentTime makes
-        // WKWebView issue a fresh byte-range request, served natively off disk.
-        function ratioFromEvent(event)
-        {
-            const rect = track.getBoundingClientRect();
-            return Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-        }
-
-        function seekTo(ratio)
-        {
-            setProgress(ratio);
-            if (media && isFinite(media.duration))
-            {
-                media.currentTime = ratio * media.duration;
-                curEl.textContent = fmt(media.currentTime);
-            }
-        }
-
-        track.addEventListener('pointerdown', (event) =>
-        {
-            if (!media) return;
-            scrubbing = true;
-            track.classList.add('scrubbing');
-            track.setPointerCapture(event.pointerId);
-            seekTo(ratioFromEvent(event));
-        });
-
-        track.addEventListener('pointermove', (event) =>
-        {
-            if (scrubbing) seekTo(ratioFromEvent(event));
-        });
-
-        function endScrub(event)
-        {
-            if (!scrubbing) return;
-            scrubbing = false;
-            track.classList.remove('scrubbing');
-            if (track.hasPointerCapture(event.pointerId))
-                track.releasePointerCapture(event.pointerId);
-        }
-
-        track.addEventListener('pointerup', endScrub);
-        track.addEventListener('pointercancel', endScrub);
-
-        function renderStats()
-        {
-            const counts = { audio: 0, video: 0, image: 0, file: 0 };
-            files.forEach((f) => { counts[kindOf(f.name)]++; });
-            const parts = [files.length + ' file' + (files.length === 1 ? '' : 's')];
-            ['audio', 'video', 'image'].forEach((k) =>
-            {
-                if (counts[k]) parts.push(counts[k] + ' ' + KINDS[k].label.toLowerCase());
-            });
-            stats.textContent = parts.join('  ·  ');
-        }
-
-        function render()
-        {
-            grid.innerHTML = '';
-
-            files.forEach((file, index) =>
-            {
-                const meta = KINDS[kindOf(file.name)];
-                const srcMeta = SOURCES[file.source] || SOURCES.downloads;
-
-                const card = document.createElement('div');
-                card.className = 'card' + (selected.has(index) ? ' selected' : '')
-                    + (index === playingIndex ? ' playing' : '')
-                    + (file.path ? '' : ' remote');
-                card.style.setProperty('--accent', meta.color);
-
-                const badge = document.createElement('span');
-                badge.className = 'badge';
-                badge.textContent = meta.label;
-
-                const thumbEl = document.createElement('div');
-                thumbEl.className = 'thumb';
-                thumbEl.textContent = meta.icon;
-
-                const name = document.createElement('div');
-                name.className = 'name';
-                name.textContent = file.name;
-                name.title = file.name;
-
-                const src = document.createElement('div');
-                src.className = 'src';
-                src.style.color = srcMeta.color;
-                src.textContent = srcMeta.label;
-
-                card.append(badge, thumbEl, name, src);
-
-                // Arm a drag-out on mousedown -- local files only (web items have
-                // no on-disk path to copy). Drags the whole selection if the
-                // pressed card is part of it, otherwise just this one.
-                if (file.path)
-                {
-                    card.addEventListener('mousedown', () =>
-                    {
-                        const indices = selected.has(index) && selected.size > 0
-                            ? [...selected]
-                            : [index];
-                        const draggable = indices.map((i) => files[i])
-                            .filter((f) => f.path)
-                            .map((f) => ({ path: f.path, name: f.name }));
-                        if (draggable.length === 0) return;
-                        window.eacp.invoke('armFileDrag', { files: draggable });
-                        status.textContent = 'Armed ' + draggable.length
-                            + ' file(s) — drag out…';
-                    });
-                }
-
-                // Plain click: select + preview. ⌘/⇧-click: toggle multi-select.
-                card.addEventListener('click', (event) =>
-                {
-                    if (event.metaKey || event.shiftKey)
-                    {
-                        selected.has(index) ? selected.delete(index)
-                                            : selected.add(index);
-                        render();
-                        return;
-                    }
-                    selected.clear();
-                    selected.add(index);
-                    preview(index);
-                    render();
-                });
-
-                grid.appendChild(card);
-            });
-        }
-
-        // Normalised item: { name, url, source, path? }. `url` is what the
-        // player loads (audiofile:// for local, https:// for web); `path` is the
-        // local file the OS copies on drag-out (absent for web items).
-        window.eacp.invoke('listFiles')
-            .then((result) =>
-            {
-                const web = WEB_MEDIA.map((w) =>
-                    ({ name: w.name, url: w.url, source: 'web' }));
-
-                const local = ((result && result.files) || []).map((f) =>
-                    ({ name: f.name,
-                       url: fileURL(f.path),
-                       path: f.path,
-                       source: f.path.indexOf('/eacp-dragout/') !== -1
-                           ? 'bundled' : 'downloads' }));
-
-                files = web.concat(local);
-
-                render();
-                renderStats();
-                status.textContent = 'Click to play · drag local files to export.';
-            })
-            .catch((err) => { status.textContent = 'listFiles failed: ' + err; });
-    })();
+    });
 </script>
 </body>
 </html>
