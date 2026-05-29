@@ -7,42 +7,44 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <memory>
 #include <string_view>
 
 namespace eacp::Graphics
 {
 std::string mimeForPath(std::string_view path)
 {
-    if (path.ends_with(".html"))
-        return "text/html; charset=utf-8";
-    if (path.ends_with(".js"))
-        return "application/javascript; charset=utf-8";
-    if (path.ends_with(".css"))
-        return "text/css; charset=utf-8";
-    if (path.ends_with(".json"))
-        return "application/json; charset=utf-8";
-    if (path.ends_with(".svg"))
-        return "image/svg+xml";
-    if (path.ends_with(".png"))
-        return "image/png";
-    if (path.ends_with(".jpg") || path.ends_with(".jpeg"))
-        return "image/jpeg";
-    if (path.ends_with(".woff2"))
-        return "font/woff2";
-    if (path.ends_with(".mp3"))
-        return "audio/mpeg";
-    if (path.ends_with(".wav"))
-        return "audio/wav";
-    if (path.ends_with(".aif") || path.ends_with(".aiff"))
-        return "audio/aiff";
-    if (path.ends_with(".flac"))
-        return "audio/flac";
-    if (path.ends_with(".m4a") || path.ends_with(".mp4"))
-        return "audio/mp4";
-    if (path.ends_with(".aac"))
-        return "audio/aac";
-    if (path.ends_with(".ogg") || path.ends_with(".opus"))
-        return "audio/ogg";
+    if (path.ends_with(".html") || path.ends_with(".htm")) return "text/html";
+    if (path.ends_with(".css"))                            return "text/css";
+    if (path.ends_with(".js") || path.ends_with(".mjs"))   return "text/javascript";
+    if (path.ends_with(".json"))                           return "application/json";
+    if (path.ends_with(".wasm"))                           return "application/wasm";
+
+    if (path.ends_with(".png"))                            return "image/png";
+    if (path.ends_with(".jpg") || path.ends_with(".jpeg")) return "image/jpeg";
+    if (path.ends_with(".gif"))                            return "image/gif";
+    if (path.ends_with(".webp"))                           return "image/webp";
+    if (path.ends_with(".svg"))                            return "image/svg+xml";
+    if (path.ends_with(".ico"))                            return "image/x-icon";
+
+    if (path.ends_with(".woff2"))                          return "font/woff2";
+    if (path.ends_with(".woff"))                           return "font/woff";
+    if (path.ends_with(".ttf"))                            return "font/ttf";
+    if (path.ends_with(".otf"))                            return "font/otf";
+
+    if (path.ends_with(".mp3"))                            return "audio/mpeg";
+    if (path.ends_with(".wav"))                            return "audio/wav";
+    if (path.ends_with(".aif") || path.ends_with(".aiff")) return "audio/aiff";
+    if (path.ends_with(".flac"))                           return "audio/flac";
+    if (path.ends_with(".m4a"))                            return "audio/mp4";
+    if (path.ends_with(".aac"))                            return "audio/aac";
+    if (path.ends_with(".ogg") || path.ends_with(".opus")) return "audio/ogg";
+
+    if (path.ends_with(".mp4") || path.ends_with(".m4v"))  return "video/mp4";
+    if (path.ends_with(".webm"))                           return "video/webm";
+    if (path.ends_with(".mov"))                            return "video/quicktime";
+    if (path.ends_with(".ogv"))                            return "video/ogg";
+
     return "application/octet-stream";
 }
 
@@ -81,8 +83,48 @@ FileProvider fromResEmbed(std::string category)
     };
 }
 
+ByteSource memoryByteSource(std::span<const std::uint8_t> bytes,
+                            std::string contentType)
+{
+    auto buffer = std::make_shared<std::string>(
+        reinterpret_cast<const char*>(bytes.data()), bytes.size());
+
+    return ByteSource {
+        buffer->size(),
+        std::move(contentType),
+        [buffer](std::uint64_t offset,
+                 std::uint64_t length) -> std::optional<std::string>
+        {
+            if (offset > buffer->size() || length > buffer->size() - offset)
+                return std::nullopt;
+
+            return buffer->substr(static_cast<std::size_t>(offset),
+                                  static_cast<std::size_t>(length));
+        }};
+}
+
 namespace
 {
+// Bridges a whole-buffer ResourceProvider into the byte-range stream path: it
+// resolves the full response once, then serves ranges from that buffer. This
+// is how the in-memory `schemes` providers reach the single native handler.
+ByteSourceResolver byteSourceFrom(ResourceProvider provider)
+{
+    return [provider = std::move(provider)](
+               std::string_view url) -> std::optional<ByteSource>
+    {
+        auto response = provider ? provider(url) : std::nullopt;
+
+        if (!response)
+            return std::nullopt;
+
+        return memoryByteSource(
+            std::span<const std::uint8_t> {response->data.data(),
+                                           response->data.size()},
+            std::move(response->mimeType));
+    };
+}
+
 ResourceProvider makeResourceProviderFromFiles(FileProvider provider,
                                                std::string indexFile)
 {

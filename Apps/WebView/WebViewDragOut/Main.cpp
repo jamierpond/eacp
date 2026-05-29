@@ -41,15 +41,15 @@ std::filesystem::path bundledAssetDir()
     return std::filesystem::temp_directory_path() / "eacp-dragout";
 }
 
-// Embedded app resources + the disk-file scheme that streams the listed
-// audio files into the page's <audio> element. The roots bound which
-// directories the page may read: only ~/Downloads and the extracted
-// bundled assets, nothing else on disk.
+// Embedded app resources + an `audiofile://` scheme that streams the listed
+// files off disk into the page's media elements. The roots bound which
+// directories the page may read: only ~/Downloads and the extracted bundled
+// assets, nothing else on disk.
 WebView::Options dragOutOptions()
 {
     auto options = embeddedOptions(category);
-    enableDiskFiles(options,
-                    {downloadsDir().string(), bundledAssetDir().string()});
+    options.streamSchemes["audiofile"] =
+        diskByteSource({downloadsDir().string(), bundledAssetDir().string()});
     return options;
 }
 

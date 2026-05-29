@@ -5,10 +5,10 @@
 #include "WebViewPlatform-Apple.h"
 
 #include <eacp/Core/ObjC/Strings.h>
+#include <eacp/Core/Utils/HttpRange.h>
 #include <eacp/Graphics/Primitives/GraphicUtils.h>
 #include <ea_data_structures/Structures/Vector.h>
 #include <algorithm>
-#include <limits>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -18,84 +18,6 @@ namespace
 std::string safeString(const char* str, const char* fallback = "")
 {
     return str != nullptr ? str : fallback;
-}
-
-std::optional<std::size_t> parseSize(std::string_view value)
-{
-    if (value.empty())
-        return std::nullopt;
-
-    auto out = std::size_t {};
-
-    for (auto c: value)
-    {
-        if (c < '0' || c > '9')
-            return std::nullopt;
-
-        auto digit = static_cast<std::size_t>(c - '0');
-
-        if (out > (std::numeric_limits<std::size_t>::max() - digit) / 10)
-            return std::nullopt;
-
-        out = out * 10 + digit;
-    }
-
-    return out;
-}
-
-// Parses an HTTP `Range` header against a known total size, writing the
-// resolved inclusive [start, end] byte offsets. Handles `bytes=a-b`,
-// `bytes=a-` and suffix `bytes=-n`. Returns false (serve the whole body)
-// for anything malformed, unsatisfiable, or multi-range.
-bool parseByteRange(const std::string& header,
-                    std::size_t total,
-                    std::size_t& start,
-                    std::size_t& end)
-{
-    constexpr std::string_view prefix = "bytes=";
-
-    if (total == 0 || header.rfind(prefix, 0) != 0
-        || header.find(',') != std::string::npos)
-        return false;
-
-    auto spec = header.substr(prefix.size());
-    auto dash = spec.find('-');
-
-    if (dash == std::string::npos)
-        return false;
-
-    auto firstStr = spec.substr(0, dash);
-    auto lastStr = spec.substr(dash + 1);
-
-    if (firstStr.empty())
-    {
-        auto suffix = parseSize(lastStr);
-
-        if (!suffix || *suffix == 0)
-            return false;
-
-        auto clampedSuffix = std::min(*suffix, total);
-        start = total - clampedSuffix;
-        end = total - 1;
-    }
-    else
-    {
-        auto first = parseSize(firstStr);
-        auto last = lastStr.empty() ? std::optional<std::size_t> {total - 1}
-                                    : parseSize(lastStr);
-
-        if (!first || !last)
-            return false;
-
-        start = *first;
-        end = *last;
-    }
-
-    if (start > end || start >= total)
-        return false;
-
-    end = std::min(end, total - 1);
-    return true;
 }
 } // namespace
 
@@ -136,14 +58,15 @@ using MessageHandlerMap =
 }
 @end
 
-// Streams on-disk files into the WebView. Each task resolves a URL to a path,
+// Streams a ByteSource into the WebView. Each task resolves a URL to a source,
 // then reads ONLY the requested byte range on a background queue and delivers
-// it back on the main thread -- so a large media file neither blocks the UI
-// nor gets re-read whole on every range request the media engine issues.
-@interface FileSchemeHandler : NSObject <WKURLSchemeHandler>
+// it back on the main thread -- so a large resource neither blocks the UI nor
+// gets re-read whole on every range request the media engine issues. The
+// source decides where bytes come from (disk, memory, anywhere).
+@interface StreamSchemeHandler : NSObject <WKURLSchemeHandler>
 {
 @public
-    eacp::Graphics::FilePathResolver resolver;
+    eacp::Graphics::ByteSourceResolver resolver;
 }
 // Tasks still in flight, touched only on the main thread. A task is dropped
 // on stop / completion; delivery is skipped if its task is no longer here,
@@ -185,13 +108,13 @@ struct WebView::Native
             schemeHandlers.push_back(std::move(handler));
         }
 
-        for (auto& [scheme, resolver]: options.fileSchemes)
+        for (auto& [scheme, resolver]: options.streamSchemes)
         {
-            auto handler = ObjC::Ptr {[[FileSchemeHandler alloc] init]};
+            auto handler = ObjC::Ptr {[[StreamSchemeHandler alloc] init]};
             handler.get()->resolver = std::move(resolver);
             [config.get() setURLSchemeHandler:handler.get()
                                  forURLScheme:Strings::toNSString(scheme)];
-            fileSchemeHandlers.push_back(std::move(handler));
+            streamSchemeHandlers.push_back(std::move(handler));
         }
 
         webView = detail::createWebView(config.get());
@@ -269,7 +192,7 @@ struct WebView::Native
     ObjC::Ptr<WebViewDelegate> delegate;
     ObjC::Ptr<WKWebViewConfiguration> config;
     EA::Vector<ObjC::Ptr<ResourceSchemeHandler>> schemeHandlers;
-    EA::Vector<ObjC::Ptr<FileSchemeHandler>> fileSchemeHandlers;
+    EA::Vector<ObjC::Ptr<StreamSchemeHandler>> streamSchemeHandlers;
     MessageHandlerMap messageHandlers;
     WebView& owner;
     double zoomLevel = 1.0;
@@ -478,15 +401,24 @@ struct WebViewNativeAccess
         return;
     }
 
-    auto total = static_cast<std::size_t>(response->data.size());
-    auto start = std::size_t {0};
-    auto end = total > 0 ? total - 1 : std::size_t {0};
+    auto total = static_cast<std::uint64_t>(response->data.size());
+    auto start = std::uint64_t {0};
+    auto end = total > 0 ? total - 1 : std::uint64_t {0};
 
     // Honour a byte-range request so media elements can seek -- WKWebView's
     // media engine probes a custom scheme with `Range:` and expects a 206.
     auto* rangeHeader = [request valueForHTTPHeaderField:@"Range"];
-    auto isRange = rangeHeader != nil
-                && parseByteRange([rangeHeader UTF8String], total, start, end);
+    auto parsed = rangeHeader != nil
+                      ? eacp::Http::parseByteRange([rangeHeader UTF8String], total)
+                      : std::nullopt;
+    auto isRange = parsed.has_value();
+
+    if (isRange)
+    {
+        start = parsed->start;
+        end = parsed->end;
+    }
+
     auto length = isRange ? end - start + 1 : total;
 
     auto* headers = [NSMutableDictionary dictionary];
@@ -527,7 +459,7 @@ struct WebViewNativeAccess
 
 @end
 
-@implementation FileSchemeHandler
+@implementation StreamSchemeHandler
 
 - (instancetype)init
 {
@@ -565,68 +497,64 @@ struct WebViewNativeAccess
     // Tracked on the main thread so a stop (below) before delivery cancels it.
     [self.liveTasks addObject:urlSchemeTask];
 
-    // The disk I/O happens off the main thread; only the requested byte range
-    // is read, never the whole file.
+    // The read happens off the main thread; only the requested byte range is
+    // fetched, never the whole resource.
     auto* ioQueue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
     dispatch_async(ioQueue, ^{
-      auto resolved = resolveFn ? resolveFn(urlStr) : std::nullopt;
-
       NSHTTPURLResponse* httpResponse = nil;
       NSData* data = nil;
 
-      if (resolved)
+      auto source = resolveFn ? resolveFn(urlStr) : std::nullopt;
+
+      if (source)
       {
-          auto* path = [NSString stringWithUTF8String:resolved->c_str()];
-          auto* attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path
-                                                                         error:nil];
-          auto* handle = [NSFileHandle fileHandleForReadingAtPath:path];
+          auto total = source->size;
+          auto start = std::uint64_t {0};
+          auto end = total > 0 ? total - 1 : std::uint64_t {0};
 
-          if (attrs != nil && handle != nil)
+          auto parsed = eacp::Http::parseByteRange(rangeStr, total);
+          auto isRange = parsed.has_value();
+
+          if (isRange)
           {
-              auto total = static_cast<std::size_t>([attrs fileSize]);
-              auto start = std::size_t {0};
-              auto end = total > 0 ? total - 1 : std::size_t {0};
-              auto isRange = !rangeStr.empty()
-                          && parseByteRange(rangeStr, total, start, end);
-              auto length = isRange ? end - start + 1 : total;
+              start = parsed->start;
+              end = parsed->end;
+          }
 
-              auto ok = start == 0 || [handle seekToOffset:start error:nil];
+          auto length = isRange ? end - start + 1 : total;
+          auto bytes = source->read ? source->read(start, length) : std::nullopt;
 
-              if (ok)
-                  data = length > 0 ? [handle readDataUpToLength:length error:nil]
-                                    : [NSData data];
+          if (bytes && bytes->size() == length)
+          {
+              auto* headers = [NSMutableDictionary dictionary];
+              headers[@"Content-Type"] =
+                  eacp::Strings::toNSString(source->contentType);
+              headers[@"Accept-Ranges"] = @"bytes";
+              headers[@"Content-Length"] =
+                  [NSString stringWithFormat:@"%llu", (unsigned long long) length];
 
-              [handle closeAndReturnError:nil];
+              auto status = 200;
 
-              if (data != nil && [data length] == length)
+              if (isRange)
               {
-                  auto* headers = [NSMutableDictionary dictionary];
-                  headers[@"Content-Type"] = eacp::Strings::toNSString(
-                      eacp::Graphics::mimeForPath(resolved.value()));
-                  headers[@"Accept-Ranges"] = @"bytes";
-                  headers[@"Content-Length"] =
-                      [NSString stringWithFormat:@"%llu", (unsigned long long) length];
-
-                  auto status = 200;
-
-                  if (isRange)
-                  {
-                      status = 206;
-                      headers[@"Content-Range"] =
-                          [NSString stringWithFormat:@"bytes %llu-%llu/%llu",
-                                                     (unsigned long long) start,
-                                                     (unsigned long long) end,
-                                                     (unsigned long long) total];
-                  }
-
-                  // Autoreleased: the main-queue block below retains it while
-                  // this block's pool still holds it, so it survives the hop.
-                  httpResponse =
-                      [[[NSHTTPURLResponse alloc] initWithURL:requestURL
-                                                   statusCode:status
-                                                  HTTPVersion:@"HTTP/1.1"
-                                                 headerFields:headers] autorelease];
+                  status = 206;
+                  headers[@"Content-Range"] =
+                      [NSString stringWithFormat:@"bytes %llu-%llu/%llu",
+                                                 (unsigned long long) start,
+                                                 (unsigned long long) end,
+                                                 (unsigned long long) total];
               }
+
+              data = [NSData dataWithBytes:length > 0 ? bytes->data() : nullptr
+                                    length:length];
+
+              // Autoreleased: the main-queue block below retains it while this
+              // block's pool still holds it, so it survives the hop.
+              httpResponse =
+                  [[[NSHTTPURLResponse alloc] initWithURL:requestURL
+                                               statusCode:status
+                                              HTTPVersion:@"HTTP/1.1"
+                                             headerFields:headers] autorelease];
           }
       }
 

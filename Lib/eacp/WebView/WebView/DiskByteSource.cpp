@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <string_view>
 #include <system_error>
 
@@ -32,12 +33,37 @@ std::string pathFromFileURL(std::string_view url)
 
     return Strings::percentDecode(rest.substr(slash));
 }
+
+// A fresh stream per call: no shared cursor, so the concurrent, out-of-order
+// range requests a media element issues cannot race each other.
+std::optional<std::string> readRange(const std::string& path,
+                                     std::uint64_t offset,
+                                     std::uint64_t length)
+{
+    auto stream = std::ifstream {path, std::ios::binary};
+
+    if (!stream)
+        return std::nullopt;
+
+    stream.seekg(static_cast<std::streamoff>(offset));
+
+    if (!stream)
+        return std::nullopt;
+
+    auto buffer = std::string (length, '\0');
+    stream.read(buffer.data(), static_cast<std::streamsize>(length));
+
+    if (static_cast<std::uint64_t>(stream.gcount()) != length)
+        return std::nullopt;
+
+    return buffer;
+}
 } // namespace
 
-FilePathResolver diskFileResolver(std::vector<std::string> allowedRoots)
+ByteSourceResolver diskByteSource(std::vector<std::string> allowedRoots)
 {
     return [roots = std::move(allowedRoots)](
-               std::string_view url) -> std::optional<std::string>
+               std::string_view url) -> std::optional<ByteSource>
     {
         auto pathStr = pathFromFileURL(url);
 
@@ -58,7 +84,18 @@ FilePathResolver diskFileResolver(std::vector<std::string> allowedRoots)
         if (!allowed || !std::filesystem::is_regular_file(path, ec))
             return std::nullopt;
 
-        return path.string();
+        auto size = std::filesystem::file_size(path, ec);
+
+        if (ec)
+            return std::nullopt;
+
+        auto pathString = path.string();
+
+        return ByteSource {
+            static_cast<std::uint64_t>(size),
+            mimeForPath(pathString),
+            [pathString](std::uint64_t offset, std::uint64_t length)
+            { return readRange(pathString, offset, length); }};
     };
 }
 } // namespace eacp::Graphics

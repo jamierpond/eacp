@@ -38,20 +38,43 @@ std::string pathFromURL(std::string_view url,
 
 FileProvider fromResEmbed(std::string category);
 
-// Maps a request URL to the absolute on-disk path it should serve, or
-// nullopt to reject (404). Used by the streaming file-scheme handler, which
-// reads only the requested byte range off the main thread -- so a large
-// media file neither blocks the UI nor gets re-read whole on every seek.
-using FilePathResolver =
-    std::function<std::optional<std::string>(std::string_view url)>;
+// A sized, seekable blob the WebView can stream and serve Range requests
+// from. `read` is invoked off the main thread and may block; it returns the
+// bytes at [offset, offset + length), or nullopt to fail the request.
+//
+// CONTRACT (this is the "impl correctly" part):
+//  - `size` is the true total and is STABLE for the life of the resource --
+//    one playback produces many requests against it.
+//  - `read` returns EXACTLY `length` bytes when in range; a short read fails
+//    the task (the handler enforces this).
+//  - `read` is safe to call CONCURRENTLY for the same source -- a media
+//    element issues overlapping, out-of-order ranges -- so it must not rely
+//    on a shared cursor or other mutable state.
+struct ByteSource
+{
+    std::uint64_t size = 0;
+    std::string contentType;
+    std::function<std::optional<std::string>(std::uint64_t offset,
+                                             std::uint64_t length)>
+        read;
+};
 
-// A FilePathResolver for the disk-file scheme. The URL maps to an absolute
-// path: `scheme:///abs/path.wav` -> /abs/path.wav, percent-decoded so spaces
-// and unicode survive. If `allowedRoots` is non-empty, only existing files
-// under one of those directories resolve (anything else 404s) -- recommended,
-// since this hands disk reads to web content. An empty list serves any
-// absolute path the page asks for.
-FilePathResolver diskFileResolver(std::vector<std::string> allowedRoots = {});
+// Maps a request URL to the source that serves it, or nullopt to 404. Called
+// per request (and possibly off the main thread), so it must be thread-safe.
+using ByteSourceResolver =
+    std::function<std::optional<ByteSource>(std::string_view url)>;
+
+// One ready-made source: serve files off disk. The URL path maps to an
+// absolute path (percent-decoded). If `allowedRoots` is non-empty, only
+// existing regular files under a root resolve -- recommended, since this
+// hands disk reads to web content. contentType is guessed from the extension.
+ByteSourceResolver diskByteSource(std::vector<std::string> allowedRoots = {});
+
+// A ByteSource over an in-memory buffer (copied in). Serves Range requests by
+// slicing the buffer -- handy for generated or already-resident content, and
+// the bridge the in-memory `schemes` providers fold through.
+ByteSource memoryByteSource(std::span<const std::uint8_t> bytes,
+                            std::string contentType);
 
 struct WebViewNativeAccess;
 
@@ -96,11 +119,12 @@ public:
 
         std::unordered_map<std::string, ResourceProvider> schemes;
 
-        // Schemes served straight from disk. Unlike `schemes` (which hand
-        // back a whole in-memory buffer), each request only reads the bytes
-        // the page asked for, off the main thread -- so large media files
-        // stream and seek without blocking the UI or being re-read whole.
-        std::unordered_map<std::string, FilePathResolver> fileSchemes;
+        // Schemes streamed as byte ranges. The lib owns the protocol -- Range
+        // parsing, 200/206 with Accept-Ranges/Content-Length/Content-Range,
+        // reading each requested range off the main thread, and task lifecycle
+        // -- and asks the resolver only "what bytes back this URL?". It neither
+        // knows nor cares whether they come from disk, memory, or elsewhere.
+        std::unordered_map<std::string, ByteSourceResolver> streamSchemes;
 
         Embedded embedded;
         bool debugConsole = true;
@@ -196,20 +220,4 @@ inline WebView::Options embeddedOptions(std::string category)
     return options;
 }
 
-// Default scheme for the built-in disk-file streamer. The page references
-// files as `audiofile:///abs/path.wav`.
-inline constexpr auto diskFileScheme = "audiofile";
-
-// Registers the built-in disk-file streamer on `options` under `scheme`, so
-// the page can load on-disk files (e.g. play them in an <audio> element) via
-// `audiofile:///abs/path`. Requests are served range-by-range off the main
-// thread, so large files stream and seek smoothly. `allowedRoots` bounds
-// which directories are readable -- see diskFileResolver.
-inline void enableDiskFiles(WebView::Options& options,
-                            std::vector<std::string> allowedRoots = {},
-                            std::string scheme = diskFileScheme)
-{
-    options.fileSchemes[std::move(scheme)] =
-        diskFileResolver(std::move(allowedRoots));
-}
 } // namespace eacp::Graphics

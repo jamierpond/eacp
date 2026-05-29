@@ -9,6 +9,7 @@ target_sources(eacp-core PRIVATE
         Threads/EventLoop.cpp
         Threads/TaskSemaphore.cpp
         Utils/Files.cpp
+        Utils/HttpRange.cpp
         Utils/Logging.cpp
         Utils/Random.cpp
         Utils/Strings.cpp)

@@ -1,4 +1,5 @@
 #include <eacp/Core/Utils/Files.h>
+#include <eacp/Core/Utils/HttpRange.h>
 #include <eacp/Core/Utils/Strings.h>
 #include <NanoTest/NanoTest.h>
 
@@ -64,4 +65,38 @@ auto tIsUnderRootHandlesDotDotPath =
     auto base = tempRoot();
     check(eacp::Files::isUnderRoot(
         base / "root" / "sub" / ".." / "sub" / "file.txt", base / "root"));
+};
+
+auto tByteRangeProbe = test("Http/parseByteRange/probe") = []
+{
+    auto r = eacp::Http::parseByteRange("bytes=0-1", 5000);
+    check(r.has_value());
+    check(r->start == 0 && r->end == 1);
+};
+
+auto tByteRangeSuffix = test("Http/parseByteRange/suffix") = []
+{
+    auto r = eacp::Http::parseByteRange("bytes=-500", 5000);
+    check(r.has_value());
+    check(r->start == 4500 && r->end == 4999);
+};
+
+auto tByteRangeOpenEnded = test("Http/parseByteRange/openEnded") = []
+{
+    auto r = eacp::Http::parseByteRange("bytes=4999-", 5000);
+    check(r.has_value());
+    check(r->start == 4999 && r->end == 4999);
+};
+
+auto tByteRangePastEnd = test("Http/parseByteRange/pastEnd") = []
+{
+    check(!eacp::Http::parseByteRange("bytes=5000-", 5000).has_value());
+};
+
+auto tByteRangeMalformed = test("Http/parseByteRange/malformed") = []
+{
+    check(!eacp::Http::parseByteRange("", 5000).has_value());
+    check(!eacp::Http::parseByteRange("bytes=0-1,2-3", 5000).has_value());
+    check(!eacp::Http::parseByteRange("bytes=abc", 5000).has_value());
+    check(!eacp::Http::parseByteRange("bytes=0-1", 0).has_value());
 };
