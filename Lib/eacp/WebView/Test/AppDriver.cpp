@@ -1,5 +1,7 @@
 #include "AppDriver.h"
 
+#include "TestAgent.h"
+
 #include <eacp/Core/Threads/Async.h>
 #include <eacp/Core/Threads/EventLoop.h>
 #include <eacp/WebView/WebView.h>
@@ -30,14 +32,30 @@ std::string jsStringLiteral(std::string_view value)
     {
         switch (c)
         {
-            case '\\': out += "\\\\"; break;
-            case '"': out += "\\\""; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            case '<': out += "\\u003c"; break;
-            case '>': out += "\\u003e"; break;
-            case '&': out += "\\u0026"; break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '"':
+                out += "\\\"";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            case '<':
+                out += "\\u003c";
+                break;
+            case '>':
+                out += "\\u003e";
+                break;
+            case '&':
+                out += "\\u0026";
+                break;
             default:
                 if (static_cast<unsigned char>(c) < 0x20)
                 {
@@ -89,23 +107,6 @@ std::string sanitizeSnapshotName(const std::string& name)
     return out;
 }
 
-void writeBinary(const std::filesystem::path& path,
-                 const std::vector<std::uint8_t>& bytes)
-{
-    if (path.has_parent_path())
-        std::filesystem::create_directories(path.parent_path());
-
-    auto file = std::ofstream {path, std::ios::binary | std::ios::trunc};
-    if (!file)
-        throw std::runtime_error("AppDriver: failed to open '" + path.string()
-                                 + "' for writing");
-    file.write(reinterpret_cast<const char*>(bytes.data()),
-               static_cast<std::streamsize>(bytes.size()));
-    if (!file)
-        throw std::runtime_error("AppDriver: short write to '" + path.string()
-                                 + "'");
-}
-
 void writeText(const std::filesystem::path& path, const std::string& text)
 {
     if (path.has_parent_path())
@@ -145,13 +146,21 @@ int asInt(const Miro::JSON& v)
 } // namespace
 
 AppDriver::AppDriver(Graphics::WebView& webViewToUse,
-                     Miro::Bridge& bridgeToUse, AppDriverOptions options)
+                     Miro::Bridge& bridgeToUse,
+                     AppDriverOptions options)
     : webView(webViewToUse)
     , bridge(bridgeToUse)
     , defaultTimeoutMs(options.defaultTimeoutMs)
     , snapshotDir(resolveSnapshotDir(std::move(options.snapshotDir)))
     , firstNavigation(firstNavigationPromise.get())
 {
+    // The window.__test agent is AppDriver's wire protocol — install
+    // it at document-start so it's available before page scripts run.
+    // Headless mode defers the WebView's first navigation by one
+    // runloop tick (see WebView-Shared.cpp), giving us this window to
+    // register the script before the load fires.
+    webView.addUserScript(loadTestAgentSource(), true);
+
     // evaluateJavaScript before the first navigation finishes
     // sometimes fails — the JS context isn't fully set up yet. Latch
     // on the first didFinishNavigation callback so command methods
@@ -212,8 +221,7 @@ int AppDriver::effectiveTimeoutMs(const CallOptions& opts) const
     return defaultTimeoutMs ? *defaultTimeoutMs : Test::defaultTimeoutMs;
 }
 
-Threads::Async<void>
-AppDriver::waitForFirstNavigationAsync(const CallOptions&)
+Threads::Async<void> AppDriver::waitForFirstNavigationAsync(const CallOptions&)
 {
     return firstNavigation;
 }
@@ -290,8 +298,8 @@ std::chrono::milliseconds syncOuterTimeout(int innerTimeoutMs)
 
 } // namespace
 
-Threads::Async<Miro::JSON>
-AppDriver::runJsAsync(const std::string& expression, const CallOptions& opts)
+Threads::Async<Miro::JSON> AppDriver::runJsAsync(const std::string& expression,
+                                                 const CallOptions& opts)
 {
     co_await waitForFirstNavigationAsync(opts);
 
@@ -302,22 +310,19 @@ AppDriver::runJsAsync(const std::string& expression, const CallOptions& opts)
     }
     catch (const Threads::AsyncError& e)
     {
-        throw std::runtime_error(std::string {"AppDriver JS error: "}
-                                 + e.what());
+        throw std::runtime_error(std::string {"AppDriver JS error: "} + e.what());
     }
 
     co_return unwrapJsResult(raw);
 }
 
-Miro::JSON AppDriver::runJs(const std::string& expression,
-                            const CallOptions& opts)
+Miro::JSON AppDriver::runJs(const std::string& expression, const CallOptions& opts)
 {
     auto timeoutMs = effectiveTimeoutMs(opts);
     return runJsAsync(expression, opts).waitFor(syncOuterTimeout(timeoutMs));
 }
 
-std::vector<std::uint8_t>
-AppDriver::runSnapshotBytes(const CallOptions& opts)
+std::vector<std::uint8_t> AppDriver::runSnapshotBytes(const CallOptions& opts)
 {
     waitForFirstNavigation(opts);
 
@@ -346,14 +351,13 @@ AppDriver::runSnapshotBytes(const CallOptions& opts)
     return std::move(state.bytes);
 }
 
-Miro::JSON AppDriver::invoke(const std::string& command,
-                             const Miro::JSON& payload)
+Miro::JSON AppDriver::invoke(const std::string& command, const Miro::JSON& payload)
 {
     return bridge.dispatch(command, payload);
 }
 
-Threads::Async<bool>
-AppDriver::clickAsync(const std::string& selector, CallOptions opts)
+Threads::Async<bool> AppDriver::clickAsync(const std::string& selector,
+                                           CallOptions opts)
 {
     auto result = co_await runJsAsync(
         "window.__test.click(" + jsStringLiteral(selector) + ")", opts);
@@ -370,14 +374,15 @@ Threads::Async<bool> AppDriver::fillAsync(const std::string& selector,
                                           const std::string& value,
                                           CallOptions opts)
 {
-    auto result = co_await runJsAsync(
-        "window.__test.fill(" + jsStringLiteral(selector) + ","
-            + jsStringLiteral(value) + ")",
-        opts);
+    auto result =
+        co_await runJsAsync("window.__test.fill(" + jsStringLiteral(selector) + ","
+                                + jsStringLiteral(value) + ")",
+                            opts);
     co_return asBool(result);
 }
 
-bool AppDriver::fill(const std::string& selector, const std::string& value,
+bool AppDriver::fill(const std::string& selector,
+                     const std::string& value,
                      CallOptions opts)
 {
     return fillAsync(selector, value, opts)
@@ -388,22 +393,23 @@ Threads::Async<bool> AppDriver::pressAsync(const std::string& selector,
                                            const std::string& key,
                                            CallOptions opts)
 {
-    auto result = co_await runJsAsync(
-        "window.__test.press(" + jsStringLiteral(selector) + ","
-            + jsStringLiteral(key) + ")",
-        opts);
+    auto result =
+        co_await runJsAsync("window.__test.press(" + jsStringLiteral(selector) + ","
+                                + jsStringLiteral(key) + ")",
+                            opts);
     co_return asBool(result);
 }
 
-bool AppDriver::press(const std::string& selector, const std::string& key,
+bool AppDriver::press(const std::string& selector,
+                      const std::string& key,
                       CallOptions opts)
 {
     return pressAsync(selector, key, opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
-Threads::Async<bool>
-AppDriver::submitAsync(const std::string& selector, CallOptions opts)
+Threads::Async<bool> AppDriver::submitAsync(const std::string& selector,
+                                            CallOptions opts)
 {
     auto result = co_await runJsAsync(
         "window.__test.submit(" + jsStringLiteral(selector) + ")", opts);
@@ -416,8 +422,8 @@ bool AppDriver::submit(const std::string& selector, CallOptions opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
-Threads::Async<std::string>
-AppDriver::textAsync(const std::string& selector, CallOptions opts)
+Threads::Async<std::string> AppDriver::textAsync(const std::string& selector,
+                                                 CallOptions opts)
 {
     auto result = co_await runJsAsync(
         "window.__test.text(" + jsStringLiteral(selector) + ")", opts);
@@ -430,14 +436,13 @@ std::string AppDriver::text(const std::string& selector, CallOptions opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
-Threads::Async<std::optional<std::string>>
-AppDriver::attrAsync(const std::string& selector, const std::string& name,
-                     CallOptions opts)
+Threads::Async<std::optional<std::string>> AppDriver::attrAsync(
+    const std::string& selector, const std::string& name, CallOptions opts)
 {
-    auto result = co_await runJsAsync(
-        "window.__test.attr(" + jsStringLiteral(selector) + ","
-            + jsStringLiteral(name) + ")",
-        opts);
+    auto result =
+        co_await runJsAsync("window.__test.attr(" + jsStringLiteral(selector) + ","
+                                + jsStringLiteral(name) + ")",
+                            opts);
     if (result.isNull())
         co_return std::nullopt;
     co_return asString(result);
@@ -451,8 +456,8 @@ std::optional<std::string> AppDriver::attr(const std::string& selector,
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
-Threads::Async<bool>
-AppDriver::existsAsync(const std::string& selector, CallOptions opts)
+Threads::Async<bool> AppDriver::existsAsync(const std::string& selector,
+                                            CallOptions opts)
 {
     auto result = co_await runJsAsync(
         "window.__test.exists(" + jsStringLiteral(selector) + ")", opts);
@@ -465,8 +470,8 @@ bool AppDriver::exists(const std::string& selector, CallOptions opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
-Threads::Async<int>
-AppDriver::countAsync(const std::string& selector, CallOptions opts)
+Threads::Async<int> AppDriver::countAsync(const std::string& selector,
+                                          CallOptions opts)
 {
     auto result = co_await runJsAsync(
         "window.__test.count(" + jsStringLiteral(selector) + ")", opts);
@@ -479,11 +484,11 @@ int AppDriver::count(const std::string& selector, CallOptions opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
-Threads::Async<bool>
-AppDriver::waitForAsync(const std::string& selector, CallOptions opts)
+Threads::Async<bool> AppDriver::waitForAsync(const std::string& selector,
+                                             CallOptions opts)
 {
     auto deadline = std::chrono::steady_clock::now()
-                  + std::chrono::milliseconds {effectiveTimeoutMs(opts)};
+                    + std::chrono::milliseconds {effectiveTimeoutMs(opts)};
 
     while (true)
     {
@@ -505,11 +510,11 @@ bool AppDriver::waitFor(const std::string& selector, CallOptions opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
-Threads::Async<Miro::JSON>
-AppDriver::evaluateAsync(const std::string& expression, CallOptions opts)
+Threads::Async<Miro::JSON> AppDriver::evaluateAsync(const std::string& expression,
+                                                    CallOptions opts)
 {
-    return runJsAsync(
-        "window.__test.evaluate(" + jsStringLiteral(expression) + ")", opts);
+    return runJsAsync("window.__test.evaluate(" + jsStringLiteral(expression) + ")",
+                      opts);
 }
 
 Miro::JSON AppDriver::evaluate(const std::string& expression, CallOptions opts)
@@ -518,11 +523,10 @@ Miro::JSON AppDriver::evaluate(const std::string& expression, CallOptions opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
-Threads::Async<std::string>
-AppDriver::domAsync(std::string_view selector, CallOptions opts)
+Threads::Async<std::string> AppDriver::domAsync(std::string_view selector,
+                                                CallOptions opts)
 {
-    auto arg = selector.empty() ? std::string {"null"}
-                                : jsStringLiteral(selector);
+    auto arg = selector.empty() ? std::string {"null"} : jsStringLiteral(selector);
     auto result = co_await runJsAsync("window.__test.dom(" + arg + ")", opts);
     co_return asString(result);
 }
@@ -538,12 +542,18 @@ ScreenshotResult AppDriver::screenshot(const ScreenshotOptions& options)
     auto callOpts = CallOptions {.timeoutMs = options.timeoutMs};
     auto bytes = runSnapshotBytes(callOpts);
 
+    auto error = std::string {};
+    auto image = Graphics::Image::decode(
+        bytes.data(), static_cast<int>(bytes.size()), &error);
+    if (!image)
+        throw std::runtime_error("AppDriver: failed to decode snapshot: " + error);
+
     auto result = ScreenshotResult {};
-    result.png = std::move(bytes);
+    result.image = std::move(image);
 
     if (!options.path.empty())
     {
-        writeBinary(options.path, result.png);
+        result.image.save(options.path);
         result.path = options.path;
     }
 
@@ -562,14 +572,14 @@ SnapshotResult AppDriver::snapshot(const std::string& name,
     auto callOpts = CallOptions {.timeoutMs = options.timeoutMs};
 
     auto html = dom(options.selector, callOpts);
-    auto shot = screenshot({.timeoutMs = options.timeoutMs,
-                            .path = pngPath.string()});
+    auto shot =
+        screenshot({.timeoutMs = options.timeoutMs, .path = pngPath.string()});
 
     writeText(htmlPath, html);
 
     return SnapshotResult {.name = name,
                            .dom = std::move(html),
-                           .png = std::move(shot.png),
+                           .image = std::move(shot.image),
                            .domPath = htmlPath.string(),
                            .screenshotPath = pngPath.string()};
 }
