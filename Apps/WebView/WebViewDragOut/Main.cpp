@@ -22,16 +22,15 @@ namespace
 {
 constexpr auto category = "DragOutApp";
 
-// The custom URL scheme this app serves its on-disk audio over. The page
-// references files as `audiofile:///abs/path.wav`; the app registers the
-// handler for it below, so the scheme is owned here rather than by the
-// WebView library's default helper.
+// The custom URL scheme this app serves its on-disk files over. The page
+// references files as `audiofile:///abs/path.wav`; the app registers and owns
+// the provider for it below (see diskFileProvider / dragOutOptions).
 constexpr auto audioScheme = "audiofile";
 
 constexpr std::array audioExtensions = {
     ".wav", ".mp3", ".aif", ".aiff", ".flac", ".m4a", ".aac", ".ogg"};
 
-bool isAudioFile(const std::filesystem::path& path)
+std::string lowerExtension(const std::filesystem::path& path)
 {
     auto ext = path.extension().string();
     std::transform(ext.begin(),
@@ -39,6 +38,12 @@ bool isAudioFile(const std::filesystem::path& path)
                    ext.begin(),
                    [](unsigned char c)
                    { return static_cast<char>(std::tolower(c)); });
+    return ext;
+}
+
+bool isAudioFile(const std::filesystem::path& path)
+{
+    auto ext = lowerExtension(path);
     return std::find(audioExtensions.begin(), audioExtensions.end(), ext)
            != audioExtensions.end();
 }
@@ -73,17 +78,168 @@ std::filesystem::path bundledAssetDir()
     return std::filesystem::temp_directory_path() / "eacp-dragout";
 }
 
-// Embedded app resources + the disk-file scheme that streams the listed
-// audio files into the page's <audio> element. The app registers the
-// `audiofile` scheme itself, so it owns the scheme rather than relying on
-// the library's enableDiskFiles default. The roots bound which directories
-// the page may read: only ~/Downloads and the extracted bundled assets,
-// nothing else on disk.
+std::string mimeForFile(const std::filesystem::path& path)
+{
+    auto ext = lowerExtension(path);
+
+    if (ext == ".mp3")
+        return "audio/mpeg";
+    if (ext == ".wav")
+        return "audio/wav";
+    if (ext == ".aif" || ext == ".aiff")
+        return "audio/aiff";
+    if (ext == ".flac")
+        return "audio/flac";
+    if (ext == ".m4a" || ext == ".mp4")
+        return "audio/mp4";
+    if (ext == ".aac")
+        return "audio/aac";
+    if (ext == ".ogg" || ext == ".opus")
+        return "audio/ogg";
+    if (ext == ".png")
+        return "image/png";
+    if (ext == ".jpg" || ext == ".jpeg")
+        return "image/jpeg";
+    if (ext == ".gif")
+        return "image/gif";
+    if (ext == ".webp")
+        return "image/webp";
+    if (ext == ".svg")
+        return "image/svg+xml";
+    return "application/octet-stream";
+}
+
+int hexDigit(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    return -1;
+}
+
+std::string percentDecode(std::string_view encoded)
+{
+    auto out = std::string {};
+    out.reserve(encoded.size());
+
+    for (auto i = std::size_t {0}; i < encoded.size(); ++i)
+    {
+        if (encoded[i] == '%' && i + 2 < encoded.size())
+        {
+            auto hi = hexDigit(encoded[i + 1]);
+            auto lo = hexDigit(encoded[i + 2]);
+
+            if (hi >= 0 && lo >= 0)
+            {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+
+        out.push_back(encoded[i]);
+    }
+
+    return out;
+}
+
+// `audiofile:///abs/path?query#frag` -> `/abs/path`, percent-decoded. The
+// host segment (between `://` and the next `/`) is ignored, so an empty host
+// (`audiofile:///`) yields a leading-slash absolute path as-is.
+std::string pathFromFileURL(std::string_view url)
+{
+    auto schemeEnd = url.find("://");
+
+    if (schemeEnd == std::string_view::npos)
+        return {};
+
+    auto rest = url.substr(schemeEnd + 3);
+    auto cut = rest.find_first_of("?#");
+
+    if (cut != std::string_view::npos)
+        rest = rest.substr(0, cut);
+
+    auto slash = rest.find('/');
+
+    if (slash == std::string_view::npos)
+        return {};
+
+    return percentDecode(rest.substr(slash));
+}
+
+bool isUnderRoot(const std::filesystem::path& file,
+                 const std::filesystem::path& root)
+{
+    auto ec = std::error_code {};
+    auto canonicalRoot = std::filesystem::weakly_canonical(root, ec);
+    auto rel = std::filesystem::relative(file, canonicalRoot, ec);
+
+    if (ec || rel.empty())
+        return false;
+
+    // A path that escapes the root resolves to a relative path starting
+    // with "..". Anything else (including ".") is contained.
+    return rel.native().rfind("..", 0) != 0;
+}
+
+// Streams file bytes straight off disk for the `audiofile` scheme, so the
+// page can play/preview them in inline <audio>/<img> elements. The roots
+// bound which directories are readable -- anything outside 404s. The whole
+// body is returned; the WebView scheme handler frames it and honours the
+// browser's byte-range requests so media can seek.
+ResourceProvider diskFileProvider(std::vector<std::string> allowedRoots)
+{
+    return [roots = std::move(allowedRoots)](
+               std::string_view url) -> std::optional<ResourceResponse>
+    {
+        auto pathStr = pathFromFileURL(url);
+
+        if (pathStr.empty())
+            return std::nullopt;
+
+        auto ec = std::error_code {};
+        auto path = std::filesystem::weakly_canonical(pathStr, ec);
+
+        if (ec)
+            path = std::filesystem::path {pathStr};
+
+        auto allowed = roots.empty()
+                    || std::any_of(roots.begin(),
+                                   roots.end(),
+                                   [&](const auto& root)
+                                   { return isUnderRoot(path, root); });
+
+        if (!allowed || !std::filesystem::is_regular_file(path, ec))
+            return std::nullopt;
+
+        auto in = std::ifstream {path, std::ios::binary};
+
+        if (!in)
+            return std::nullopt;
+
+        auto bytes = std::vector<std::uint8_t> {
+            std::istreambuf_iterator<char> {in},
+            std::istreambuf_iterator<char> {}};
+
+        auto response = ResourceResponse {};
+        response.mimeType = mimeForFile(path);
+        response.data.assign(bytes.begin(), bytes.end());
+        return response;
+    };
+}
+
+// Embedded app resources + the `audiofile` scheme that streams the listed
+// files off disk into the page's inline players. The app owns and registers
+// the scheme itself. The roots bound which directories the page may read:
+// only ~/Downloads and the extracted bundled assets, nothing else on disk.
 WebView::Options dragOutOptions()
 {
     auto options = embeddedOptions(category);
     options.schemes[audioScheme] =
-        fromDisk({downloadsDir().string(), bundledAssetDir().string()});
+        diskFileProvider({downloadsDir().string(), bundledAssetDir().string()});
     return options;
 }
 
