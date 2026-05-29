@@ -35,7 +35,7 @@ bool isMedia(const fs::path& path)
     return std::find(exts.begin(), exts.end(), ext) != exts.end();
 }
 
-WebView::DraggableFileList mediaInDownloads()
+auto mediaInDownloads()
 {
     auto list = WebView::DraggableFileList {};
     auto ec = std::error_code {};
@@ -53,12 +53,13 @@ WebView::DraggableFileList mediaInDownloads()
 // The embedded page + a `media://` scheme that streams files straight off disk,
 // range-by-range -- so even huge media plays and seeks with no copy. The page
 // loads a file as `media:///absolute/path`; only ~/Downloads is exposed.
-WebView::Options mediaOptions()
+auto mediaOptions()
 {
     auto options = embeddedOptions(category);
     options.streamSchemes["media"] = diskByteSource({downloads().string()});
     return options;
 }
+
 } // namespace
 
 // The entire app-specific API the page can call via window.eacp.invoke(...).
