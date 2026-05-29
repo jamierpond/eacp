@@ -224,6 +224,7 @@ private:
     Threads::Async<void> firstNavigation;
     bool firstNavigationFired = false;
     std::function<void(const std::string&)> previousFinishedHandler;
+    std::function<void(const std::string&)> previousFailedHandler;
 };
 
 } // namespace eacp::WebView::Test

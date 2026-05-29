@@ -38,14 +38,20 @@ std::string pathFromURL(std::string_view url,
 
 FileProvider fromResEmbed(std::string category);
 
-// A ResourceProvider that streams file bytes straight off disk. The URL maps
-// to an absolute filesystem path: `scheme:///abs/path.wav` -> /abs/path.wav,
-// percent-decoded so spaces and unicode survive. If `allowedRoots` is
-// non-empty, only files under one of those directories are served (anything
-// else 404s) -- recommended, since this hands disk reads to web content. An
-// empty list serves any absolute path the page asks for. Pair with the byte
-// -range support in the scheme handler so <audio>/<video> can seek.
-ResourceProvider fromDisk(std::vector<std::string> allowedRoots = {});
+// Maps a request URL to the absolute on-disk path it should serve, or
+// nullopt to reject (404). Used by the streaming file-scheme handler, which
+// reads only the requested byte range off the main thread -- so a large
+// media file neither blocks the UI nor gets re-read whole on every seek.
+using FilePathResolver =
+    std::function<std::optional<std::string>(std::string_view url)>;
+
+// A FilePathResolver for the disk-file scheme. The URL maps to an absolute
+// path: `scheme:///abs/path.wav` -> /abs/path.wav, percent-decoded so spaces
+// and unicode survive. If `allowedRoots` is non-empty, only existing files
+// under one of those directories resolve (anything else 404s) -- recommended,
+// since this hands disk reads to web content. An empty list serves any
+// absolute path the page asks for.
+FilePathResolver diskFileResolver(std::vector<std::string> allowedRoots = {});
 
 struct WebViewNativeAccess;
 
