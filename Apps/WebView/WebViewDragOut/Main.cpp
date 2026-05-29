@@ -18,6 +18,12 @@ namespace
 {
 constexpr auto category = "DragOutApp";
 
+// The custom URL scheme this app serves its on-disk audio over. The page
+// references files as `audiofile:///abs/path.wav`; the app registers the
+// handler for it below, so the scheme is owned here rather than by the
+// WebView library's default helper.
+constexpr auto audioScheme = "audiofile";
+
 constexpr std::array audioExtensions = {
     ".wav", ".mp3", ".aif", ".aiff", ".flac", ".m4a", ".aac", ".ogg"};
 
@@ -64,14 +70,16 @@ std::filesystem::path bundledAssetDir()
 }
 
 // Embedded app resources + the disk-file scheme that streams the listed
-// audio files into the page's <audio> element. The roots bound which
-// directories the page may read: only ~/Downloads and the extracted
-// bundled assets, nothing else on disk.
+// audio files into the page's <audio> element. The app registers the
+// `audiofile` scheme itself, so it owns the scheme rather than relying on
+// the library's enableDiskFiles default. The roots bound which directories
+// the page may read: only ~/Downloads and the extracted bundled assets,
+// nothing else on disk.
 WebView::Options dragOutOptions()
 {
     auto options = embeddedOptions(category);
-    enableDiskFiles(options,
-                    {downloadsDir().string(), bundledAssetDir().string()});
+    options.schemes[audioScheme] =
+        fromDisk({downloadsDir().string(), bundledAssetDir().string()});
     return options;
 }
 
