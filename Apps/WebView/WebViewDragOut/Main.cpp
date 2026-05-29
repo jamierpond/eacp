@@ -5,10 +5,14 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace eacp;
