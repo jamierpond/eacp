@@ -33,8 +33,8 @@
         .row
         {
             display: flex;
-            align-items: center;
-            gap: 0.75rem;
+            flex-direction: column;
+            gap: 0.5rem;
             padding: 0.55rem 0.85rem;
             border-bottom: 1px solid #23232f;
             cursor: grab;
@@ -43,8 +43,14 @@
         .row:last-child { border-bottom: 0; }
         .row:hover { background: #1c1c28; }
         .row.selected { background: #2d3a8c; }
-        .row.playing { background: #1f2a52; }
         .row:active { cursor: grabbing; }
+
+        .row-head
+        {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
 
         .row .ico
         {
@@ -81,45 +87,22 @@
 
         .row .tag.bundled { color: #14141c; background: #9bffb1; }
 
-        .row .play
+        /* The inline player / preview lives in its own row; clicks on it must
+           not arm a drag or toggle selection (handled in JS). */
+        .row audio
         {
-            flex: 0 0 auto;
-            width: 26px;
-            height: 26px;
-            border: 0;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 0.7rem;
-            color: #e6e6f0;
-            background: #33333f;
-        }
-
-        .row .play:hover { background: #4a4a5e; }
-
-        .empty { padding: 1.25rem; color: #7e7e94; font-size: 0.85rem; }
-
-        #audio
-        {
-            display: block;
             width: 100%;
-            max-width: 560px;
-            margin-top: 1.25rem;
+            height: 32px;
         }
 
-        #audio[hidden] { display: none; }
-
-        #image-preview
-        {
-            margin-top: 1.25rem;
-            max-width: 560px;
-        }
-
-        #image-preview img
+        .row img
         {
             max-width: 100%;
             border-radius: 8px;
             border: 1px solid #2c2c3c;
         }
+
+        .empty { padding: 1.25rem; color: #7e7e94; font-size: 0.85rem; }
 
         #status
         {
@@ -133,15 +116,12 @@
 </head>
 <body>
 <h1>Drag audio into your DAW</h1>
-<p>Files from <code>~/Downloads</code> plus bundled resources, served over the eacp bridge. Hit ▶ to
-   play in-app (streamed off disk via the built-in <code>audiofile://</code> scheme — use the native
-   controls to scrub), click to select (⌘/⇧-click to multi-select), then drag the selection onto a DAW track.</p>
+<p>Files from <code>~/Downloads</code> plus bundled resources, served over the eacp bridge. Each row has
+   its own inline player (streamed off disk via the built-in <code>audiofile://</code> scheme — use the
+   native controls to play and scrub), click to select (⌘/⇧-click to multi-select), then drag the
+   selection onto a DAW track.</p>
 
 <div id="list"><div class="empty">Loading…</div></div>
-
-<audio id="audio" controls hidden></audio>
-
-<div id="image-preview" hidden><img id="img" alt=""/></div>
 
 <div id="status"></div>
 
@@ -150,12 +130,8 @@
     {
         const list = document.getElementById('list');
         const status = document.getElementById('status');
-        const audio = document.getElementById('audio');
-        const imageUI = document.getElementById('image-preview');
-        const img = document.getElementById('img');
         const selected = new Set();
         let files = [];
-        let playingIndex = -1;
 
         if (!window.eacp || typeof window.eacp.invoke !== 'function')
         {
@@ -180,45 +156,38 @@
             return 'audiofile://' + encodeURI(path);
         }
 
-        function setPlayingRow()
+        // The inline player / preview for a row. Interacting with it must not
+        // arm a drag or toggle selection, so swallow those gestures here.
+        function buildPreview(file)
+        {
+            const el = isImage(file.name)
+                ? document.createElement('img')
+                : document.createElement('audio');
+
+            if (isImage(file.name))
+            {
+                el.alt = file.name;
+            }
+            else
+            {
+                el.controls = true;
+                // Stream lazily: nothing hits the scheme handler until play,
+                // so listing the files doesn't fetch every audio up front.
+                el.preload = 'none';
+            }
+
+            el.src = fileURL(file.path);
+            el.addEventListener('mousedown', (event) => event.stopPropagation());
+            el.addEventListener('click', (event) => event.stopPropagation());
+            return el;
+        }
+
+        // Reflect the current selection without rebuilding the rows -- a full
+        // re-render would recreate the <audio> elements and stop playback.
+        function paintSelection()
         {
             list.querySelectorAll('.row').forEach((row, i) =>
-                row.classList.toggle('playing', i === playingIndex));
-        }
-
-        function play(index)
-        {
-            const file = files[index];
-            playingIndex = index;
-
-            imageUI.hidden = true;
-            audio.hidden = false;
-            audio.src = fileURL(file.path);
-            audio.play().catch((err) =>
-                { status.textContent = 'Playback failed: ' + err; });
-
-            setPlayingRow();
-            status.textContent = 'Playing ' + file.name;
-        }
-
-        function showImage(file)
-        {
-            audio.pause();
-            audio.hidden = true;
-            playingIndex = -1;
-            setPlayingRow();
-            img.src = fileURL(file.path);
-            imageUI.hidden = false;
-            status.textContent = 'Previewing ' + file.name;
-        }
-
-        function preview(index)
-        {
-            const file = files[index];
-            if (isImage(file.name))
-                showImage(file);
-            else
-                play(index);
+                row.classList.toggle('selected', selected.has(i)));
         }
 
         function render()
@@ -228,37 +197,26 @@
             files.forEach((file, index) =>
             {
                 const row = document.createElement('div');
-                row.className = 'row' + (selected.has(index) ? ' selected' : '')
-                    + (index === playingIndex ? ' playing' : '');
+                row.className = 'row' + (selected.has(index) ? ' selected' : '');
+
+                const head = document.createElement('div');
+                head.className = 'row-head';
 
                 const ico = document.createElement('span');
                 ico.className = 'ico';
-                ico.textContent = '♪';
+                ico.textContent = isImage(file.name) ? '▦' : '♪';
 
                 const name = document.createElement('span');
                 name.className = 'name';
                 name.textContent = file.name;
-
-                const play = document.createElement('button');
-                play.className = 'play';
-                play.textContent = isImage(file.name) ? '◳' : '▶';
-                play.title = 'Preview';
-
-                // Don't let the preview button arm a drag or toggle selection.
-                play.addEventListener('mousedown', (event) =>
-                    event.stopPropagation());
-                play.addEventListener('click', (event) =>
-                {
-                    event.stopPropagation();
-                    preview(index);
-                });
 
                 const tag = document.createElement('span');
                 const bundled = isBundled(file);
                 tag.className = 'tag' + (bundled ? ' bundled' : '');
                 tag.textContent = bundled ? 'bundled' : '~/Downloads';
 
-                row.append(ico, name, play, tag);
+                head.append(ico, name, tag);
+                row.append(head, buildPreview(file));
 
                 // Arm on mousedown. If the pressed row is part of the current
                 // selection, drag the whole selection; otherwise drag just it.
@@ -287,7 +245,7 @@
                         selected.clear();
                         selected.add(index);
                     }
-                    render();
+                    paintSelection();
                 });
 
                 list.appendChild(row);
