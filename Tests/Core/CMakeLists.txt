@@ -17,3 +17,7 @@ nano_add_executable(AsyncCoroutineTests
 nano_add_executable(AsyncTestHelpersTests
         SOURCES AsyncTestHelpersTests.cpp
         TARGETS eacp-core-testing)
+
+nano_add_executable(UtilsTests
+        SOURCES UtilsTests.cpp
+        TARGETS eacp-core)

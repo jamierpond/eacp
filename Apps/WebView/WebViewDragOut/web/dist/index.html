@@ -284,11 +284,12 @@
             return /\.(png|jpe?g|gif|webp|svg)$/i.test(name);
         }
 
-        // Files are served off disk by the built-in `audiofile` scheme. The
-        // path is absolute, so `audiofile://` + encoded path -> audiofile:///...
+        // Files are served off disk by the built-in `audiofile` scheme. Encode
+        // path segments, not the whole URL, so path `#` / `?` characters do not
+        // turn into fragments or queries before native code sees them.
         function fileURL(path)
         {
-            return 'audiofile://' + encodeURI(path);
+            return 'audiofile://' + path.split('/').map(encodeURIComponent).join('/');
         }
 
         function formatTime(seconds)

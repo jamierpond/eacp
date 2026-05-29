@@ -8,6 +8,9 @@
 #include <eacp/Graphics/Primitives/GraphicUtils.h>
 #include <ea_data_structures/Structures/Vector.h>
 #include <algorithm>
+#include <limits>
+#include <optional>
+#include <string_view>
 #include <unordered_map>
 
 namespace
@@ -15,6 +18,29 @@ namespace
 std::string safeString(const char* str, const char* fallback = "")
 {
     return str != nullptr ? str : fallback;
+}
+
+std::optional<std::size_t> parseSize(std::string_view value)
+{
+    if (value.empty())
+        return std::nullopt;
+
+    auto out = std::size_t {};
+
+    for (auto c: value)
+    {
+        if (c < '0' || c > '9')
+            return std::nullopt;
+
+        auto digit = static_cast<std::size_t>(c - '0');
+
+        if (out > (std::numeric_limits<std::size_t>::max() - digit) / 10)
+            return std::nullopt;
+
+        out = out * 10 + digit;
+    }
+
+    return out;
 }
 
 // Parses an HTTP `Range` header against a known total size, writing the
@@ -41,30 +67,28 @@ bool parseByteRange(const std::string& header,
     auto firstStr = spec.substr(0, dash);
     auto lastStr = spec.substr(dash + 1);
 
-    try
+    if (firstStr.empty())
     {
-        if (firstStr.empty())
-        {
-            if (lastStr.empty())
-                return false;
+        auto suffix = parseSize(lastStr);
 
-            auto suffix = std::min<std::size_t>(std::stoull(lastStr), total);
+        if (!suffix || *suffix == 0)
+            return false;
 
-            if (suffix == 0)
-                return false;
-
-            start = total - suffix;
-            end = total - 1;
-        }
-        else
-        {
-            start = std::stoull(firstStr);
-            end = lastStr.empty() ? total - 1 : std::stoull(lastStr);
-        }
+        auto clampedSuffix = std::min(*suffix, total);
+        start = total - clampedSuffix;
+        end = total - 1;
     }
-    catch (...)
+    else
     {
-        return false;
+        auto first = parseSize(firstStr);
+        auto last = lastStr.empty() ? std::optional<std::size_t> {total - 1}
+                                    : parseSize(lastStr);
+
+        if (!first || !last)
+            return false;
+
+        start = *first;
+        end = *last;
     }
 
     if (start > end || start >= total)
@@ -482,14 +506,15 @@ struct WebViewNativeAccess
     }
 
     auto* httpResponse =
-        [[NSHTTPURLResponse alloc] initWithURL:request.URL
-                                    statusCode:status
-                                   HTTPVersion:@"HTTP/1.1"
-                                  headerFields:headers];
+        [[[NSHTTPURLResponse alloc] initWithURL:request.URL
+                                     statusCode:status
+                                    HTTPVersion:@"HTTP/1.1"
+                                   headerFields:headers] autorelease];
 
     [urlSchemeTask didReceiveResponse:httpResponse];
 
-    auto* data = [NSData dataWithBytes:response->data.data() + start
+    auto* data = [NSData dataWithBytes:length > 0 ? response->data.data() + start
+                                               : nullptr
                                 length:length];
     [urlSchemeTask didReceiveData:data];
     [urlSchemeTask didFinish];
@@ -510,8 +535,8 @@ struct WebViewNativeAccess
 
     if (self != nil)
     {
-        // Owned (alloc/init): the WebView runs without ARC, so an autoreleased
-        // set would be freed out from under us before the first task arrives.
+        // Owned (alloc/init): the WebView runs under manual reference counting,
+        // so an autoreleased set could be gone before the first task arrives.
         _liveTasks = [[NSMutableSet alloc] init];
     }
 
@@ -573,7 +598,7 @@ struct WebViewNativeAccess
 
               [handle closeAndReturnError:nil];
 
-              if (data != nil)
+              if (data != nil && [data length] == length)
               {
                   auto* headers = [NSMutableDictionary dictionary];
                   headers[@"Content-Type"] = eacp::Strings::toNSString(
@@ -595,8 +620,7 @@ struct WebViewNativeAccess
                   }
 
                   // Autoreleased: the main-queue block below retains it while
-                  // this block's pool still holds it, so it survives the hop;
-                  // owning it here (alloc/init) would leak under manual ARC.
+                  // this block's pool still holds it, so it survives the hop.
                   httpResponse =
                       [[[NSHTTPURLResponse alloc] initWithURL:requestURL
                                                    statusCode:status

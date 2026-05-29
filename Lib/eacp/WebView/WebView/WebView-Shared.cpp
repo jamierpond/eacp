@@ -5,9 +5,8 @@
 #include <eacp/Core/App/AppEnvironment.h>
 #include <eacp/Core/Threads/EventLoop.h>
 
-#include <algorithm>
+#include <cstdio>
 #include <cstdint>
-#include <filesystem>
 #include <string_view>
 
 namespace eacp::Graphics
@@ -79,113 +78,6 @@ FileProvider fromResEmbed(std::string category)
             return std::nullopt;
 
         return std::span<const std::uint8_t> {view.data(), view.size()};
-    };
-}
-
-namespace
-{
-int hexDigit(char c)
-{
-    if (c >= '0' && c <= '9')
-        return c - '0';
-    if (c >= 'a' && c <= 'f')
-        return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F')
-        return c - 'A' + 10;
-    return -1;
-}
-
-std::string percentDecode(std::string_view encoded)
-{
-    auto out = std::string {};
-    out.reserve(encoded.size());
-
-    for (auto i = std::size_t {0}; i < encoded.size(); ++i)
-    {
-        if (encoded[i] == '%' && i + 2 < encoded.size())
-        {
-            auto hi = hexDigit(encoded[i + 1]);
-            auto lo = hexDigit(encoded[i + 2]);
-
-            if (hi >= 0 && lo >= 0)
-            {
-                out.push_back(static_cast<char>((hi << 4) | lo));
-                i += 2;
-                continue;
-            }
-        }
-
-        out.push_back(encoded[i]);
-    }
-
-    return out;
-}
-
-// `scheme:///abs/path?query#frag` -> `/abs/path`, percent-decoded. The host
-// segment (between `://` and the next `/`) is ignored, so an empty host
-// (`scheme:///`) yields a leading-slash absolute path as-is.
-std::string pathFromFileURL(std::string_view url)
-{
-    auto schemeEnd = url.find("://");
-
-    if (schemeEnd == std::string_view::npos)
-        return {};
-
-    auto rest = url.substr(schemeEnd + 3);
-    auto cut = rest.find_first_of("?#");
-
-    if (cut != std::string_view::npos)
-        rest = rest.substr(0, cut);
-
-    auto slash = rest.find('/');
-
-    if (slash == std::string_view::npos)
-        return {};
-
-    return percentDecode(rest.substr(slash));
-}
-
-bool isUnderRoot(const std::filesystem::path& file,
-                 const std::filesystem::path& root)
-{
-    auto ec = std::error_code {};
-    auto canonicalRoot = std::filesystem::weakly_canonical(root, ec);
-    auto rel = std::filesystem::relative(file, canonicalRoot, ec);
-
-    if (ec || rel.empty())
-        return false;
-
-    // A path that escapes the root resolves to a relative path starting
-    // with "..". Anything else (including ".") is contained.
-    return rel.native().rfind("..", 0) != 0;
-}
-} // namespace
-
-FilePathResolver diskFileResolver(std::vector<std::string> allowedRoots)
-{
-    return [roots = std::move(allowedRoots)](
-               std::string_view url) -> std::optional<std::string>
-    {
-        auto pathStr = pathFromFileURL(url);
-
-        if (pathStr.empty())
-            return std::nullopt;
-
-        auto ec = std::error_code {};
-        auto path = std::filesystem::weakly_canonical(pathStr, ec);
-
-        if (ec)
-            path = std::filesystem::path {pathStr};
-
-        auto allowed = roots.empty()
-                    || std::any_of(roots.begin(), roots.end(),
-                                   [&](const auto& root)
-                                   { return isUnderRoot(path, root); });
-
-        if (!allowed || !std::filesystem::is_regular_file(path, ec))
-            return std::nullopt;
-
-        return path.string();
     };
 }
 
