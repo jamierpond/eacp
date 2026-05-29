@@ -1,23 +1,13 @@
 #include "App.h"
 
-#include <eacp/Core/Testing/AsyncTest.h>
-#include <eacp/Core/Threads/Async.h>
 #include <eacp/WebView/Test/TestApp.h>
 
 #include <NanoTest/NanoTest.h>
 
-#include <Miro/Miro.h>
-
-#include <chrono>
-#include <string>
-
 using namespace std::chrono_literals;
-using eacp::Testing::asyncTest;
-using eacp::Threads::Async;
-using eacp::Threads::AsyncError;
-
-using namespace nano;
 using namespace eacp::WebView::Test;
+
+using nano::check;
 
 namespace
 {
@@ -40,72 +30,81 @@ std::string firstItemDescendant(const std::string& child)
     return std::string {itemSelector} + ":first-child " + child;
 }
 
+TestApp<MyApp>& testApp()
+{
+    return createTestApp<MyApp>(inputSelector);
+}
+
+MyApp& app()
+{
+    return testApp().app();
+}
+
+AppDriver& driver()
+{
+    return testApp().driver();
+}
+
+Graphics::WebView& webView()
+{
+    return app().webView;
+}
+
+Async<std::string> callJS(const std::string& expression)
+{
+    return webView().callJS(expression);
+}
+
 } // namespace
 
 auto tSeedsThreeTodos = test("WebViewTodo/seedsThreeTodosOnStartup") = []
-{
-    auto app = TestApp<MyApp> {};
-    app.driver().waitFor(inputSelector);
-    check(app.driver().count(itemSelector) == 3);
-};
+{ check(driver().count(itemSelector) == 3); };
 
 auto tAddsNewTodo = test("WebViewTodo/addsNewTodoViaForm") = []
 {
-    auto app = TestApp<MyApp> {};
-    app.driver().waitFor(inputSelector);
+    auto before = driver().count(itemSelector);
 
-    auto before = app.driver().count(itemSelector);
+    driver().fill(inputSelector, "Buy milk");
+    driver().click(addSelector);
 
-    app.driver().fill(inputSelector, "Buy milk");
-    app.driver().click(addSelector);
-
-    check(app.driver().count(itemSelector) == before + 1);
-    check(app.driver().text(lastItemDescendant(textSelector)) == "Buy milk");
+    check(driver().count(itemSelector) == before + 1);
+    check(driver().text(lastItemDescendant(textSelector)) == "Buy milk");
 };
 
 auto tToggleFlipsCompletion =
     test("WebViewTodo/toggleFlipsCompletionAndUpdatesFooter") = []
 {
-    auto app = TestApp<MyApp> {};
-    app.driver().waitFor(inputSelector);
+    auto before = std::stoi(driver().text(remainingSelector));
 
-    auto before = std::stoi(app.driver().text(remainingSelector));
+    driver().click(firstItemDescendant(toggleSelector));
 
-    app.driver().click(firstItemDescendant(toggleSelector));
-
-    auto remaining = std::stoi(app.driver().text(remainingSelector));
+    auto remaining = std::stoi(driver().text(remainingSelector));
     check(remaining == before - 1);
 };
 
 auto tRemovingTodo = test("WebViewTodo/removingTodoDecrementsCount") = []
 {
-    auto app = TestApp<MyApp> {};
-    app.driver().waitFor(inputSelector);
+    auto before = driver().count(itemSelector);
 
-    auto before = app.driver().count(itemSelector);
+    driver().click(firstItemDescendant(removeSelector));
 
-    app.driver().click(firstItemDescendant(removeSelector));
-
-    check(app.driver().count(itemSelector) == before - 1);
+    check(driver().count(itemSelector) == before - 1);
 };
 
 auto tDomainRpcsReachable =
     test("WebViewTodo/domainRpcsReachableThroughSameBridge") = []
 {
-    auto app = TestApp<MyApp> {};
-    app.driver().waitFor(inputSelector);
-
     // The bridge is shared with WebViewBridge, so the production
     // commands the React app calls (addTodo / getTodos) are also
     // reachable from the harness — handy for setting up state
     // without going through the UI.
-    auto before = app.driver().invoke<TodoState>("getTodos");
+    auto before = driver().invoke<TodoState>("getTodos");
 
     auto req = AddTodoRequest {};
     req.text = "Direct add via bridge";
-    app.driver().invoke("addTodo", Miro::toJSON(req));
+    driver().invoke("addTodo", Miro::toJSON(req));
 
-    auto after = app.driver().invoke<TodoState>("getTodos");
+    auto after = driver().invoke<TodoState>("getTodos");
 
     check(after.items.size() == before.items.size() + 1);
     check(after.items[after.items.size() - 1].text == "Direct add via bridge");
@@ -113,22 +112,16 @@ auto tDomainRpcsReachable =
 
 auto tCallJsResolvesWithResult = test("WebViewTodo/callJsResolvesWithResult") = []
 {
-    auto app = TestApp<MyApp> {};
-    app.driver().waitFor(inputSelector);
-
-    auto result = app.app().webView.callJS("1 + 2").waitFor(2s);
+    auto result = callJS("1 + 2").waitFor(2s);
     check(result == "3");
 };
 
 auto tCallJsRejectsOnError = test("WebViewTodo/callJsRejectsOnJsException") = []
 {
-    auto app = TestApp<MyApp> {};
-    app.driver().waitFor(inputSelector);
-
     auto threw = false;
     try
     {
-        app.app().webView.callJS("throw new Error('boom')").waitFor(2s);
+        callJS("throw new Error('boom')").waitFor(2s);
     }
     catch (const AsyncError& e)
     {
@@ -142,14 +135,13 @@ auto tCallJsRejectsOnError = test("WebViewTodo/callJsRejectsOnJsException") = []
     check(threw);
 };
 
-auto tCallJsChainsViaCoroutine =
-    asyncTest("WebViewTodo/callJsChainsViaCoroutine") = []() -> Async<>
+auto tCallJsChainsViaCoroutine = test("WebViewTodo/callJsChainsViaCoroutine") = []
 {
-    auto app = TestApp<MyApp> {};
-    co_await app.driver().waitForAsync(inputSelector);
-
-    auto& webView = app.app().webView;
-    auto sum = co_await webView.callJS("1 + 2");
-    auto wrapped = co_await webView.callJS("'val:' + (" + sum + ")");
-    check(wrapped == "val:3");
+    []() -> Async<>
+    {
+        auto sum = co_await callJS("1 + 2");
+        auto wrapped = co_await callJS("'val:' + (" + sum + ")");
+        check(wrapped == "val:3");
+    }()
+                .waitFor(10s);
 };

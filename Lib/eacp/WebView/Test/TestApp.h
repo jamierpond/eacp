@@ -1,42 +1,63 @@
 #pragma once
 
 #include "AppDriver.h"
-#include "TestAgent.h"
 
-#include <memory>
+#include <eacp/Core/Utils/Singleton.h>
+
+#include <NanoTest/NanoTest.h>
+
+#include <functional>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace eacp::WebView::Test
 {
+using Threads::Async;
+using Threads::AsyncError;
 
-// TestApp<T> owns a live instance of the user's app struct + the
-// AppDriver that drives it. Construct one per test on the main
-// thread; its destructor cleans up. The contained T must expose:
+// Singleton-managed test fixture for a user app type T. Holds a
+// live T plus the AppDriver wired to its WebView + bridge, and
+// rebuilds both whenever restart() is called.
 //
-//   * `Graphics::WebView webView`   - the view tests drive
-//   * `Graphics::WebViewBridge transport` - to reach Miro::Bridge
+// Build one via createTestApp<T>(...) — that returns the process
+// singleton and (optionally) installs a readiness check that runs
+// after each rebuild. createTestApp also registers TestApp<T>'s
+// restart() as a type-erased callback so the test() wrapper below
+// can rebuild fixtures between tests without knowing about T.
 //
-// These match the convention used by the SOURCES-/API-style apps
-// produced by eacp_add_webview_app(). Example:
-//
-//   auto tFoo = test("MyApp/foo") = [] {
-//       auto app = TestApp<MyApp> {};
-//       app.driver().waitFor("...");
-//       check(app.driver().count("...") == 3);
-//   };
-//
-// The driver injects the window.__test JS agent into the WebView
-// before the first navigation finishes, so test commands work as
-// soon as the page has rendered.
+// T must expose:
+//   * `Graphics::WebView webView`            — the view tests drive
+//   * `Graphics::WebViewBridge transport`    — to reach Miro::Bridge
 template <typename T>
 struct TestApp
 {
-    TestApp()
+    using ReadyCheck = std::function<void(AppDriver&)>;
+
+    TestApp() { construct(); }
+
+    void restart()
     {
-        instance.create();
-        instance->webView.addUserScript(loadTestAgentSource(), true);
-        driverImpl.emplace(instance->webView,
-                           instance->transport.getBridge());
+        driverImpl.reset();
+        instance.reset();
+        construct();
+        if (readyCheck)
+            readyCheck(*driverImpl);
+    }
+
+    // Installs a check to run after each construction (initial and
+    // subsequent restarts). Applied immediately to the current
+    // fixture. Returns *this for chaining inside createTestApp.
+    TestApp& onReady(ReadyCheck check)
+    {
+        readyCheck = std::move(check);
+
+        if (readyCheck && driverImpl)
+            readyCheck(*driverImpl);
+
+        return *this;
     }
 
     T& app() { return *instance; }
@@ -46,9 +67,85 @@ struct TestApp
     const AppDriver& driver() const { return *driverImpl; }
 
 private:
+    void construct()
+    {
+        instance.create();
+        driverImpl.emplace(instance->webView, instance->transport.getBridge());
+    }
 
     EA::OwningPointer<T> instance;
     std::optional<AppDriver> driverImpl;
+    ReadyCheck readyCheck;
 };
+
+namespace Detail
+{
+// Type-erased restart callbacks. createTestApp<T>() pushes one
+// std::function<void()> per fixture type; the test() wrapper fires
+// all of them before each body. Lives as a process singleton so the
+// list survives static-init ordering quirks.
+inline std::vector<std::function<void()>>& restartRegistry()
+{
+    return Singleton::get<std::vector<std::function<void()>>>();
+}
+
+inline void runAllRestarts()
+{
+    for (auto& cb: restartRegistry())
+        cb();
+}
+} // namespace Detail
+
+// Returns the process-singleton TestApp<T>. On first call, registers
+// a type-erased restart hook so the test() wrapper rebuilds the
+// fixture between tests, and (if a readySelector is given) installs
+// a driver.waitFor(selector) check that runs after each construction.
+// Subsequent calls return the same singleton — additional arguments
+// are ignored.
+template <typename T>
+TestApp<T>& createTestApp(std::string_view readySelector = {})
+{
+    static auto& instance = [&]() -> TestApp<T>&
+    {
+        auto& self = Singleton::get<TestApp<T>>();
+
+        if (!readySelector.empty())
+        {
+            self.onReady([sel = std::string {readySelector}](AppDriver& driver)
+                         { driver.waitFor(sel); });
+        }
+
+        Detail::restartRegistry().push_back(
+            [] { Singleton::get<TestApp<T>>().restart(); });
+
+        return self;
+    }();
+    return instance;
+}
+
+// Drop-in nano::test replacement that fires all registered fixture
+// restarts before the body runs. Use via
+// `using namespace eacp::WebView::Test;` in test files — that brings
+// this test() into scope alongside TestApp / AppDriver / createTestApp.
+struct TestProxy
+{
+    template <typename Fn>
+    TestProxy& operator=(Fn body)
+    {
+        inner = [body = std::move(body)]
+        {
+            Detail::runAllRestarts();
+            body();
+        };
+        return *this;
+    }
+
+    nano::TestProxy inner;
+};
+
+inline TestProxy test(std::string_view name)
+{
+    return {nano::test(name)};
+}
 
 } // namespace eacp::WebView::Test
