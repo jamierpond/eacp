@@ -1,15 +1,8 @@
 #pragma once
 
 #include <eacp/Core/Threads/Async.h>
-
+#include <eacp/Graphics/Image/Image.h>
 #include <Miro/Miro.h>
-
-#include <cstdint>
-#include <functional>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace eacp::Graphics
 {
@@ -41,13 +34,15 @@ struct ScreenshotOptions
 {
     std::optional<int> timeoutMs;
 
-    // Decode + write the PNG to this path. Empty -> do not write.
+    // Write the screenshot to this path; the image format is inferred
+    // from the extension (.png / .jpg / .jpeg). Empty -> do not write.
     std::string path;
 };
 
 struct ScreenshotResult
 {
-    std::vector<std::uint8_t> png;
+    // Decoded snapshot pixels. Re-encode via image.toPng()/toJpeg().
+    Graphics::Image image;
     // Set only when ScreenshotOptions::path was non-empty.
     std::string path;
 };
@@ -67,7 +62,7 @@ struct SnapshotResult
 {
     std::string name;
     std::string dom;
-    std::vector<std::uint8_t> png;
+    Graphics::Image image;
     std::string domPath;
     std::string screenshotPath;
 };
@@ -95,8 +90,7 @@ public:
     AppDriver& operator=(AppDriver&&) = delete;
 
     // Application bridge commands — direct dispatch, no JS hop.
-    Miro::JSON invoke(const std::string& command,
-                      const Miro::JSON& payload = {});
+    Miro::JSON invoke(const std::string& command, const Miro::JSON& payload = {});
 
     template <typename Resp, typename Req>
     Resp invoke(const std::string& command, const Req& req)
@@ -117,9 +111,11 @@ public:
     }
 
     bool click(const std::string& selector, CallOptions opts = {});
-    bool fill(const std::string& selector, const std::string& value,
+    bool fill(const std::string& selector,
+              const std::string& value,
               CallOptions opts = {});
-    bool press(const std::string& selector, const std::string& key,
+    bool press(const std::string& selector,
+               const std::string& key,
                CallOptions opts = {});
     bool submit(const std::string& selector, CallOptions opts = {});
     std::string text(const std::string& selector, CallOptions opts = {});
@@ -146,9 +142,9 @@ public:
     std::string dom(std::string_view selector = {}, CallOptions opts = {});
 
     // Async siblings of the above. Each returns an Async that resolves
-    // on the main thread; use with co_await inside an asyncTest body.
-    // Rejection surfaces as an AsyncError (same message the sync
-    // variant would throw as std::runtime_error).
+    // on the main thread; use with co_await inside a coroutine test
+    // body. Rejection surfaces as an AsyncError (same message the
+    // sync variant would throw as std::runtime_error).
     Threads::Async<bool> clickAsync(const std::string& selector,
                                     CallOptions opts = {});
     Threads::Async<bool> fillAsync(const std::string& selector,
@@ -161,9 +157,9 @@ public:
                                      CallOptions opts = {});
     Threads::Async<std::string> textAsync(const std::string& selector,
                                           CallOptions opts = {});
-    Threads::Async<std::optional<std::string>> attrAsync(
-        const std::string& selector, const std::string& name,
-        CallOptions opts = {});
+    Threads::Async<std::optional<std::string>> attrAsync(const std::string& selector,
+                                                         const std::string& name,
+                                                         CallOptions opts = {});
     Threads::Async<bool> existsAsync(const std::string& selector,
                                      CallOptions opts = {});
     Threads::Async<int> countAsync(const std::string& selector,
@@ -180,7 +176,8 @@ public:
                             const SnapshotOptions& options = {});
 
     template <typename Fn>
-    auto withSnapshot(const std::string& name, Fn&& action,
+    auto withSnapshot(const std::string& name,
+                      Fn&& action,
                       const SnapshotOptions& options = {})
     {
         struct SnapshotOnExit
@@ -211,7 +208,7 @@ private:
                                           const CallOptions& opts);
     Miro::JSON runJs(const std::string& expression, const CallOptions& opts);
     std::vector<std::uint8_t> runSnapshotBytes(const CallOptions& opts);
-    Threads::Async<void> waitForFirstNavigationAsync(const CallOptions& opts);
+    Threads::Async<> waitForFirstNavigationAsync(const CallOptions& opts);
     void waitForFirstNavigation(const CallOptions& opts);
     int effectiveTimeoutMs(const CallOptions& opts) const;
 
@@ -220,10 +217,11 @@ private:
     std::optional<int> defaultTimeoutMs;
     std::string snapshotDir;
 
-    Threads::AsyncPromise<void> firstNavigationPromise;
-    Threads::Async<void> firstNavigation;
+    Threads::AsyncPromise<> firstNavigationPromise;
+    Threads::Async<> firstNavigation;
     bool firstNavigationFired = false;
     std::function<void(const std::string&)> previousFinishedHandler;
+    std::function<void(const std::string&)> previousFailedHandler;
 };
 
 } // namespace eacp::WebView::Test
