@@ -95,6 +95,13 @@ public:
         };
 
         std::unordered_map<std::string, ResourceProvider> schemes;
+
+        // Schemes served straight from disk. Unlike `schemes` (which hand
+        // back a whole in-memory buffer), each request only reads the bytes
+        // the page asked for, off the main thread -- so large media files
+        // stream and seek without blocking the UI or being re-read whole.
+        std::unordered_map<std::string, FilePathResolver> fileSchemes;
+
         Embedded embedded;
         bool debugConsole = true;
     };
@@ -189,18 +196,20 @@ inline WebView::Options embeddedOptions(std::string category)
     return options;
 }
 
-// Default scheme for the built-in disk-file provider. The page references
+// Default scheme for the built-in disk-file streamer. The page references
 // files as `audiofile:///abs/path.wav`.
 inline constexpr auto diskFileScheme = "audiofile";
 
-// Registers the built-in disk-file provider on `options` under `scheme`,
-// so the page can load on-disk files (e.g. play them in an <audio> element)
-// via `audiofile:///abs/path`. `allowedRoots` bounds which directories are
-// readable -- see fromDisk.
+// Registers the built-in disk-file streamer on `options` under `scheme`, so
+// the page can load on-disk files (e.g. play them in an <audio> element) via
+// `audiofile:///abs/path`. Requests are served range-by-range off the main
+// thread, so large files stream and seek smoothly. `allowedRoots` bounds
+// which directories are readable -- see diskFileResolver.
 inline void enableDiskFiles(WebView::Options& options,
                             std::vector<std::string> allowedRoots = {},
                             std::string scheme = diskFileScheme)
 {
-    options.schemes[std::move(scheme)] = fromDisk(std::move(allowedRoots));
+    options.fileSchemes[std::move(scheme)] =
+        diskFileResolver(std::move(allowedRoots));
 }
 } // namespace eacp::Graphics

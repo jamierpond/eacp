@@ -8,9 +8,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <cstdio>
 #include <string_view>
 
 namespace eacp::Graphics
@@ -164,10 +161,10 @@ bool isUnderRoot(const std::filesystem::path& file,
 }
 } // namespace
 
-ResourceProvider fromDisk(std::vector<std::string> allowedRoots)
+FilePathResolver diskFileResolver(std::vector<std::string> allowedRoots)
 {
     return [roots = std::move(allowedRoots)](
-               std::string_view url) -> std::optional<ResourceResponse>
+               std::string_view url) -> std::optional<std::string>
     {
         auto pathStr = pathFromFileURL(url);
 
@@ -188,19 +185,7 @@ ResourceProvider fromDisk(std::vector<std::string> allowedRoots)
         if (!allowed || !std::filesystem::is_regular_file(path, ec))
             return std::nullopt;
 
-        auto in = std::ifstream {path, std::ios::binary};
-
-        if (!in)
-            return std::nullopt;
-
-        auto bytes = std::vector<std::uint8_t> {
-            std::istreambuf_iterator<char> {in},
-            std::istreambuf_iterator<char> {}};
-
-        auto response = ResourceResponse {};
-        response.mimeType = mimeForPath(path.string());
-        response.data.assign(bytes.begin(), bytes.end());
-        return response;
+        return path.string();
     };
 }
 
