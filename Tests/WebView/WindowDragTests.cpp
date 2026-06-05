@@ -93,3 +93,42 @@ auto tOutsideIsNotDraggable = test("WindowDrag/unmarkedRegionIsEmpty") = []
     auto fix = Fixture {};
     check(fix.regionOf("#outside").empty());
 };
+
+// Regression guard for the crash this feature shipped with: window-drag.js arms
+// the drag by posting a NON-string body to a script message handler. A bare
+// number/bool/null is not a valid JSON top level, so didReceiveScriptMessage's
+// NSJSONSerialization THREW -- an uncaught NSException that aborted the whole
+// app on the first drag. The handler now guards with isValidJSONObject and
+// still fires with an empty body. Without the fix this test crashes the process
+// (the throw is synchronous, inside the event-loop pump below) instead of
+// failing cleanly -- either way it goes red.
+struct NumberMessageProbe
+{
+    WebView webView {};
+    Window window {};
+    bool called = false;
+    std::string body = "unset";
+
+    NumberMessageProbe()
+    {
+        window.setContentView(webView);
+        webView.addScriptMessageHandler("numberProbe",
+                                        [this](const std::string& received)
+                                        {
+                                            called = true;
+                                            body = received;
+                                        });
+        webView.loadHTML(
+            "<!doctype html><html><body><script>"
+            "window.webkit.messageHandlers.numberProbe.postMessage(1);"
+            "</script></body></html>");
+        check(Threads::runEventLoopUntil([this] { return called; }, 10s));
+    }
+};
+
+auto tNumberBodyDoesNotCrash = test("WindowDrag/numberMessageBodyDoesNotCrash") = []
+{
+    auto probe = NumberMessageProbe {};
+    check(probe.called);     // handler fired -- the app did not abort
+    check(probe.body.empty()); // invalid JSON top level -> empty body, no throw
+};

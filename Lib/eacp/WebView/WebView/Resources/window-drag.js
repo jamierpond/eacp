@@ -42,7 +42,11 @@
       window.webkit.messageHandlers &&
       window.webkit.messageHandlers.__eacpWindowDrag
     ) {
-      window.webkit.messageHandlers.__eacpWindowDrag.postMessage(1);
+      // Post a STRING, not a number. The native handler takes the non-string
+      // branch through NSJSONSerialization, which throws on a top-level number
+      // ("Invalid top-level type in JSON write") and crashes the app. The body
+      // is ignored anyway -- the message itself is the signal.
+      window.webkit.messageHandlers.__eacpWindowDrag.postMessage('drag');
     }
   }
 
