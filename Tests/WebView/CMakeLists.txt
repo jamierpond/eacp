@@ -39,9 +39,15 @@ if (TARGET eacp-webview-test-main)
 
     # Asserts the injected window-drag.js resolves drag / no-drag regions on a
     # real WKWebView (same NSApplication / runloop bootstrap as the others).
-    add_executable(WindowDragTests WindowDragTests.cpp)
-    target_link_libraries(WindowDragTests PRIVATE
-            eacp-webview
-            eacp-webview-test-main)
-    nano_discover_tests(WindowDragTests)
+    # macOS-only: window dragging is installed by WebView.mm's initNative under
+    # TARGET_OS_OSX, so the resolver script (and the regression's NSException) only
+    # exist on Apple. The Windows WebView2 backend has no window-drag yet, so the
+    # script is never injected there and this test would have nothing to drive.
+    if (APPLE AND NOT IOS)
+        add_executable(WindowDragTests WindowDragTests.cpp)
+        target_link_libraries(WindowDragTests PRIVATE
+                eacp-webview
+                eacp-webview-test-main)
+        nano_discover_tests(WindowDragTests)
+    endif ()
 endif ()
