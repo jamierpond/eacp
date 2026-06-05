@@ -19,17 +19,28 @@ namespace
 {
 // Drag bar with an opt-out button and an unmarked label, plus an unmarked
 // sibling. `ready` gates queries until document-start injection has run.
-const std::string pageHtml = R"HTML(<!doctype html><html><head><style>
+const std::string pageHtml = R"HTML(
+<!doctype html>
+<html>
+
+<head>
+<style>
   #bar { --eacp-app-region: drag; }
   #btn { --eacp-app-region: no-drag; }
-</style></head><body>
+</style>
+</head>
+
+<body>
   <div id="bar">
     <button id="btn">x</button>
     <span id="label">title</span>
   </div>
   <div id="outside">body</div>
   <script>window.webkit.messageHandlers.ready.postMessage('ready');</script>
-</body></html>)HTML";
+</body>
+
+</html>
+)HTML";
 
 struct Fixture
 {
@@ -113,4 +124,47 @@ auto tNumberBodyDoesNotCrash = test("WindowDrag/numberMessageBodyDoesNotCrash") 
     auto probe = NumberMessageProbe {};
     check(probe.called);     // handler fired -- the app did not abort
     check(probe.body.empty()); // invalid JSON top level -> empty body, no throw
+};
+
+// Why the marker is a custom property and not the standard -webkit-app-region:
+// WKWebView drops the unknown native prop, so getComputedStyle can't read it,
+// while the custom property IS exposed. Both are set on one element; only the
+// --eacp one reads back. If a future WebKit exposes -webkit-app-region, the
+// first check fails -- prompting a simplification.
+struct MarkerProbe
+{
+    WebView webView {};
+    Window window {};
+    bool ready = false;
+
+    MarkerProbe()
+    {
+        window.setContentView(webView);
+        webView.addScriptMessageHandler("ready",
+                                        [this](const std::string&) { ready = true; });
+        webView.loadHTML(
+            "<!doctype html><html><head><style>"
+            "#m { -webkit-app-region: drag; --eacp-app-region: drag; }"
+            "</style></head><body><div id=\"m\">x</div>"
+            "<script>window.webkit.messageHandlers.ready.postMessage('r');</script>"
+            "</body></html>");
+        check(Threads::runEventLoopUntil([this] { return ready; }, 10s));
+    }
+
+    std::string computed(const std::string& prop)
+    {
+        return webView
+            .callJS("getComputedStyle(document.getElementById('m'))"
+                    ".getPropertyValue('"
+                    + prop + "').trim()")
+            .waitFor(10s);
+    }
+};
+
+auto tCustomPropReadableUnlikeWebkit =
+    test("WindowDrag/customPropReadableUnlikeWebkitAppRegion") = []
+{
+    auto p = MarkerProbe {};
+    check(p.computed("-webkit-app-region").empty()); // standard prop: invisible
+    check(p.computed("--eacp-app-region") == "drag"); // custom prop: readable
 };
