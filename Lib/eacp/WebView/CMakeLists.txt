@@ -29,11 +29,14 @@ target_sources(eacp-webview PRIVATE
         WebView/StateBridge.cpp
         WebView/MenuHelpers.cpp)
 
-# The page-side JSON-RPC bridge shim, authored as a real .js file and
-# embedded so WebViewBridge can pull it out at runtime via
-# ResEmbed::get("bridge-shim.js", "EacpWebView").
+# Page-side scripts authored as real .js files and embedded so the runtime can
+# pull them out via ResEmbed::get("<name>.js", "EacpWebView"):
+#   - bridge-shim.js: the bidirectional JSON-RPC bridge (WebViewBridge).
+#   - window-drag.js:  re-implements `-webkit-app-region` window dragging for
+#                      WKWebView, which (unlike Electron) ignores the property.
 res_embed_add(eacp-webview
         FILES     WebView/Resources/bridge-shim.js
+                  WebView/Resources/window-drag.js
         NAMESPACE EacpWebView
         CATEGORY  EacpWebView)
 

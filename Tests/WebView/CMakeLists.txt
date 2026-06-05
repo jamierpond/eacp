@@ -36,4 +36,12 @@ if (TARGET eacp-webview-test-main)
             eacp-webview
             eacp-webview-test-main)
     nano_discover_tests(CommandDispatchTests)
+
+    # Asserts the injected window-drag.js resolves drag / no-drag regions on a
+    # real WKWebView (same NSApplication / runloop bootstrap as the others).
+    add_executable(WindowDragTests WindowDragTests.cpp)
+    target_link_libraries(WindowDragTests PRIVATE
+            eacp-webview
+            eacp-webview-test-main)
+    nano_discover_tests(WindowDragTests)
 endif ()
