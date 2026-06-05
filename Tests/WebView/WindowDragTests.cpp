@@ -1,17 +1,7 @@
-// Exercises the page-side half of window dragging on a real WKWebView. eacp
-// auto-injects window-drag.js, which exposes window.__eacpResolveAppRegion --
-// the function the mousedown handler uses to decide whether a point starts a
-// window drag. We assert it classifies regions the way the native side relies
-// on:
-//   * a `--eacp-app-region: drag` element resolves to "drag"
-//   * a `no-drag` descendant opts back out ("no-drag")
-//   * an unmarked descendant of a drag region inherits "drag"
-//   * everything else resolves to "" (not draggable)
-//
-// This also pins down the property that makes the whole approach work on
-// WKWebView: that the `--eacp-app-region` CUSTOM property is exposed via
-// getComputedStyle (the native `-webkit-app-region` is not). If WebKit ever
-// stopped exposing it, the "drag"/inherited cases below would regress to "".
+// window-drag.js (auto-injected) exposes window.__eacpResolveAppRegion, which
+// classifies a point as drag / no-drag. These assert that classification on a
+// real WKWebView -- which also pins down that the `--eacp-app-region` custom
+// property is readable via getComputedStyle (the native one is not).
 
 #include <eacp/Core/Threads/EventLoop.h>
 #include <eacp/WebView/WebView.h>
@@ -27,9 +17,8 @@ using namespace std::chrono_literals;
 
 namespace
 {
-// A drag bar (with an opt-out button and an unmarked label inside it) plus an
-// unmarked sibling. `ready` fires once the document is parsed so the test only
-// queries after window-drag.js's document-start injection has run.
+// Drag bar with an opt-out button and an unmarked label, plus an unmarked
+// sibling. `ready` gates queries until document-start injection has run.
 const std::string pageHtml = R"HTML(<!doctype html><html><head><style>
   #bar { --eacp-app-region: drag; }
   #btn { --eacp-app-region: no-drag; }
@@ -57,8 +46,6 @@ struct Fixture
         check(Threads::runEventLoopUntil([this] { return ready; }, 10s));
     }
 
-    // Resolves the app-region of the first element matching `selector`, the way
-    // the injected mousedown handler does for its event target.
     std::string regionOf(const std::string& selector)
     {
         auto script =
@@ -83,8 +70,7 @@ auto tNoDragOptsOut = test("WindowDrag/noDragDescendantOptsOut") = []
 auto tUnmarkedChildInherits = test("WindowDrag/unmarkedChildInheritsDrag") = []
 {
     auto fix = Fixture {};
-    // The custom property inherits, so a label inside the bar drags too --
-    // this is what makes the whole bar a drag handle, not just its background.
+    // Inherits -> the whole bar is a handle, not just its background.
     check(fix.regionOf("#label") == "drag");
 };
 
@@ -94,14 +80,10 @@ auto tOutsideIsNotDraggable = test("WindowDrag/unmarkedRegionIsEmpty") = []
     check(fix.regionOf("#outside").empty());
 };
 
-// Regression guard for the crash this feature shipped with: window-drag.js arms
-// the drag by posting a NON-string body to a script message handler. A bare
-// number/bool/null is not a valid JSON top level, so didReceiveScriptMessage's
-// NSJSONSerialization THREW -- an uncaught NSException that aborted the whole
-// app on the first drag. The handler now guards with isValidJSONObject and
-// still fires with an empty body. Without the fix this test crashes the process
-// (the throw is synchronous, inside the event-loop pump below) instead of
-// failing cleanly -- either way it goes red.
+// Regression: a non-string message body (a bare number) once threw in
+// didReceiveScriptMessage's NSJSONSerialization and aborted the app. Without the
+// isValidJSONObject guard this crashes the process; with it the handler fires
+// with an empty body.
 struct NumberMessageProbe
 {
     WebView webView {};

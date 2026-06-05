@@ -177,9 +177,6 @@ WebView* findFocusedWebView()
 
 - (void)armWindowDrag
 {
-    // Mirrors armFileDragWithPaths: arrives after this gesture's mouseDown:
-    // forwarded to super, while we're still waiting for the pointer to cross
-    // the drag threshold in mouseDragged:.
     windowDragArmed = YES;
 }
 
@@ -214,8 +211,7 @@ WebView* findFocusedWebView()
         }
     }
 
-    // Window drag has no threshold of its own -- AppKit's modal move loop owns
-    // the gesture from here, so hand off on the first drag while armed.
+    // No threshold: AppKit's move loop owns the gesture from the first drag.
     if (windowDragArmed && ! dragStarted)
     {
         dragStarted = YES;

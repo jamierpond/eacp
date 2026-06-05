@@ -1,27 +1,13 @@
-// Frameless-window dragging for eacp WebViews.
-//
-// Electron's Chromium honours `-webkit-app-region: drag` and moves the window
-// when you drag such a region. WKWebView does not -- it ignores the property
-// entirely -- so a page that only sets `-webkit-app-region` has no draggable
-// chrome under eacp on macOS. We re-implement the affordance here: on a left
-// mousedown over a region that resolves to "drag", we tell the native side to
-// arm a window drag, and the next mouseDragged: starts the OS move loop
-// (mirroring how native file drag-out is armed on mousedown and fired on drag).
-//
-// Regions are marked with the `--eacp-app-region` CSS custom property
-// ("drag" / "no-drag"). We key off a custom property rather than reading
-// `-webkit-app-region` directly because WKWebView drops unknown native
-// properties from getComputedStyle (so it would always read empty), whereas
-// custom properties are always exposed AND inherit -- which gives us the same
-// "the whole bar drags, opt-out individual controls" semantics Electron has,
-// for free. `-webkit-app-region` is still consulted as a fallback so pages
-// authored for Electron keep working wherever the engine does expose it.
+// Window dragging for frameless eacp WebViews. WKWebView/WebView2 ignore
+// `-webkit-app-region` (an Electron/Chromium feature), so we re-create it: a
+// left mousedown over a `--eacp-app-region: drag` region asks the native side
+// to start a window drag. We read the CUSTOM property (not `-webkit-app-region`)
+// because WKWebView drops unknown native props from getComputedStyle, while
+// custom properties are exposed and inherit -- so the whole bar drags and
+// children opt out with `no-drag`.
 (function () {
   if (window.__eacpResolveAppRegion) return;
 
-  // Nearest-ancestor-wins resolution. The custom property inherits, so for the
-  // custom-property path the answer is already on `node` itself; the walk
-  // matters only for the non-inheriting `-webkit-app-region` fallback.
   function resolveAppRegion(node) {
     for (var n = node; n && n.nodeType === 1; n = n.parentElement) {
       var style = window.getComputedStyle(n);
@@ -32,8 +18,7 @@
     return '';
   }
 
-  // Exposed (not just used internally) so the native test harness can assert
-  // the classification without synthesising real mouse events.
+  // Exposed so the native test harness can assert classification directly.
   window.__eacpResolveAppRegion = resolveAppRegion;
 
   function armWindowDrag() {
@@ -42,10 +27,7 @@
       window.webkit.messageHandlers &&
       window.webkit.messageHandlers.__eacpWindowDrag
     ) {
-      // Post a STRING, not a number. The native handler takes the non-string
-      // branch through NSJSONSerialization, which throws on a top-level number
-      // ("Invalid top-level type in JSON write") and crashes the app. The body
-      // is ignored anyway -- the message itself is the signal.
+      // Must be a string: a numeric body throws in the native JSON path.
       window.webkit.messageHandlers.__eacpWindowDrag.postMessage('drag');
     }
   }

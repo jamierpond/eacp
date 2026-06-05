@@ -369,12 +369,8 @@ struct WebViewNativeAccess
             {
                 body = [message.body UTF8String];
             }
-            // dataWithJSONObject: THROWS (uncaught -> app crash) on a non-array/
-            // non-dictionary top level -- a bare number/bool/null posted from JS
-            // would otherwise take down the whole app. isValidJSONObject: is the
-            // guard that makes the serialization safe; an invalid body yields an
-            // empty string (handlers that only treat the message as a signal,
-            // like the window-drag arm, don't care).
+            // Guard: dataWithJSONObject: throws (uncaught -> app crash) on a
+            // non-array/dict top level, e.g. a bare number posted from JS.
             else if ([NSJSONSerialization isValidJSONObject:message.body])
             {
                 NSError* error = nil;
@@ -617,9 +613,7 @@ void WebView::initNative(Options options)
     impl->attachToParentView();
     registerWebView(this);
 
-    // Desktop-only: macOS hands the drag to AppKit's window-move loop. iOS has
-    // no movable windows, so skip it there (this TU compiles for both).
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX // desktop-only; iOS has no movable windows
     installWindowDragSupport();
 #endif
 }

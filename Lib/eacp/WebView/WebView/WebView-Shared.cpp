@@ -392,14 +392,10 @@ WebView::WebView(Options options)
     }
 }
 
+// Injects window-drag.js + its message handler. Shared by both desktop
+// backends, so it lives here once rather than in each initNative.
 void WebView::installWindowDragSupport()
 {
-    // Re-implement Electron-style `-webkit-app-region` window dragging, which
-    // neither WKWebView nor WebView2 honour. window-drag.js flags a left
-    // mousedown over a `--eacp-app-region: drag` region and posts to the
-    // __eacpWindowDrag channel; the handler arms a native window drag. Same
-    // script + channel on every desktop backend, so it lives here once rather
-    // than in each initNative.
     auto shim = ResEmbed::get("window-drag.js", "EacpWebView");
     if (!shim)
         throw std::runtime_error(

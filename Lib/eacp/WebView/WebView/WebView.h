@@ -190,11 +190,9 @@ public:
     // other platforms.
     void armFileDrag(const std::vector<std::string>& paths);
 
-    // Arms a native window drag for the next mouse gesture: the following
-    // mouseDragged: hands the window off to the OS move loop. Normally driven
-    // automatically by the injected window-drag script when the pointer goes
-    // down on a `--eacp-app-region: drag` region — callers don't invoke this
-    // directly. macOS-only; asserts on backends without window-drag support.
+    // Arms a native window drag for the next mouse gesture. Driven by the
+    // injected window-drag script, not called directly. Implemented on macOS;
+    // asserts on backends without window-drag support.
     void armWindowDrag();
 
     std::function<void(const std::string& url)> onNavigationStarted = [](auto&&) {};
@@ -218,13 +216,7 @@ private:
     struct PopupInit;
     explicit WebView(PopupInit init);
     void initNative(Options options);
-
-    // Injects the window-drag page script + the __eacpWindowDrag handler that
-    // arms a native window drag. Backend-agnostic (uses addUserScript /
-    // addScriptMessageHandler / armWindowDrag), so both initNative backends call
-    // it on desktop. Defined in WebView-Shared.cpp.
-    void installWindowDragSupport();
-
+    void installWindowDragSupport(); // defined in WebView-Shared.cpp
     std::shared_ptr<Native> impl;
 };
 
