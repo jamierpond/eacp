@@ -5,7 +5,6 @@
 #include "../Helpers/StringUtils-Windows.h"
 #include <eacp/Core/App/AppEnvironment.h>
 
-#include <algorithm>
 #include <bitset>
 #include <unordered_map>
 
@@ -48,7 +47,10 @@ namespace eacp::Graphics
 // getWinRTCompositor() is defined in D2DFactory-Windows.cpp
 // which is included earlier in the unity build
 
-// Window class name
+// Defined in View-Windows.cpp: paints the views that requested a repaint and
+// whose host is `hwnd`. Driven from WM_PAINT.
+void paintDirtyViewsForHost(HWND hwnd);
+
 static const wchar_t* WINDOW_CLASS_NAME = L"EACPWindowClass";
 static bool windowClassRegistered = false;
 
@@ -148,8 +150,7 @@ struct Window::Native
     {
         DWORD style = WS_OVERLAPPEDWINDOW;
 
-        if (std::ranges::find(options.flags, WindowFlags::Borderless)
-            != options.flags.end())
+        if (options.flags.contains(WindowFlags::Borderless))
         {
             style = WS_POPUP;
         }
@@ -417,7 +418,6 @@ void Window::Native::onPointerPressed(wucore::CoreIndependentInputSource const&,
     event.pos = {position.X / dpiScale, position.Y / dpiScale};
     event.type = MouseEventType::Down;
 
-    // Determine button from pointer properties
     auto props = point.Properties();
     if (props.IsLeftButtonPressed())
         event.button = MouseButton::Left;
@@ -444,7 +444,6 @@ void Window::Native::onPointerReleased(wucore::CoreIndependentInputSource const&
     event.pos = {position.X / dpiScale, position.Y / dpiScale};
     event.type = MouseEventType::Up;
 
-    // Determine which button was released
     auto props = point.Properties();
     auto update = props.PointerUpdateKind();
     if (update == wui::PointerUpdateKind::LeftButtonReleased)
@@ -562,6 +561,8 @@ LRESULT CALLBACK Window::Native::windowProc(HWND hwnd,
         {
             ValidateRect(hwnd, nullptr);
 
+            paintDirtyViewsForHost(hwnd);
+
             if (self->contentView != nullptr)
                 self->ensureAllLayersRendered(self->contentView);
 
@@ -575,6 +576,10 @@ LRESULT CALLBACK Window::Native::windowProc(HWND hwnd,
                 break;
             if (self->contentView)
             {
+                // Capture the mouse so a drag keeps delivering moves even when
+                // the cursor leaves the client area (matching NSView tracking).
+                SetCapture(hwnd);
+
                 float dpiScale = self->getWindowDpiScale();
                 MouseEvent event;
                 event.pos = {static_cast<float>(getXFromLParam(lParam)) / dpiScale,
@@ -607,6 +612,10 @@ LRESULT CALLBACK Window::Native::windowProc(HWND hwnd,
                 self->contentView->dispatchMouseEvent(event);
                 self->ensureAllLayersRendered(self->contentView);
             }
+
+            // Release the capture once no buttons remain held.
+            if ((wParam & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) == 0)
+                ReleaseCapture();
             return 0;
 
         case WM_MOUSEMOVE:
@@ -619,7 +628,54 @@ LRESULT CALLBACK Window::Native::windowProc(HWND hwnd,
                 MouseEvent event;
                 event.pos = {static_cast<float>(getXFromLParam(lParam)) / dpiScale,
                              static_cast<float>(getYFromLParam(lParam)) / dpiScale};
-                event.type = MouseEventType::Moved;
+
+                // A move with a button held is a drag. dispatchMouseEvent only
+                // forwards Dragged/Up to the captured mouseDownTarget; a plain
+                // Moved is re-hit-tested, so without this the title-bar grab is
+                // lost the instant the cursor moves and panels never drag.
+                auto buttons = wParam & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON);
+
+                if (buttons != 0)
+                {
+                    event.type = MouseEventType::Dragged;
+                    event.button = (wParam & MK_LBUTTON)   ? MouseButton::Left
+                                   : (wParam & MK_RBUTTON) ? MouseButton::Right
+                                                           : MouseButton::Middle;
+                }
+                else
+                {
+                    event.type = MouseEventType::Moved;
+                }
+
+                self->contentView->dispatchMouseEvent(event);
+                self->ensureAllLayersRendered(self->contentView);
+            }
+            return 0;
+
+        case WM_MOUSEWHEEL:
+        case WM_MOUSEHWHEEL:
+            if (self->useWinRTPointerInput)
+                break;
+
+            if (self->contentView)
+            {
+                // Wheel messages carry screen coordinates (unlike the button
+                // and move messages), so map them into the client area before
+                // hit-testing the view under the cursor.
+                POINT pt = {getXFromLParam(lParam), getYFromLParam(lParam)};
+                ScreenToClient(hwnd, &pt);
+
+                float dpiScale = self->getWindowDpiScale();
+                MouseEvent event;
+                event.pos = {static_cast<float>(pt.x) / dpiScale,
+                             static_cast<float>(pt.y) / dpiScale};
+                event.type = MouseEventType::Wheel;
+
+                auto wheelDelta =
+                    static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam));
+                event.delta = (msg == WM_MOUSEWHEEL) ? Point {0.f, wheelDelta}
+                                                     : Point {wheelDelta, 0.f};
+
                 self->contentView->dispatchMouseEvent(event);
                 self->ensureAllLayersRendered(self->contentView);
             }

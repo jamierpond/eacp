@@ -1,9 +1,11 @@
 #include "WebView.h"
 
 #include "DevServerProbe.h"
+#include "JsStringLiteral.h"
 #include "StreamingRange.h"
 
 #include <eacp/Core/App/AppEnvironment.h>
+#include <eacp/Core/Platform/Platform.h>
 #include <eacp/Core/Threads/EventLoop.h>
 #include <eacp/Core/Utils/File.h>
 
@@ -285,7 +287,7 @@ FileProvider fromResEmbed(std::string category)
 }
 
 StreamingProvider
-    fileStreamProvider(EA::Vector<std::string> roots,
+    fileStreamProvider(Vector<std::string> roots,
                        std::function<std::string(std::string_view path)> mimeForFile)
 {
     return [roots = std::move(roots), mimeForFile = std::move(mimeForFile)](
@@ -415,103 +417,53 @@ void WebView::installWindowDragSupport()
                             [this](const std::string&) { armWindowDrag(); });
 }
 
-namespace
-{
-#if defined(_WIN32)
-std::string jsStringLiteral(std::string_view value)
-{
-    auto out = std::string {"\""};
-    out.reserve(value.size() + 2);
-
-    for (auto c: value)
-    {
-        switch (c)
-        {
-            case '\\':
-                out += "\\\\";
-                break;
-            case '"':
-                out += "\\\"";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            case '\b':
-                out += "\\b";
-                break;
-            case '\f':
-                out += "\\f";
-                break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20)
-                {
-                    char buf[8];
-                    std::snprintf(
-                        buf, sizeof buf, "\\u%04x", static_cast<unsigned char>(c));
-                    out += buf;
-                }
-                else
-                {
-                    out += c;
-                }
-                break;
-        }
-    }
-    out += '"';
-    return out;
-}
-#endif
-} // namespace
-
 Threads::Async<std::string> WebView::callJS(const std::string& script)
 {
     auto promise = Threads::AsyncPromise<std::string>();
 
-#if defined(_WIN32)
-    // WebView2's ExecuteScript reports JS exceptions as a "null" result
-    // with HRESULT S_OK — there's no native error path, unlike WKWebView's
-    // NSError-on-throw. Wrap the user script in a try/catch IIFE that
-    // prefixes its return value with "OK"/"ER" so we can route failures
-    // into promise.reject() the way macOS callers already expect.
-    auto wrapped = std::string {"(function() { try { var __r = eval("}
-                   + jsStringLiteral(script)
-                   + "); return 'OK' + (typeof __r === 'string' ? __r :"
-                     " __r === undefined ? '' : JSON.stringify(__r)); }"
-                     " catch (e) { return 'ER' + String("
-                     "e && e.message ? e.message : e); } })()";
+    if (Platform::isWindows())
+    {
+        // WebView2's ExecuteScript reports JS exceptions as a "null" result
+        // with HRESULT S_OK — there's no native error path, unlike WKWebView's
+        // NSError-on-throw. Wrap the user script in a try/catch IIFE that
+        // prefixes its return value with "OK"/"ER" so we can route failures
+        // into promise.reject() the way macOS callers already expect.
+        auto wrapped = std::string {"(function() { try { var __r = eval("}
+                       + jsStringLiteral(script)
+                       + "); return 'OK' + (typeof __r === 'string' ? __r :"
+                         " __r === undefined ? '' : JSON.stringify(__r)); }"
+                         " catch (e) { return 'ER' + String("
+                         "e && e.message ? e.message : e); } })()";
 
-    evaluateJavaScript(wrapped,
-                       [promise](const std::string& result, const std::string& error)
-                       {
-                           if (!error.empty())
-                           {
-                               promise.reject(error);
-                               return;
-                           }
-                           if (result.size() >= 2 && result.substr(0, 2) == "OK")
-                               promise.resolve(result.substr(2));
-                           else if (result.size() >= 2
-                                    && result.substr(0, 2) == "ER")
-                               promise.reject(result.substr(2));
-                           else
-                               promise.resolve(result);
-                       });
-#else
-    evaluateJavaScript(script,
-                       [promise](const std::string& result, const std::string& error)
-                       {
-                           if (error.empty())
-                               promise.resolve(result);
-                           else
-                               promise.reject(error);
-                       });
-#endif
+        evaluateJavaScript(
+            wrapped,
+            [promise](const std::string& result, const std::string& error)
+            {
+                if (!error.empty())
+                {
+                    promise.reject(error);
+                    return;
+                }
+                if (result.size() >= 2 && result.substr(0, 2) == "OK")
+                    promise.resolve(result.substr(2));
+                else if (result.size() >= 2 && result.substr(0, 2) == "ER")
+                    promise.reject(result.substr(2));
+                else
+                    promise.resolve(result);
+            });
+    }
+    else
+    {
+        evaluateJavaScript(
+            script,
+            [promise](const std::string& result, const std::string& error)
+            {
+                if (error.empty())
+                    promise.resolve(result);
+                else
+                    promise.reject(error);
+            });
+    }
 
     return promise.get();
 }

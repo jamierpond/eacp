@@ -24,6 +24,8 @@ constexpr auto removeSelector = R"([data-testid="todo-remove"])";
 constexpr auto remainingSelector = R"([data-testid="todo-remaining"])";
 constexpr auto listSelector = R"([data-testid="todo-list"])";
 
+constexpr auto seededTodoCount = 3;
+
 std::string lastItemDescendant(const std::string& child)
 {
     return std::string {itemSelector} + ":last-child " + child;
@@ -36,7 +38,20 @@ std::string firstItemDescendant(const std::string& child)
 
 TestApp<MyApp>& testApp()
 {
-    return createTestApp<MyApp>(inputSelector);
+    // Gate readiness on ALL three seed todos rendering, not just the
+    // first. useTodoIds() and useTodoItem(id) are separate bridge
+    // subscriptions (see web/src/App.tsx), so each TodoRow renders null
+    // until its own item round-trips — the list briefly shows fewer
+    // todo-items than ids. Waiting on the first todo-item would let a
+    // test's one-shot count()/query() race the still-growing list;
+    // waiting on the full seeded count guarantees it has settled.
+    static auto& instance = []() -> TestApp<MyApp>&
+    {
+        auto& self = createTestApp<MyApp>();
+        return self.onReady([](AppDriver& driver)
+                            { driver.waitForCount(itemSelector, seededTodoCount); });
+    }();
+    return instance;
 }
 
 MyApp& app()

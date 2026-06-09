@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include <ea_data_structures/Structures/Vector.h>
+#include <eacp/Core/Utils/Containers.h>
 #include <string>
 
 namespace eacp::Graphics
@@ -107,8 +107,8 @@ struct Key
 
 struct Keyboard
 {
-    // Window-scoped keyboard state (tracks keys via window events)
-    // These are the preferred methods as they don't require global polling
+    // Window-scoped keyboard state. Preferred over the global variants below
+    // when a window reference is available.
     static bool isKeyPressed(const Window& window, uint16_t keyCode);
     static bool isShiftPressed(const Window& window);
     static bool isControlPressed(const Window& window);
@@ -116,8 +116,7 @@ struct Keyboard
     static bool isCommandPressed(const Window& window);
     static ModifierKeys getModifiers(const Window& window);
 
-    // Global keyboard state (uses system polling APIs)
-    // Prefer window-scoped methods above when a window reference is available
+    // Global keyboard state, for when no window reference is available.
     static bool isKeyPressed(uint16_t keyCode);
     static bool isShiftPressed();
     static bool isControlPressed();
@@ -125,7 +124,7 @@ struct Keyboard
     static bool isCommandPressed();
     static ModifierKeys getModifiers();
 
-    static EA::Vector<Key> getPressedKeys();
+    static Vector<Key> getPressedKeys();
 
     static std::string keyCodeToCharacter(uint16_t keyCode);
 };

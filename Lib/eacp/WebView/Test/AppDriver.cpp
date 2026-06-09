@@ -254,7 +254,7 @@ namespace
 
 struct SnapshotState
 {
-    std::vector<std::uint8_t> bytes;
+    Vector<std::uint8_t> bytes;
     std::string error;
     bool done = false;
 };
@@ -322,7 +322,7 @@ Miro::JSON AppDriver::runJs(const std::string& expression, const CallOptions& op
     return runJsAsync(expression, opts).waitFor(syncOuterTimeout(timeoutMs));
 }
 
-std::vector<std::uint8_t> AppDriver::runSnapshotBytes(const CallOptions& opts)
+Vector<std::uint8_t> AppDriver::runSnapshotBytes(const CallOptions& opts)
 {
     waitForFirstNavigation(opts);
 
@@ -330,7 +330,7 @@ std::vector<std::uint8_t> AppDriver::runSnapshotBytes(const CallOptions& opts)
     auto state = SnapshotState {};
 
     webView.takeSnapshot(
-        [&state](std::vector<std::uint8_t> bytes, const std::string& error)
+        [&state](Vector<std::uint8_t> bytes, const std::string& error)
         {
             state.bytes = std::move(bytes);
             state.error = error;
@@ -510,6 +510,36 @@ bool AppDriver::waitFor(const std::string& selector, CallOptions opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
+Threads::Async<bool> AppDriver::waitForCountAsync(const std::string& selector,
+                                                  int count,
+                                                  CallOptions opts)
+{
+    auto deadline = std::chrono::steady_clock::now()
+                    + std::chrono::milliseconds {effectiveTimeoutMs(opts)};
+
+    while (true)
+    {
+        auto result = co_await runJsAsync(
+            "window.__test.count(" + jsStringLiteral(selector) + ")", {});
+        if (asInt(result) == count)
+            co_return true;
+        if (std::chrono::steady_clock::now() >= deadline)
+            throw std::runtime_error("AppDriver: waitForCount timed out for "
+                                     "selector: "
+                                     + selector + " (expected "
+                                     + std::to_string(count) + ")");
+        co_await Threads::delay(std::chrono::milliseconds {waitForPollMs});
+    }
+}
+
+bool AppDriver::waitForCount(const std::string& selector,
+                             int count,
+                             CallOptions opts)
+{
+    return waitForCountAsync(selector, count, opts)
+        .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
+}
+
 Threads::Async<Miro::JSON> AppDriver::evaluateAsync(const std::string& expression,
                                                     CallOptions opts)
 {
@@ -537,8 +567,8 @@ std::string AppDriver::dom(std::string_view selector, CallOptions opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
-Threads::Async<std::optional<DomNode>> AppDriver::tryQueryAsync(
-    const std::string& selector, CallOptions opts)
+Threads::Async<std::optional<DomNode>>
+    AppDriver::tryQueryAsync(const std::string& selector, CallOptions opts)
 {
     auto result = co_await runJsAsync(
         "window.__test.queryNode(" + jsStringLiteral(selector) + ")", opts);
@@ -575,19 +605,18 @@ DomNode AppDriver::query(const std::string& selector, CallOptions opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
 }
 
-Threads::Async<std::vector<DomNode>> AppDriver::queryAllAsync(
-    const std::string& selector, CallOptions opts)
+Threads::Async<Vector<DomNode>> AppDriver::queryAllAsync(const std::string& selector,
+                                                         CallOptions opts)
 {
     auto result = co_await runJsAsync(
         "window.__test.queryNodes(" + jsStringLiteral(selector) + ")", opts);
 
-    auto nodes = std::vector<DomNode> {};
+    auto nodes = Vector<DomNode> {};
     Miro::fromJSON(nodes, result);
     co_return nodes;
 }
 
-std::vector<DomNode> AppDriver::queryAll(const std::string& selector,
-                                         CallOptions opts)
+Vector<DomNode> AppDriver::queryAll(const std::string& selector, CallOptions opts)
 {
     return queryAllAsync(selector, opts)
         .waitFor(syncOuterTimeout(effectiveTimeoutMs(opts)));
@@ -599,8 +628,7 @@ ScreenshotResult AppDriver::screenshot(const ScreenshotOptions& options)
     auto bytes = runSnapshotBytes(callOpts);
 
     auto error = std::string {};
-    auto image = Graphics::Image::decode(
-        bytes.data(), static_cast<int>(bytes.size()), &error);
+    auto image = Graphics::Image::decode(bytes.data(), bytes.size(), &error);
     if (!image)
         throw std::runtime_error("AppDriver: failed to decode snapshot: " + error);
 

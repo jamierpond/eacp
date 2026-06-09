@@ -1,7 +1,7 @@
 #pragma once
 
 #include <eacp/Core/Utils/Common.h>
-#include <ea_data_structures/Structures/Vector.h>
+#include <eacp/Core/Utils/Containers.h>
 
 #include "../Graphics/GraphicsContext.h"
 #include "../Layers/Layer.h"
@@ -17,7 +17,8 @@ enum class MouseEventType
     Dragged,
     Moved,
     Entered,
-    Exited
+    Exited,
+    Wheel
 };
 
 enum class MouseButton
@@ -56,6 +57,12 @@ public:
     virtual ~View();
 
     void repaint();
+
+    // Group opacity for the whole view subtree (chrome, child views and any
+    // native GPU/web content), composited over whatever sits behind it. Sibling
+    // of Layer::setOpacity, but for an entire View rather than a single layer.
+    void setOpacity(float opacity);
+
     void* getHandle();
 
     virtual void paint(Context&) {};
@@ -65,6 +72,10 @@ public:
     virtual void mouseMoved(const MouseEvent&) {}
     virtual void mouseEntered(const MouseEvent&) {}
     virtual void mouseExited(const MouseEvent&) {}
+
+    // Scroll wheel. event.delta carries the wheel movement (y vertical,
+    // x horizontal) in WHEEL_DELTA units.
+    virtual void mouseWheel(const MouseEvent&) {}
     virtual void keyDown(const KeyEvent&) {}
     virtual void keyUp(const KeyEvent&) {}
     virtual void resized();
@@ -104,8 +115,8 @@ public:
     void focus();
     bool hasFocus() const;
 
-    const EA::Vector<View*>& getSubviews() const { return subviews; }
-    const EA::Vector<Layer*>& getLayers() const { return layers; }
+    const Vector<View*>& getSubviews() const { return subviews; }
+    const Vector<Layer*>& getLayers() const { return layers; }
     View* getParent() const { return parent; }
 
     void* getNativeLayer();
@@ -125,8 +136,8 @@ private:
     void viewAdded(View& view);
     void viewRemoved(View& view);
 
-    EA::Vector<View*> subviews;
-    EA::Vector<Layer*> layers;
+    Vector<View*> subviews;
+    Vector<Layer*> layers;
     View* parent = nullptr;
     View* hoveredView = nullptr;
     View* mouseDownTarget = nullptr;
