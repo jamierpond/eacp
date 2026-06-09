@@ -103,6 +103,25 @@ struct WindowOptions
     int minWidth = 0;
     int minHeight = 0;
 
+    // Keeps the window above normal windows (macOS NSFloatingWindowLevel,
+    // Windows WS_EX_TOPMOST). Mirrors Electron's alwaysOnTop.
+    bool alwaysOnTop = false;
+
+    // macOS: pins the window to every Space so it follows the user between
+    // desktops and fullscreen apps. Mirrors Electron's
+    // setVisibleOnAllWorkspaces(true). No-op on other platforms.
+    bool visibleOnAllWorkspaces = false;
+
+    // Shows the window without making it key / stealing focus from the
+    // frontmost app (macOS orderFront vs makeKeyAndOrderFront). The window
+    // can still become key when clicked. Mirrors Electron's showInactive().
+    bool showInactive = false;
+
+    // Initial position of the window's top-left corner in screen points,
+    // measured from the primary display's top-left (Electron convention).
+    // Unset centers the window (macOS) / uses the system default (Windows).
+    std::optional<Point> initialPosition;
+
     EA::Vector<WindowFlags> flags;
 
     Callback effectiveOnQuit() const

@@ -165,12 +165,23 @@ struct Window::Native
         RECT rect = {0, 0, physicalWidth, physicalHeight};
         AdjustWindowRectExForDpi(&rect, style, FALSE, 0, dpi);
 
-        hwnd = CreateWindowExW(0,
+        DWORD exStyle = options.alwaysOnTop ? WS_EX_TOPMOST : 0;
+        showWithoutActivating = options.showInactive;
+
+        auto x = CW_USEDEFAULT;
+        auto y = CW_USEDEFAULT;
+        if (options.initialPosition)
+        {
+            x = static_cast<int>(options.initialPosition->x * dpiScale);
+            y = static_cast<int>(options.initialPosition->y * dpiScale);
+        }
+
+        hwnd = CreateWindowExW(exStyle,
                                WINDOW_CLASS_NAME,
                                wideTitle.c_str(),
                                style,
-                               CW_USEDEFAULT,
-                               CW_USEDEFAULT,
+                               x,
+                               y,
                                rect.right - rect.left,
                                rect.bottom - rect.top,
                                nullptr,
@@ -231,7 +242,10 @@ struct Window::Native
     {
         if (hwnd)
         {
-            ShowWindow(hwnd, SW_SHOW);
+            // showInactive: reveal without stealing focus (counterpart of
+            // macOS orderFront). visibleOnAllWorkspaces has no Windows
+            // analogue. The window still activates normally when clicked.
+            ShowWindow(hwnd, showWithoutActivating ? SW_SHOWNOACTIVATE : SW_SHOW);
             UpdateWindow(hwnd);
         }
     }
@@ -328,6 +342,7 @@ struct Window::Native
     winrt::event_token pointerReleasedToken;
     winrt::event_token pointerMovedToken;
     bool useWinRTPointerInput = false;
+    bool showWithoutActivating = false;
 
     std::bitset<256> keyState;
 };

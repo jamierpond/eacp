@@ -39,6 +39,19 @@ void repositionTrafficLights(NSWindow* window, NSPoint inset)
 }
 } // namespace
 
+// Borderless NSWindows refuse key status by default, which would make a
+// frameless overlay's text inputs untypeable. Same override Electron ships
+// for frame:false windows.
+@interface EacpKeyableBorderlessWindow : NSWindow
+@end
+
+@implementation EacpKeyableBorderlessWindow
+- (BOOL)canBecomeKeyWindow
+{
+    return YES;
+}
+@end
+
 @interface WindowDelegateBridge : NSObject <NSWindowDelegate>
 {
 @public
@@ -165,10 +178,16 @@ struct Window::Native
         auto style = getStyle(options);
         auto contentRect = NSMakeRect(0, 0, options.width, options.height);
 
-        handle = [[NSWindow alloc] initWithContentRect:contentRect
-                                             styleMask:style
-                                               backing:NSBackingStoreBuffered
-                                                 defer:NO];
+        // NSWindowStyleMaskBorderless is 0 — "borderless" is the absence of
+        // the Titled bit, so that's what selects the keyable subclass.
+        auto windowClass = (style & NSWindowStyleMaskTitled) != 0
+                               ? [NSWindow class]
+                               : [EacpKeyableBorderlessWindow class];
+
+        handle = [[windowClass alloc] initWithContentRect:contentRect
+                                                styleMask:style
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:NO];
 
         delegate = createWindowDelegate(options);
         delegate.get()->events = &eventsToUse;
@@ -202,10 +221,44 @@ struct Window::Native
             [getWindow() setContentMinSize:NSMakeSize(options.minWidth,
                                                       options.minHeight)];
 
-        [getWindow() center];
+        if (options.alwaysOnTop)
+            [getWindow() setLevel:NSFloatingWindowLevel];
+
+        if (options.visibleOnAllWorkspaces)
+            [getWindow()
+                setCollectionBehavior:
+                    NSWindowCollectionBehaviorCanJoinAllSpaces
+                    | NSWindowCollectionBehaviorFullScreenAuxiliary];
+
+        if (options.initialPosition)
+        {
+            // initialPosition is top-left from the primary display's top-left
+            // (Electron convention); AppKit's origin is the bottom-left of
+            // the primary screen, so flip y against its height.
+            NSScreen* primary = NSScreen.screens.firstObject;
+            auto screenTop = primary != nil ? NSMaxY(primary.frame) : 0.0;
+            [getWindow()
+                setFrameTopLeftPoint:NSMakePoint(options.initialPosition->x,
+                                                 screenTop
+                                                     - options.initialPosition
+                                                           ->y)];
+        }
+        else
+        {
+            [getWindow() center];
+        }
+
         [getWindow() setDelegate:delegate.get()];
 
-        toFront();
+        if (options.showInactive)
+        {
+            if (!eacp::Apps::getAppEnvironment().headless)
+                [getWindow() orderFront:nil];
+        }
+        else
+        {
+            toFront();
+        }
 
         if (options.trafficLightPosition)
             repositionTrafficLights(
