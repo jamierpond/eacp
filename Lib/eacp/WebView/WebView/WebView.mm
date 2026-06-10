@@ -696,6 +696,12 @@ void WebView::evaluateJavaScript(const std::string& script, const JSCallback& ca
         return;
     }
 
+    // The block must capture its own copy of the callback: a block captures
+    // a C++ reference AS a reference, and `callback` may bind to a caller
+    // temporary (callJS passes one) that is gone by the time the async
+    // completion handler fires.
+    auto ownedCallback = callback;
+
     [impl->webView.get()
         evaluateJavaScript:nsScript
          completionHandler:^(id result, NSError* error) {
@@ -732,8 +738,8 @@ void WebView::evaluateJavaScript(const std::string& script, const JSCallback& ca
                }
            }
 
-           eacp::Threads::callAsync([callback, resultStr, errorStr]()
-                                    { callback(resultStr, errorStr); });
+           eacp::Threads::callAsync([ownedCallback, resultStr, errorStr]()
+                                    { ownedCallback(resultStr, errorStr); });
          }];
 }
 
