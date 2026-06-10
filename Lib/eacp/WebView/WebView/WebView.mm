@@ -578,8 +578,11 @@ void WebView::initNative(Options options)
     impl->attachToParentView();
     detail::registerWebView(this);
 
-    if (Platform::isMac()) // desktop-only; iOS has no movable windows
+    if (Platform::isMac()) // desktop-only; iOS windows have no chrome to drive
+    {
         installWindowDragSupport();
+        installWindowControlSupport();
+    }
 }
 
 WebView::WebView(PopupInit init)
@@ -792,6 +795,11 @@ void WebView::armFileDrag(const Vector<std::string>& paths)
 void WebView::armWindowDrag()
 {
     detail::armWindowDrag(impl->webView.get());
+}
+
+void WebView::performWindowControl(const std::string& action)
+{
+    detail::performWindowControl(impl->webView.get(), action);
 }
 
 void WebView::resized()

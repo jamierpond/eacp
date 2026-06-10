@@ -401,6 +401,11 @@ void Window::setVisible(bool visible)
     impl->setVisible(visible);
 }
 
+bool Window::isVisible()
+{
+    return [impl->getWindow() isVisible];
+}
+
 void Window::minimize()
 {
     impl->minimize();

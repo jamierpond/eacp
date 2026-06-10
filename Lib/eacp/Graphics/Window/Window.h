@@ -161,6 +161,11 @@ public:
     // headless and on iOS.
     void setVisible(bool visible);
 
+    // Whether the window is currently shown on screen — the query side of
+    // setVisible, so toggles need no shadow bool in app code. False while
+    // hidden, minimized to nothing, or under headless; always true on iOS.
+    bool isVisible();
+
     // Minimizes to the Dock / taskbar (macOS miniaturize, Windows
     // SW_MINIMIZE). Lets borderless windows with web-rendered window
     // controls offer the standard button. No-op under headless and on iOS.

@@ -44,4 +44,9 @@ void armFileDrag(WKWebView* webView, const Vector<std::string>& paths);
 // Arms a native window drag for the next mouse gesture. macOS-only; the iOS
 // translation unit provides a no-op.
 void armWindowDrag(WKWebView* webView);
+
+// Performs a caption-button action ("minimize" / "maximize" / "close") on the
+// window hosting the web view, posted by the injected window-controls.js.
+// macOS-only; the iOS translation unit provides a no-op.
+void performWindowControl(WKWebView* webView, const std::string& action);
 } // namespace eacp::Graphics::detail

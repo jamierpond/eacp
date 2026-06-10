@@ -53,4 +53,11 @@ void armWindowDrag(WKWebView*)
     // Window dragging is a desktop affordance; iOS windows aren't movable.
     assert(false && "armWindowDrag is macOS-only");
 }
+
+void performWindowControl(WKWebView*, const std::string&)
+{
+    // Caption buttons are a desktop affordance; the shim that posts these
+    // actions is only installed on macOS.
+    assert(false && "performWindowControl is macOS-only");
+}
 } // namespace eacp::Graphics::detail

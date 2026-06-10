@@ -155,7 +155,8 @@ public:
     std::string getURL() const;
     std::string getTitle() const;
 
-    using JSCallback = std::function<void(const std::string& result, const std::string& error)>;
+    using JSCallback =
+        std::function<void(const std::string& result, const std::string& error)>;
 
     void evaluateJavaScript(const std::string& script,
                             const JSCallback& callback = nullptr);
@@ -228,6 +229,8 @@ private:
     explicit WebView(PopupInit init);
     void initNative(Options options);
     void installWindowDragSupport();
+    void installWindowControlSupport();
+    void performWindowControl(const std::string& action);
     std::shared_ptr<Native> impl;
 };
 

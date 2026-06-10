@@ -143,10 +143,8 @@ struct Window::Native
         const DWORD attrWindowCornerPreference =
             33; // DWMWA_WINDOW_CORNER_PREFERENCE
         DWORD preference = 2; // DWMWCP_ROUND
-        DwmSetWindowAttribute(host.hwnd,
-                              attrWindowCornerPreference,
-                              &preference,
-                              sizeof(preference));
+        DwmSetWindowAttribute(
+            host.hwnd, attrWindowCornerPreference, &preference, sizeof(preference));
     }
 
     void setVisible(bool visible)
@@ -438,6 +436,11 @@ void Window::toFront()
 void Window::setVisible(bool visible)
 {
     impl->setVisible(visible);
+}
+
+bool Window::isVisible()
+{
+    return impl->host.hwnd && IsWindowVisible(impl->host.hwnd);
 }
 
 void Window::minimize()

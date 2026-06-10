@@ -46,4 +46,12 @@ if (TARGET eacp-webview-test-main)
             eacp-webview
             eacp-webview-test-main)
     nano_discover_tests(WindowDragTests)
+
+    # Same deal for window-controls.js (see installWindowControlSupport):
+    # caption-button classification and the <html> attributes the shim keeps.
+    add_executable(WindowControlTests WindowControlTests.cpp)
+    target_link_libraries(WindowControlTests PRIVATE
+            eacp-webview
+            eacp-webview-test-main)
+    nano_discover_tests(WindowControlTests)
 endif ()

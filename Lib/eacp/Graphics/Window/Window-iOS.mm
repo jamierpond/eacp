@@ -102,6 +102,12 @@ void Window::setVisible(bool)
     // iOS apps are single-window; there's nothing to hide or show.
 }
 
+bool Window::isVisible()
+{
+    // iOS apps are single-window; the window is always on screen.
+    return true;
+}
+
 void Window::minimize()
 {
     // iOS apps are single-window; there's nothing to minimize.

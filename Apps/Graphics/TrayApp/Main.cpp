@@ -121,16 +121,11 @@ struct TrayApp
         return menu;
     }
 
-    void togglePanel()
-    {
-        panelVisible = !panelVisible;
-        window.setVisible(panelVisible);
-    }
+    void togglePanel() { window.setVisible(!window.isVisible()); }
 
     PanelView panelView;
     Window window {getPanelOptions()};
     TrayIcon tray;
-    bool panelVisible = false;
 };
 
 int main()
