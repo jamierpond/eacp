@@ -4,6 +4,7 @@
 
 #include <NanoTest/NanoTest.h>
 
+#include <cmath>
 #include <cstdint>
 
 using namespace nano;
@@ -84,6 +85,45 @@ struct ComputeParams
     float scale;
     std::uint32_t count;
 };
+
+// The same scale kernel authored as a ComputeProgram struct: buffers and the
+// uniform are named members, define() writes the body, and the implicit count
+// guard replaces the hand-written one above.
+struct ScaleKernel final : ComputeProgram
+{
+    Uniform<InputBuffer> input;
+    Uniform<OutputBuffer> output;
+    Uniform<Float> scale;
+    EACP_SHADER(input, output, scale)
+
+    ScaleKernel() { compile(); }
+
+    void define() override
+    {
+        auto i = threadId();
+        write(output, i, input[i] * scale);
+    }
+};
+
+// Averages each element with its two neighbours, wrapping at the ends:
+// index arithmetic with uint operators, integer literals and a uint uniform.
+struct WrapAverageKernel final : ComputeProgram
+{
+    Uniform<InputBuffer> input;
+    Uniform<OutputBuffer> output;
+    Uniform<UInt> length;
+    EACP_SHADER(input, output, length)
+
+    WrapAverageKernel() { compile(); }
+
+    void define() override
+    {
+        auto i = threadId();
+        auto previous = input[(i + length - 1u) % length];
+        auto next = input[(i + 1u) % length];
+        write(output, i, (previous + input[i] + next) / 3.0f);
+    }
+};
 } // namespace
 
 // Builds every resource type without a window or drawable. On a host with no
@@ -111,6 +151,35 @@ auto tDeviceBuildsResources = test("GPU/deviceBuildsResources") = []
 
     auto pipeline = device.makeRenderPipeline(descriptor);
     check(pipeline.isValid());
+};
+
+// An Index-usage buffer builds (D3D11 needs the index bind flag), and the
+// pipeline carries its topology through for the render pass to read at draw
+// time. Self-skips without a GPU device.
+auto tDeviceBuildsIndexBuffer = test("GPU/deviceBuildsIndexBuffer") = []
+{
+    auto& device = Device::shared();
+
+    if (!device.isValid())
+        return;
+
+    const std::uint32_t indices[] = {0, 1, 2, 0, 2, 3};
+
+    auto buffer = device.makeBuffer(indices, BufferUsage::Index);
+    check(buffer.isValid());
+    check(buffer.size() == sizeof(indices));
+
+    auto library = device.makeShaderLibrary(smokeShaderSource());
+
+    auto descriptor = RenderPipelineDescriptor {};
+    descriptor.library = &library;
+    descriptor.vertexLayout.attribute(VertexFormat::Float4, 0);
+    descriptor.vertexLayout.stride = sizeof(float) * 4;
+    descriptor.topology = PrimitiveTopology::TriangleStrip;
+
+    auto pipeline = device.makeRenderPipeline(descriptor);
+    check(pipeline.isValid());
+    check(pipeline.topology() == PrimitiveTopology::TriangleStrip);
 };
 
 // A texture builds from raw pixels and reports its size; both filter modes and
@@ -183,4 +252,92 @@ auto tComputeRunsKernel = test("GPU/computeRunsKernel") = []
 
     for (auto i = 0; i < count; ++i)
         check(result[i] == input[i] * 3.f);
+};
+
+// Runs the struct-authored EDSL kernel end to end: dispatch(kernel, count)
+// binds the pipeline, the buffer members and the uniform block (with the
+// implicit element count) in one call. Self-skips without a GPU device.
+auto tComputeProgramRunsKernel = test("GPU/computeProgramRunsKernel") = []
+{
+    auto& device = Device::shared();
+
+    if (!device.isValid())
+        return;
+
+    const float input[] = {1.f, 2.f, 3.f, 4.f};
+    constexpr auto count = (int) (sizeof(input) / sizeof(input[0]));
+
+    auto inputBuffer = device.makeBuffer(input, BufferUsage::Storage);
+    auto outputBuffer = device.makeBuffer(sizeof(input), BufferUsage::Storage);
+    check(inputBuffer.isValid());
+    check(outputBuffer.isValid());
+
+    auto kernel = ScaleKernel {};
+    kernel.input = inputBuffer;
+    kernel.output = outputBuffer;
+    kernel.scale = 3.f;
+    kernel.prepare();
+    check(kernel.pipeline().isValid());
+
+    auto commands = device.makeCommandBuffer();
+
+    {
+        auto pass = commands.beginCompute();
+        pass.dispatch(kernel, count);
+    }
+
+    commands.commit();
+
+    float result[count] = {};
+    outputBuffer.read(result, sizeof(result));
+
+    for (auto i = 0; i < count; ++i)
+        check(result[i] == input[i] * 3.f);
+};
+
+// Runs the index-arithmetic kernel end to end and checks the wrap-around
+// neighbour average against the same expression on the CPU. Self-skips
+// without a GPU device.
+auto tComputeProgramIndexArithmetic = test("GPU/computeProgramIndexArithmetic") = []
+{
+    auto& device = Device::shared();
+
+    if (!device.isValid())
+        return;
+
+    const float input[] = {1.f, 2.f, 4.f, 8.f};
+    constexpr auto count = (int) (sizeof(input) / sizeof(input[0]));
+
+    auto inputBuffer = device.makeBuffer(input, BufferUsage::Storage);
+    auto outputBuffer = device.makeBuffer(sizeof(input), BufferUsage::Storage);
+
+    auto kernel = WrapAverageKernel {};
+    kernel.input = inputBuffer;
+    kernel.output = outputBuffer;
+    kernel.length = count;
+    kernel.prepare();
+    check(kernel.pipeline().isValid());
+
+    auto commands = device.makeCommandBuffer();
+
+    {
+        auto pass = commands.beginCompute();
+        pass.dispatch(kernel, count);
+    }
+
+    commands.commit();
+
+    float result[count] = {};
+    outputBuffer.read(result, sizeof(result));
+
+    // The platform shader compiler may turn the division into a reciprocal
+    // multiply (Metal compiles fast-math by default), so compare within a ULP
+    // budget rather than exactly.
+    for (auto i = 0; i < count; ++i)
+    {
+        auto expected =
+            (input[(i + count - 1) % count] + input[i] + input[(i + 1) % count])
+            / 3.f;
+        check(std::abs(result[i] - expected) < 1e-5f);
+    }
 };

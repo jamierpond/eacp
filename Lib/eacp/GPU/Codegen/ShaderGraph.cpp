@@ -49,6 +49,15 @@ int ShaderGraph::addConstant(float value)
     return add(std::move(node));
 }
 
+int ShaderGraph::addUIntConstant(unsigned value)
+{
+    auto node = Expr {};
+    node.kind = ExprKind::Constant;
+    node.type = ValueType::UInt;
+    node.index = (int) value;
+    return add(std::move(node));
+}
+
 int ShaderGraph::addConstruct(ValueType type, Vector<int> args)
 {
     auto node = Expr {};
@@ -88,6 +97,16 @@ int ShaderGraph::addCall(ValueType type, std::string name, Vector<int> args)
     return add(std::move(node));
 }
 
+int ShaderGraph::addUnary(ValueType type, char op, int child)
+{
+    auto node = Expr {};
+    node.kind = ExprKind::Unary;
+    node.type = type;
+    node.op = op;
+    node.args.add(child);
+    return add(std::move(node));
+}
+
 int ShaderGraph::addBinary(ValueType type, char op, int lhs, int rhs)
 {
     auto node = Expr {};
@@ -122,5 +141,34 @@ int ShaderGraph::addSample(int textureSlot, int uv)
     node.index = textureSlot;
     node.args.add(uv);
     return add(std::move(node));
+}
+
+int ShaderGraph::addThreadId()
+{
+    auto node = Expr {};
+    node.kind = ExprKind::ThreadId;
+    node.type = ValueType::UInt;
+    return add(std::move(node));
+}
+
+int ShaderGraph::addStorageBuffer(BufferAccess access)
+{
+    storageSlots.add(access);
+    return storageSlots.size() - 1;
+}
+
+int ShaderGraph::addBufferRead(int slot, int index)
+{
+    auto node = Expr {};
+    node.kind = ExprKind::BufferRead;
+    node.type = ValueType::Float;
+    node.index = slot;
+    node.args.add(index);
+    return add(std::move(node));
+}
+
+void ShaderGraph::addStore(int slot, int index, int value)
+{
+    storeList.add({slot, index, value});
 }
 } // namespace eacp::GPU

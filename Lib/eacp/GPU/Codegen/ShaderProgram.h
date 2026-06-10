@@ -15,6 +15,7 @@
 #include <cmath>
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <optional>
 
@@ -86,13 +87,28 @@ struct CpuValueOf<Float4x4>
     using type = std::array<float, 16>;
 };
 
+template <>
+struct CpuValueOf<UInt>
+{
+    using type = std::uint32_t;
+};
+
 // The shader value a CPU type maps to. Built in for float / float[N] / array; a
 // user type opts in either intrusively (a `using ShaderValue = Float3;` member,
 // like MIRO_REFLECT) or non-intrusively via EACP_SHADER_VALUE (like
 // MIRO_REFLECT_EXTERNAL). This is what lets a `Color` struct stand in for a
-// float3 vertex field or uniform.
+// float3 vertex field or uniform. The unmapped primary stays empty so the
+// sub-type assignment constraint below fails softly for plain types (e.g. an
+// int assigned to a Uniform<UInt> picks the CPU-value overload) instead of
+// erroring inside `typename T::ShaderValue`.
 template <typename T>
 struct ShaderValueOf
+{
+};
+
+template <typename T>
+    requires requires { typename T::ShaderValue; }
+struct ShaderValueOf<T>
 {
     using type = typename T::ShaderValue;
 };
@@ -147,7 +163,8 @@ struct ShaderValueOf<std::array<float, 16>>
 
 // True when V is a CPU type registered as the shader value type T.
 template <typename V, typename T>
-concept ShaderValueIs = std::same_as<typename ShaderValueOf<V>::type, T>;
+concept ShaderValueIs = requires { typename ShaderValueOf<V>::type; }
+                        && std::same_as<typename ShaderValueOf<V>::type, T>;
 
 // Byte offset of a data member within its struct, computed from a real object so
 // it stays within defined behaviour (unlike the classic null-pointer offsetof).
@@ -174,8 +191,7 @@ struct Uniform : T
         return *this;
     }
 
-    template <typename V>
-        requires ShaderValueIs<V, T>
+    template <ShaderValueIs<T> V>
     Uniform& operator=(const V& subValue)
     {
         static_assert(sizeof(V) == sizeof(Cpu),
@@ -204,6 +220,34 @@ struct Uniform<Texture2D> : Texture2D
     const Texture* value = nullptr;
 };
 
+// Storage-buffer members of a compute program, following the texture pattern:
+// the slot-indexed handle define() reads or writes, and the slot the assigned
+// GPU::Buffer is bound at when dispatched. The program stores a pointer, so
+// the buffer must outlive the dispatch.
+template <>
+struct Uniform<InputBuffer> : InputBuffer
+{
+    Uniform& operator=(const Buffer& newBuffer)
+    {
+        value = &newBuffer;
+        return *this;
+    }
+
+    const Buffer* value = nullptr;
+};
+
+template <>
+struct Uniform<OutputBuffer> : OutputBuffer
+{
+    Uniform& operator=(const Buffer& newBuffer)
+    {
+        value = &newBuffer;
+        return *this;
+    }
+
+    const Buffer* value = nullptr;
+};
+
 inline VertexFormat toVertexFormat(ValueType type)
 {
     switch (type)
@@ -215,9 +259,9 @@ inline VertexFormat toVertexFormat(ValueType type)
         case ValueType::Float3:
             return VertexFormat::Float3;
         case ValueType::Float4:
-            return VertexFormat::Float4;
         case ValueType::Float4x4:
-            return VertexFormat::Float4; // matrices are never vertex attributes
+        case ValueType::UInt:
+            return VertexFormat::Float4; // matrix/uint are never vertex attributes
     }
 
     return VertexFormat::Float;
@@ -242,15 +286,27 @@ public:
         onTexture(name, member, member.value);
     }
 
+    void operator()(const char* name, Uniform<InputBuffer>& member)
+    {
+        onInputBuffer(name, member, member.value);
+    }
+
+    void operator()(const char* name, Uniform<OutputBuffer>& member)
+    {
+        onOutputBuffer(name, member, member.value);
+    }
+
 protected:
     virtual void onUniform(const char* name,
                            ValueType type,
                            detail::ValueHandle& handle,
                            const void* data) = 0;
 
-    // Texture members are not packed into the uniform block, so only the walks
-    // that care (build, texture bind) override this.
+    // Texture and storage-buffer members are not packed into the uniform block,
+    // so only the walks that care (build, resource bind) override these.
     virtual void onTexture(const char*, Texture2D&, const Texture*) {}
+    virtual void onInputBuffer(const char*, InputBuffer&, const Buffer*) {}
+    virtual void onOutputBuffer(const char*, OutputBuffer&, const Buffer*) {}
 };
 
 // Build walk: each uniform member adopts a freshly added graph slot, so define()
@@ -274,6 +330,16 @@ public:
     void onTexture(const char*, Texture2D& handle, const Texture*) override
     {
         handle = builder.texture();
+    }
+
+    void onInputBuffer(const char*, InputBuffer& handle, const Buffer*) override
+    {
+        handle = builder.inputBuffer();
+    }
+
+    void onOutputBuffer(const char*, OutputBuffer& handle, const Buffer*) override
+    {
+        handle = builder.outputBuffer();
     }
 
 private:
@@ -372,10 +438,36 @@ public:
         vertexCountValue = count;
     }
 
+    // Uploads typed index data and owns the resulting buffer; draw(program)
+    // then draws indexed. The index width is inferred from the element type.
+    template <std::size_t N>
+    void setIndices(const std::uint32_t (&data)[N])
+    {
+        setIndices(data, (int) N);
+    }
+
+    template <std::size_t N>
+    void setIndices(const std::uint16_t (&data)[N])
+    {
+        setIndices(data, (int) N);
+    }
+
+    void setIndices(const std::uint32_t* data, int count)
+    {
+        uploadIndices(data, sizeof(std::uint32_t), count, IndexFormat::UInt32);
+    }
+
+    void setIndices(const std::uint16_t* data, int count)
+    {
+        uploadIndices(data, sizeof(std::uint16_t), count, IndexFormat::UInt16);
+    }
+
     // Builds the shader library and render pipeline. sampleCount must match the
     // render target (GPUView::sampleCount()); set depth when the view has a depth
     // buffer (GPUView::setDepth(true)).
-    void prepare(int sampleCount, bool depth = false)
+    void prepare(int sampleCount,
+                 bool depth = false,
+                 PrimitiveTopology topology = PrimitiveTopology::Triangles)
     {
         shaderLibrary.emplace(Device::shared(), generated.source);
 
@@ -384,6 +476,7 @@ public:
         descriptor.sampleCount = sampleCount;
         descriptor.vertexLayout = generated.vertexLayout;
         descriptor.depth = depth;
+        descriptor.topology = topology;
 
         pipelineState.emplace(Device::shared(), descriptor);
     }
@@ -391,6 +484,11 @@ public:
     const RenderPipeline& pipeline() const { return *pipelineState; }
     const Buffer& vertices() const { return *vertexBufferData; }
     int vertexCount() const { return vertexCountValue; }
+
+    bool hasIndices() const { return indexBufferData.has_value(); }
+    const Buffer& indices() const { return *indexBufferData; }
+    int indexCount() const { return indexCountValue; }
+    IndexFormat indexFormat() const { return indexFormatValue; }
 
     // Re-packs the current uniform values and returns the block, ready for
     // RenderPass::setVertexBytes. Cheap - the block is a handful of floats.
@@ -487,7 +585,7 @@ protected:
         auto z0 = constant(0.0f);
         auto o = constant(1.0f);
         return float4x4(float4(c, s, z0, z0),
-                        float4(z0 - s, c, z0, z0),
+                        float4(-s, c, z0, z0),
                         float4(z0, z0, o, z0),
                         float4(z0, z0, z0, o));
     }
@@ -500,7 +598,7 @@ protected:
         auto o = constant(1.0f);
         return float4x4(float4(o, z0, z0, z0),
                         float4(z0, c, s, z0),
-                        float4(z0, z0 - s, c, z0),
+                        float4(z0, -s, c, z0),
                         float4(z0, z0, z0, o));
     }
 
@@ -533,15 +631,31 @@ private:
         reflectMembers(uploadVisitor);
     }
 
+    void uploadIndices(const void* data,
+                       std::size_t elementSize,
+                       int count,
+                       IndexFormat format)
+    {
+        indexBufferData.emplace(Device::shared(),
+                                data,
+                                elementSize * (std::size_t) count,
+                                BufferUsage::Index);
+        indexCountValue = count;
+        indexFormatValue = format;
+    }
+
     ShaderBuilder builder;
     GeneratedShader generated;
     VertexLayout vertexLayoutData;
     Vector<std::byte> uniformBytes;
 
     std::optional<Buffer> vertexBufferData;
+    std::optional<Buffer> indexBufferData;
     std::optional<ShaderLibrary> shaderLibrary;
     std::optional<RenderPipeline> pipelineState;
     int vertexCountValue = 0;
+    int indexCountValue = 0;
+    IndexFormat indexFormatValue = IndexFormat::UInt32;
 };
 } // namespace eacp::GPU
 
