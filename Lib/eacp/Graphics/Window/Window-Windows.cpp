@@ -453,6 +453,16 @@ void Window::toggleMaximize()
     impl->toggleMaximize();
 }
 
+void Window::setMouseLocked(bool locked)
+{
+    impl->host.setMouseLocked(locked);
+}
+
+bool Window::isMouseLocked() const
+{
+    return impl->host.isMouseLocked();
+}
+
 bool Window::isKeyPressed(uint16_t virtualKeyCode) const
 {
     return impl->isKeyPressed(virtualKeyCode);
