@@ -36,7 +36,7 @@ WebView* findFocusedWebView()
     return registered.empty() ? nullptr : registered.back();
 }
 
-WKWebView* createWebView(WKWebViewConfiguration* config)
+WKWebView* createWebView(WKWebViewConfiguration* config, const WebKitOptions&)
 {
     auto rect = CGRectMake(0, 0, 100, 100);
     return [[WKWebView alloc] initWithFrame:rect configuration:config];

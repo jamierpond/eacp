@@ -8,6 +8,11 @@ using namespace Graphics;
 // `-webkit-app-region` is kept alongside for Electron parity), so pressing and
 // dragging it moves this frameless window. The button is `no-drag`, proving
 // controls stay clickable and don't move the window.
+//
+// The WebView opts into acceptFirstMouse, so the drag works even when the
+// window is in the background: the click that activates the window also
+// reaches the page, instead of needing one click to focus and a second to
+// drag. Switch to another app and drag this window's title bar to see it.
 static const char* kDemoHtml = R"HTML(
 <!doctype html>
 <html>
@@ -66,6 +71,9 @@ static const char* kDemoHtml = R"HTML(
          drag it to move this frameless window.</p>
       <p>The button is <code>no-drag</code>, so it stays clickable and never
          moves the window.</p>
+      <p>Thanks to <code>acceptFirstMouse</code>, this works even from the
+         background &mdash; focus another app, then drag the bar in one
+         gesture.</p>
       <div class="badge" id="status">ready</div>
     </div>
   </div>
@@ -87,7 +95,16 @@ struct RootView final : View
 
     void resized() override { scaleToFit({webView}); }
 
-    WebView webView;
+    // acceptFirstMouse lets the title-bar drag start from an unfocused
+    // window in a single gesture (see the page comment above).
+    static WebView::Options getWebViewOptions()
+    {
+        auto options = WebView::Options();
+        options.acceptFirstMouse = true;
+        return options;
+    }
+
+    WebView webView {getWebViewOptions()};
 };
 
 struct MyApp

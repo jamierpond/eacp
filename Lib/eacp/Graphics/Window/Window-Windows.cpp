@@ -17,6 +17,10 @@
 #include <windows.ui.composition.interop.h>
 #include <DispatcherQueue.h>
 
+// DwmSetWindowAttribute, used for Win11 rounded corners.
+#include <dwmapi.h>
+#pragma comment(lib, "Dwmapi.lib")
+
 // Virtual key codes - defined manually to reduce Windows.h dependency
 namespace VK
 {
@@ -189,6 +193,37 @@ struct Window::Native
                                nullptr,
                                GetModuleHandleW(nullptr),
                                this);
+
+        if (hwnd && options.cornerRadius)
+            applyRoundedCorners();
+    }
+
+    // Windows 11+: ask DWM to round the window at the system radius (the
+    // requested radius value isn't configurable). Constants declared
+    // locally so older SDKs still compile; pre-Win11 DWM ignores the
+    // attribute and the window stays square.
+    void applyRoundedCorners() const
+    {
+        const DWORD attrWindowCornerPreference = 33; // DWMWA_WINDOW_CORNER_PREFERENCE
+        DWORD preference = 2;                        // DWMWCP_ROUND
+        DwmSetWindowAttribute(hwnd,
+                              attrWindowCornerPreference,
+                              &preference,
+                              sizeof(preference));
+    }
+
+    void setVisible(bool visible)
+    {
+        if (!hwnd || eacp::Apps::getAppEnvironment().headless)
+            return;
+
+        if (!visible)
+        {
+            ShowWindow(hwnd, SW_HIDE);
+            return;
+        }
+
+        ShowWindow(hwnd, showWithoutActivating ? SW_SHOWNOACTIVATE : SW_SHOW);
     }
 
     void initializeComposition()
@@ -751,6 +786,11 @@ void Window::setContentView(View& view)
 void Window::toFront()
 {
     impl->toFront();
+}
+
+void Window::setVisible(bool visible)
+{
+    impl->setVisible(visible);
 }
 
 bool Window::isKeyPressed(uint16_t virtualKeyCode) const

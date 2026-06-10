@@ -117,6 +117,14 @@ struct WindowOptions
     // Unset centers the window (macOS) / uses the system default (Windows).
     std::optional<Point> initialPosition;
 
+    // Rounds the window's corners (points). Borderless windows are square
+    // by default; set this to get the standard macOS rounded shape. On
+    // macOS this makes the window non-opaque with a clear background
+    // (overriding backgroundColor) so the clipped content view defines the
+    // visible shape. Windows 11 rounds via DWM at the system radius — the
+    // value is ignored there; earlier Windows stays square.
+    std::optional<float> cornerRadius;
+
     EA::Vector<WindowFlags> flags;
 
     Callback effectiveOnQuit() const
@@ -144,6 +152,14 @@ public:
     // Brings the window to the front and activates the app so it rises above
     // other applications. No-op under headless and on iOS.
     void toFront();
+
+    // Shows or hides the window WITHOUT destroying it (macOS orderOut /
+    // orderFront, Windows ShowWindow) — the content view and any WebView
+    // state stay alive, unlike closing and recreating, and the window keeps
+    // its frame, so it reappears where the user left it. Showing respects
+    // showInactive (no focus steal) and re-asserts alwaysOnTop. No-op under
+    // headless and on iOS.
+    void setVisible(bool visible);
 
     // Keyboard state.
     bool isKeyPressed(uint16_t virtualKeyCode) const;

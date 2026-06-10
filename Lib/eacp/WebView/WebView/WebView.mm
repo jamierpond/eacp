@@ -115,7 +115,7 @@ struct WebView::Native
             handler.get()->provider = std::move(provider);
             [config.get() setURLSchemeHandler:handler.get()
                                  forURLScheme:Strings::toNSString(scheme)];
-            schemeHandlers.push_back(std::move(handler));
+            schemeHandlers.push_back(handler);
         }
 
         for (auto& [scheme, streamingProvider]: options.streamingSchemes)
@@ -124,10 +124,16 @@ struct WebView::Native
             handler.get()->streamingProvider = std::move(streamingProvider);
             [config.get() setURLSchemeHandler:handler.get()
                                  forURLScheme:Strings::toNSString(scheme)];
-            schemeHandlers.push_back(std::move(handler));
+            schemeHandlers.push_back(handler);
         }
 
-        webView = detail::createWebView(config.get());
+        webView = detail::createWebView(
+            config.get(),
+            detail::WebKitOptions {
+              .acceptFirstMouse = options.acceptFirstMouse
+            }
+        );
+
         webView.get().navigationDelegate = delegate.get();
         webView.get().UIDelegate = delegate.get();
 
@@ -744,7 +750,7 @@ WebView* WebView::focused()
     return detail::findFocusedWebView();
 }
 
-void WebView::evaluateJavaScript(const std::string& script, JSCallback callback)
+void WebView::evaluateJavaScript(const std::string& script, const JSCallback& callback)
 {
     auto* nsScript = [NSString stringWithUTF8String:script.c_str()];
 

@@ -30,6 +30,7 @@
 // started from the async script-message callback is confined to the app
 // (NSDraggingContextWithinApplication) and never reaches Finder.
 @interface EacpDragWebView : WKWebView
+@property(nonatomic) BOOL eacpAcceptFirstMouse;
 - (void)armFileDragWithPaths:(const eacp::Vector<std::string>&)paths;
 - (void)armWindowDrag;
 @end
@@ -98,10 +99,14 @@ void beginFileDrag(WKWebView* webView,
     [webView beginDraggingSessionWithItems:items event:event source:source];
 }
 
-WKWebView* createWebView(WKWebViewConfiguration* config)
+WKWebView* createWebView(WKWebViewConfiguration* config,
+                         const WebKitOptions& options)
 {
     auto rect = CGRectMake(0, 0, 100, 100);
-    return [[EacpDragWebView alloc] initWithFrame:rect configuration:config];
+    auto* webView = [[EacpDragWebView alloc] initWithFrame:rect
+                                             configuration:config];
+    webView.eacpAcceptFirstMouse = options.acceptFirstMouse;
+    return webView;
 }
 
 void armFileDrag(WKWebView* webView, const Vector<std::string>& paths)
@@ -176,6 +181,16 @@ WebView* findFocusedWebView()
 - (void)armWindowDrag
 {
     windowDragArmed = YES;
+}
+
+// With eacpAcceptFirstMouse set, the click that activates an unfocused
+// window also reaches the page — so a drag region starts moving the window
+// on the FIRST click-drag instead of needing one click to focus first.
+- (BOOL)acceptsFirstMouse:(NSEvent*)event
+{
+    if (self.eacpAcceptFirstMouse)
+        return YES;
+    return [super acceptsFirstMouse:event];
 }
 
 - (void)mouseDown:(NSEvent*)event
