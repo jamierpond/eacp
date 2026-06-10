@@ -204,7 +204,9 @@ struct MyApp
 
         options.titlebarTransparent = true;
         options.showTitlebarSeparator = false;
-        options.trafficLightPosition = Point {10.f, 11.f};
+        // Centers the ~54x16pt button cluster in the 88px-wide, 52px-tall
+        // corner the web title bar reserves for it (padding-left: 88).
+        options.trafficLightPosition = Point {17.f, 18.f};
         options.backgroundColor = Color::black();
 
         return options;
