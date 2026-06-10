@@ -1634,7 +1634,8 @@ std::string WebView::getTitle() const
     return title.toString();
 }
 
-void WebView::evaluateJavaScript(const std::string& script, JSCallback callback)
+void WebView::evaluateJavaScript(const std::string& script,
+                                 const JSCallback& callback)
 {
     if (!impl->webView)
     {
