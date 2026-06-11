@@ -35,6 +35,8 @@
 #       [LINK_LIBRARIES <libs>]           # extra link deps for the app AND the
 #                                         # schema codegen tool (see note below)
 #       [REACT]                           # emit React hook bindings
+#       [NO_DEBUG_SERVER]                 # opt this app out of the MCP
+#                                         # debug server (see below)
 #   )
 #
 # LINK_LIBRARIES is for native libraries the app's API/command headers
@@ -46,8 +48,40 @@
 # destruction ODR-uses — passing the library here covers include dirs and link
 # in one shot, so callers don't have to reach into the generated
 # ${TARGET}Schema_Codegen target by hand.
+# Whether app binaries embed the remote MCP debug server (see
+# Lib/eacp/WebView/Remote/DebugServer.h). AUTO compiles it into
+# developer builds — anything except an explicit release configuration
+# (Release / RelWithDebInfo / MinSizeRel), so Debug and untyped local
+# builds are agent-debuggable out of the box while production binaries
+# never contain the server. ON forces it in regardless of build type;
+# OFF removes it everywhere. Individual apps opt out with
+# NO_DEBUG_SERVER.
+set(EACP_DEBUG_SERVER "AUTO" CACHE STRING
+        "Embed the MCP debug server in WebView apps: AUTO (non-release builds), ON, OFF")
+set_property(CACHE EACP_DEBUG_SERVER PROPERTY STRINGS AUTO ON OFF)
+
+# Links the debug server into ${TARGET} and compiles the auto-attach
+# registration TU into it, so every WebViewBridge the app constructs
+# attaches a server at runtime (port policy: Remote/AutoAttach.h).
+function(eacp_enable_debug_server TARGET)
+    if (NOT TARGET eacp-webview-remote)
+        return ()
+    endif ()
+    if (EACP_DEBUG_SERVER STREQUAL "OFF")
+        return ()
+    endif ()
+    if (EACP_DEBUG_SERVER STREQUAL "AUTO"
+            AND CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+        return ()
+    endif ()
+
+    get_target_property(REMOTE_DIR eacp-webview-remote SOURCE_DIR)
+    target_link_libraries(${TARGET} PRIVATE eacp-webview-remote)
+    target_sources(${TARGET} PRIVATE ${REMOTE_DIR}/AutoAttachRegister.cpp)
+endfunction()
+
 function(eacp_add_webview_app TARGET)
-    set(options REACT)
+    set(options REACT NO_DEBUG_SERVER)
     set(oneValueArgs WEB_DIR BUNDLE_ID BUNDLE_NAME NAMESPACE CATEGORY SCHEMA_NAME
             PACKAGE_MANAGER APP_HEADER)
     set(multiValueArgs SOURCES COMMAND_SOURCES SCHEMA_FORMATS API API_HEADER
@@ -121,6 +155,14 @@ function(eacp_add_webview_app TARGET)
         set(APP_LIB_TARGET "${TARGET}")
         add_executable(${TARGET} ${ARG_SOURCES})
         target_link_libraries(${TARGET} PRIVATE eacp-webview eacp-network-rpc)
+    endif ()
+
+    # Developer affordance: the MCP debug server rides along in the app
+    # executable when the build type / EACP_DEBUG_SERVER allow it.
+    # Test binaries link ${TARGET}_app, not ${TARGET}, so they never
+    # inherit it.
+    if (NOT ARG_NO_DEBUG_SERVER)
+        eacp_enable_debug_server(${TARGET})
     endif ()
 
     # Caller-supplied native link deps. PUBLIC on the static lib in library
