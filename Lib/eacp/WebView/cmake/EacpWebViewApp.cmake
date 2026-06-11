@@ -37,6 +37,8 @@
 #       [REACT]                           # emit React hook bindings
 #       [NO_DEBUG_SERVER]                 # opt this app out of the MCP
 #                                         # debug server (see below)
+#       [NO_ASAN]                         # opt this app out of the dev
+#                                         # AddressSanitizer default
 #   )
 #
 # LINK_LIBRARIES is for native libraries the app's API/command headers
@@ -48,17 +50,39 @@
 # destruction ODR-uses — passing the library here covers include dirs and link
 # in one shot, so callers don't have to reach into the generated
 # ${TARGET}Schema_Codegen target by hand.
-# Whether app binaries embed the remote MCP debug server (see
-# Lib/eacp/WebView/Remote/DebugServer.h). AUTO compiles it into
-# developer builds — anything except an explicit release configuration
+# Developer-tooling switches for app binaries. AUTO means "developer
+# builds only" — anything except an explicit release configuration
 # (Release / RelWithDebInfo / MinSizeRel), so Debug and untyped local
-# builds are agent-debuggable out of the box while production binaries
-# never contain the server. ON forces it in regardless of build type;
-# OFF removes it everywhere. Individual apps opt out with
-# NO_DEBUG_SERVER.
+# builds get the tooling out of the box while production binaries never
+# contain it. ON forces it regardless of build type; OFF removes it
+# everywhere.
+#
+#   EACP_DEBUG_SERVER — embed the remote MCP debug server (see
+#       Lib/eacp/WebView/Remote/DebugServer.h). Per-app opt-out:
+#       NO_DEBUG_SERVER.
+#   EACP_ASAN — compile/link the app executable with AddressSanitizer.
+#       Per-app opt-out: NO_ASAN.
 set(EACP_DEBUG_SERVER "AUTO" CACHE STRING
         "Embed the MCP debug server in WebView apps: AUTO (non-release builds), ON, OFF")
 set_property(CACHE EACP_DEBUG_SERVER PROPERTY STRINGS AUTO ON OFF)
+
+set(EACP_ASAN "AUTO" CACHE STRING
+        "Build WebView app executables with AddressSanitizer: AUTO (non-release builds), ON, OFF")
+set_property(CACHE EACP_ASAN PROPERTY STRINGS AUTO ON OFF)
+
+# Resolves one of the AUTO/ON/OFF switches above against the current
+# build type into TRUE/FALSE in ${OUT_VAR}.
+function(eacp_dev_tooling_enabled SETTING OUT_VAR)
+    if (SETTING STREQUAL "ON")
+        set(${OUT_VAR} TRUE PARENT_SCOPE)
+    elseif (SETTING STREQUAL "OFF")
+        set(${OUT_VAR} FALSE PARENT_SCOPE)
+    elseif (CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+        set(${OUT_VAR} FALSE PARENT_SCOPE)
+    else ()
+        set(${OUT_VAR} TRUE PARENT_SCOPE)
+    endif ()
+endfunction()
 
 # Links the debug server into ${TARGET} and compiles the auto-attach
 # registration TU into it, so every WebViewBridge the app constructs
@@ -67,11 +91,9 @@ function(eacp_enable_debug_server TARGET)
     if (NOT TARGET eacp-webview-remote)
         return ()
     endif ()
-    if (EACP_DEBUG_SERVER STREQUAL "OFF")
-        return ()
-    endif ()
-    if (EACP_DEBUG_SERVER STREQUAL "AUTO"
-            AND CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+
+    eacp_dev_tooling_enabled("${EACP_DEBUG_SERVER}" ENABLED)
+    if (NOT ENABLED)
         return ()
     endif ()
 
@@ -80,8 +102,32 @@ function(eacp_enable_debug_server TARGET)
     target_sources(${TARGET} PRIVATE ${REMOTE_DIR}/AutoAttachRegister.cpp)
 endfunction()
 
+# AddressSanitizer for the binaries agents launch and drive. Applied to
+# the executable target only — its own TUs get full instrumentation,
+# and linking the ASan runtime into the process makes the allocator
+# interceptors global, so heap bugs (use-after-free, double-free, heap
+# overflow) are caught in the static libraries too. Stack/global
+# overflow checks remain limited to instrumented TUs; rebuild with
+# global -fsanitize=address flags when chasing one of those.
+function(eacp_enable_agent_asan TARGET)
+    eacp_dev_tooling_enabled("${EACP_ASAN}" ENABLED)
+    if (NOT ENABLED)
+        return ()
+    endif ()
+
+    if (MSVC)
+        target_compile_options(${TARGET} PRIVATE /fsanitize=address)
+        # ASan is incompatible with incremental linking.
+        target_link_options(${TARGET} PRIVATE /INCREMENTAL:NO)
+    else ()
+        target_compile_options(${TARGET} PRIVATE
+                -fsanitize=address -fno-omit-frame-pointer)
+        target_link_options(${TARGET} PRIVATE -fsanitize=address)
+    endif ()
+endfunction()
+
 function(eacp_add_webview_app TARGET)
-    set(options REACT NO_DEBUG_SERVER)
+    set(options REACT NO_DEBUG_SERVER NO_ASAN)
     set(oneValueArgs WEB_DIR BUNDLE_ID BUNDLE_NAME NAMESPACE CATEGORY SCHEMA_NAME
             PACKAGE_MANAGER APP_HEADER)
     set(multiValueArgs SOURCES COMMAND_SOURCES SCHEMA_FORMATS API API_HEADER
@@ -157,13 +203,19 @@ function(eacp_add_webview_app TARGET)
         target_link_libraries(${TARGET} PRIVATE eacp-webview eacp-network-rpc)
     endif ()
 
-    # Developer affordance: the MCP debug server rides along in the app
-    # executable when the build type / EACP_DEBUG_SERVER allow it.
-    # Test binaries link ${TARGET}_app, not ${TARGET}, so they never
-    # inherit it.
+    # Developer affordances on the app executable only (test binaries
+    # link ${TARGET}_app, not ${TARGET}, so they inherit none of this):
+    # the MCP debug server, AddressSanitizer, and the debugger-wrapped
+    # launcher at <build>/run/${TARGET}.
     if (NOT ARG_NO_DEBUG_SERVER)
         eacp_enable_debug_server(${TARGET})
     endif ()
+
+    if (NOT ARG_NO_ASAN)
+        eacp_enable_agent_asan(${TARGET})
+    endif ()
+
+    eacp_add_run_harness(${TARGET})
 
     # Caller-supplied native link deps. PUBLIC on the static lib in library
     # mode (so the exe + test target inherit them, mirroring eacp-webview
@@ -287,4 +339,26 @@ function(eacp_add_webview_app TARGET)
     if (ARG_APP_HEADER)
         set_default_target_setting(${APP_LIB_TARGET})
     endif ()
+
+    # IDE grouping: every target this app spawns lives in its own
+    # folder (e.g. Examples/WebView/Calculator) so the parent folder
+    # shows one entry per app instead of the _app / Schema_Codegen /
+    # run- siblings flattened next to each other. eacp_add_webview_test
+    # parks the test target in the same folder.
+    if (CMAKE_FOLDER)
+        set(APP_FOLDER "${CMAKE_FOLDER}/${TARGET}")
+    else ()
+        set(APP_FOLDER "${TARGET}")
+    endif ()
+
+    foreach (SUB_TARGET IN ITEMS
+            ${TARGET}
+            ${TARGET}_app
+            ${TARGET}Schema
+            ${TARGET}Schema_Codegen
+            run-${TARGET})
+        if (TARGET ${SUB_TARGET})
+            set_target_properties(${SUB_TARGET} PROPERTIES FOLDER "${APP_FOLDER}")
+        endif ()
+    endforeach ()
 endfunction()

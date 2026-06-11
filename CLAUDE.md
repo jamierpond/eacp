@@ -24,6 +24,21 @@ Output executables:
 - `build/Apps/GUI/GUI.app` (macOS bundle)
 - `build/Apps/Console/Console` (command-line app)
 
+### Running apps
+
+Every app target gets a debugger-wrapped launcher generated at
+`build/run/<Target>` (see `CMake/EacpRunHarness.cmake`). Claude must
+always launch app binaries through it — never execute the bundle binary
+directly. It behaves like a plain launch (args, env, stdio pass
+through; the MCP debug server still comes up), but runs the app under
+lldb in batch mode so a crash prints a full backtrace and exits
+non-zero. Set `EACP_NO_DEBUGGER=1` to bypass when the debugger itself
+is the problem.
+
+```bash
+EACP_DEBUG_PORT=9744 build/run/Calculator
+```
+
 ### Build Options
 
 - `EACP_UNITY_BUILD` (default `ON`): compiles eacp libraries as CMake unity
