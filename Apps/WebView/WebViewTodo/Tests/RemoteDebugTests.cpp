@@ -77,19 +77,41 @@ Miro::JSON parseBody(const HTTP::Response& response)
     return Miro::Json::parse(response.content);
 }
 
+// A failing response should produce a readable error, not an
+// out-of-bounds read: NanoTest's check() is non-fatal, so an
+// unexpected shape would otherwise cascade into a segfault that hides
+// what the server actually returned.
+[[noreturn]] void failResponse(const char* what, const HTTP::Response& response)
+{
+    throw std::runtime_error(std::string {what} + " (status "
+                             + std::to_string(response.statusCode)
+                             + "): " + response.content);
+}
+
 Miro::JSON resultOf(const HTTP::Response& response)
 {
-    return parseBody(response).asObject().at("result");
+    auto body = parseBody(response);
+    if (!body.isObject() || !body.asObject().contains("result"))
+        failResponse("response has no 'result'", response);
+    return body.asObject().at("result");
 }
 
 Miro::JSON firstContent(const HTTP::Response& response)
 {
-    return resultOf(response).asObject().at("content").asArray()[0];
+    auto result = resultOf(response);
+    auto it = result.asObject().find("content");
+    if (it == result.asObject().end() || !it->second.isArray()
+        || it->second.asArray().empty())
+        failResponse("response has no content", response);
+    return it->second.asArray()[0];
 }
 
 std::string firstText(const HTTP::Response& response)
 {
-    return firstContent(response).asObject().at("text").asString();
+    auto content = firstContent(response);
+    if (!content.isObject() || !content.asObject().contains("text"))
+        failResponse("content block has no text", response);
+    return content.asObject().at("text").asString();
 }
 
 bool isToolError(const HTTP::Response& response)
@@ -198,9 +220,11 @@ auto tMcpListAndCall = nano::test("Remote/mcpListsAndCallsTools") = []
 {
     auto server = makeEchoServer();
 
-    auto list = resultOf(server.handle(postJson(rpcBody(2, "tools/list", "{}"))));
+    auto listResponse = server.handle(postJson(rpcBody(2, "tools/list", "{}")));
+    auto list = resultOf(listResponse);
     auto& tools = list.asObject().at("tools").asArray();
-    check(tools.size() == 2);
+    if (tools.size() != 2)
+        failResponse("tools/list did not return 2 tools", listResponse);
     check(tools[0].asObject().at("name").asString() == "echo");
 
     auto call = server.handle(postJson(toolCallBody(3, "echo", R"({"msg":"hi"})")));
