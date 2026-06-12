@@ -85,50 +85,6 @@ Test::CallOptions callOptions(const Miro::JSON& args)
     return opts;
 }
 
-std::string flattened(std::string text, std::size_t maxLength)
-{
-    for (auto& c: text)
-        if (c == '\n' || c == '\r' || c == '\t')
-            c = ' ';
-
-    if (text.size() > maxLength)
-        return text.substr(0, maxLength) + "...";
-
-    return text;
-}
-
-std::string describeNode(const Test::DomNode& node, const std::string& idAttribute)
-{
-    auto out = node.tag();
-
-    if (auto id = node.attr(idAttribute))
-        out += " @" + *id;
-
-    if (auto htmlId = node.attr("id"))
-        out += " #" + *htmlId;
-
-    for (const auto& className: node.classes())
-        out += " ." + className;
-
-    if (auto type = node.attr("type"))
-        out += " type=" + *type;
-
-    if (!node.value.empty())
-        out += " value=\"" + flattened(node.value, 40) + "\"";
-
-    if (node.checked)
-        out += " [checked]";
-
-    if (node.hasAttr("disabled"))
-        out += " [disabled]";
-
-    auto text = flattened(node.text(), 60);
-    if (!text.empty())
-        out += " \"" + text + "\"";
-
-    return out;
-}
-
 std::string selectorSchema()
 {
     return R"({"type":"object","properties":{
@@ -265,27 +221,49 @@ void DebugServer::registerTools()
                 return MCP::toolText(info);
             });
 
-    addTool("list_elements",
-            "List elements matching a selector, one line each: tag, @id, "
-            "classes, value/checked state, and text. Defaults to every "
-            "element tagged with the '"
-                + idAttribute + "' attribute — the page's automation handles.",
-            R"({"type":"object","properties":{
+    addTool(
+        "list_elements",
+        "List elements matching a selector, one line each: tag, @id, "
+        "classes, value/checked state, and text. Defaults to every "
+        "element tagged with the '"
+            + idAttribute + "' attribute — the page's automation handles.",
+        R"({"type":"object","properties":{
                 "selector":{"type":"string",
                     "description":"CSS selector; defaults to all tagged elements"}}})",
-            [this, idAttribute](const Miro::JSON& args)
-            {
-                auto selector =
-                    optionalString(args, "selector", "[" + idAttribute + "]");
-                auto nodes = driver.queryAll(selector);
+        [this, idAttribute](const Miro::JSON& args)
+        {
+            auto selector =
+                optionalString(args, "selector", "[" + idAttribute + "]");
 
-                auto out = std::to_string(nodes.size()) + " element(s) matching "
-                           + selector;
-                for (const auto& node: nodes)
-                    out += "\n- " + describeNode(node, idAttribute);
+            // Built in the page and returned as one string rather
+            // than via queryAll(): a large Vector<DomNode> (every
+            // tagged element, with subtrees) trips a container bug
+            // on some toolchains. The describe logic mirrors
+            // describeNode().
+            auto sel = Miro::Json::print(Miro::JSON {selector});
+            auto idJs = Miro::Json::print(Miro::JSON {idAttribute});
+            auto js =
+                "(function(){var sel=" + sel + ",ID=" + idJs
+                + ";function flat(s,n){s=(s||'').replace(/[\\n\\r\\t]/g,' ');"
+                  "return s.length>n?s.slice(0,n)+'...':s;}"
+                  "var els=document.querySelectorAll(sel);"
+                  "var lines=[els.length+' element(s) matching '+sel];"
+                  "for(var i=0;i<els.length;i++){var el=els[i];"
+                  "var p=[el.tagName.toLowerCase()];"
+                  "var a=el.getAttribute(ID);if(a)p.push('@'+a);"
+                  "if(el.id)p.push('#'+el.id);"
+                  "for(var j=0;j<el.classList.length;j++)p.push('.'+el.classList[j]);"
+                  "var t=el.getAttribute('type');if(t)p.push('type='+t);"
+                  "if(el.value)p.push('value=\"'+flat(String(el.value),40)+'\"');"
+                  "if(el.checked)p.push('[checked]');"
+                  "if(el.hasAttribute('disabled'))p.push('[disabled]');"
+                  "var tx=flat((el.textContent||'').trim(),60);"
+                  "if(tx)p.push('\"'+tx+'\"');"
+                  "lines.push('- '+p.join(' '));}"
+                  "return lines.join('\\n');})()";
 
-                return MCP::toolText(out);
-            });
+            return MCP::toolText(driver.evaluate<std::string>(js));
+        });
 
     addTool("click",
             "Click the element matching the selector (fires mousedown, "
