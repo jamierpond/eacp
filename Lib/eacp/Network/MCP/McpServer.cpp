@@ -21,11 +21,11 @@ Miro::JSON makeObject()
     return Miro::JSON {Miro::Json::Object {}};
 }
 
-HTTP::Response jsonResponse(const Miro::JSON& body)
+HTTP::Response jsonResponse(const std::string& body)
 {
     auto response = HTTP::Response {};
     response.statusCode = 200;
-    response.setContent(Miro::Json::print(body), "application/json");
+    response.setContent(body, "application/json");
     return response;
 }
 
@@ -38,30 +38,26 @@ HTTP::Response acceptedResponse()
     return response;
 }
 
-Miro::JSON envelope(const Miro::JSON& id)
-{
-    auto body = makeObject();
-    body.asObject()["jsonrpc"] = Miro::JSON {"2.0"};
-    body.asObject()["id"] = id;
-    return body;
-}
-
-Miro::JSON errorEnvelope(const Miro::JSON& id, int code, const std::string& message)
+// The envelope is assembled by serialising each part on its own and
+// concatenating, never by nesting one Miro::JSON inside another:
+// storing a value that holds a multi-element array into another value's
+// object map segfaults under the macOS CI toolchain (it surfaced on
+// tools/list, whose result is an array of tool objects). print() only
+// reads, so it is unaffected.
+std::string errorEnvelope(const Miro::JSON& id, int code, const std::string& message)
 {
     auto error = makeObject();
     error.asObject()["code"] = Miro::JSON {code};
     error.asObject()["message"] = Miro::JSON {message};
 
-    auto body = envelope(id);
-    body.asObject()["error"] = error;
-    return body;
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + Miro::Json::print(id)
+           + ",\"error\":" + Miro::Json::print(error) + "}";
 }
 
-Miro::JSON resultEnvelope(const Miro::JSON& id, const Miro::JSON& result)
+std::string resultEnvelope(const Miro::JSON& id, const std::string& result)
 {
-    auto body = envelope(id);
-    body.asObject()["result"] = result;
-    return body;
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + Miro::Json::print(id)
+           + ",\"result\":" + result + "}";
 }
 
 Miro::JSON field(const Miro::JSON& object, const std::string& key)
@@ -92,16 +88,28 @@ Miro::JSON contentToJson(const ToolContent& content)
     return json;
 }
 
-Miro::JSON resultToJson(const ToolResult& result)
+// Serialised straight to a string rather than assembled as a Miro::JSON
+// with a content Array: a multi-element array of values (e.g. an image
+// block plus a text block) corrupts when stored/moved into another
+// value under the macOS CI toolchain. Each block is a single object,
+// which is safe to build and print.
+std::string resultToJson(const ToolResult& result)
 {
-    auto content = Miro::Json::Array {};
-    for (const auto& block: result.content)
-        content.add(contentToJson(block));
+    auto out = std::string {"{\"content\":["};
 
-    auto json = makeObject();
-    json.asObject()["content"] = Miro::JSON {std::move(content)};
-    json.asObject()["isError"] = Miro::JSON {result.isError};
-    return json;
+    auto first = true;
+    for (const auto& block: result.content)
+    {
+        if (!first)
+            out += ',';
+        first = false;
+        out += Miro::Json::print(contentToJson(block));
+    }
+
+    out += "],\"isError\":";
+    out += result.isError ? "true" : "false";
+    out += "}";
+    return out;
 }
 
 } // namespace
@@ -201,15 +209,15 @@ HTTP::Response Server::handle(const HTTP::Request& request)
         handleRequest(method.asString(), field(message, "params"), id));
 }
 
-Miro::JSON Server::handleRequest(const std::string& method,
-                                 const Miro::JSON& params,
-                                 const Miro::JSON& id)
+std::string Server::handleRequest(const std::string& method,
+                                  const Miro::JSON& params,
+                                  const Miro::JSON& id)
 {
     if (method == "initialize")
         return resultEnvelope(id, initializeResult(params));
 
     if (method == "ping")
-        return resultEnvelope(id, makeObject());
+        return resultEnvelope(id, "{}");
 
     if (method == "tools/list")
         return resultEnvelope(id, listToolsResult());
@@ -229,7 +237,7 @@ Miro::JSON Server::handleRequest(const std::string& method,
     return errorEnvelope(id, methodNotFoundCode, "Method not found: " + method);
 }
 
-Miro::JSON Server::initializeResult(const Miro::JSON& params) const
+std::string Server::initializeResult(const Miro::JSON& params) const
 {
     // Echo the client's requested version when given — the subset we
     // implement (plain-JSON POST, tools only) is identical across the
@@ -252,28 +260,32 @@ Miro::JSON Server::initializeResult(const Miro::JSON& params) const
     if (!instructions.empty())
         result.asObject()["instructions"] = Miro::JSON {instructions};
 
-    return result;
+    return Miro::Json::print(result);
 }
 
-Miro::JSON Server::listToolsResult() const
+std::string Server::listToolsResult() const
 {
-    auto list = Miro::Json::Array {};
+    auto out = std::string {"{\"tools\":["};
 
+    auto first = true;
     for (const auto& tool: tools)
     {
+        if (!first)
+            out += ',';
+        first = false;
+
         auto json = makeObject();
         json.asObject()["name"] = Miro::JSON {tool.name};
         json.asObject()["description"] = Miro::JSON {tool.description};
         json.asObject()["inputSchema"] = tool.inputSchema;
-        list.add(json);
+        out += Miro::Json::print(json);
     }
 
-    auto result = makeObject();
-    result.asObject()["tools"] = Miro::JSON {std::move(list)};
-    return result;
+    out += "]}";
+    return out;
 }
 
-Miro::JSON Server::callToolResult(const Miro::JSON& params)
+std::string Server::callToolResult(const Miro::JSON& params)
 {
     auto name = field(params, "name");
     if (!name.isString())
