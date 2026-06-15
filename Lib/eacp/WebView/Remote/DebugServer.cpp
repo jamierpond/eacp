@@ -7,6 +7,7 @@
 
 #include <ResEmbed/ResEmbed.h>
 
+#include <filesystem>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -122,6 +123,12 @@ DebugServer::DebugServer(Graphics::WebView& webViewToUse,
     , driver(webViewToUse, bridgeToUse, makeDriverOptions(options))
     , mcp("eacp-debug-server", "1.0.0")
 {
+    recordingDir =
+        options.snapshotDir.empty()
+            ? (std::filesystem::current_path() / "test-results" / "recordings")
+                  .string()
+            : options.snapshotDir;
+
     installConsoleCapture();
     registerTools();
 
@@ -482,6 +489,51 @@ void DebugServer::registerTools()
             {
                 webView.loadURL(requiredString(args, "url"));
                 return MCP::toolText("navigation started");
+            });
+
+    addTool(
+        "start_recording",
+        "Begin recording the app window to an MP4 (the composited window, "
+        "so it captures whatever the app shows — page, GPU, native). "
+        "Recording runs while you keep issuing tool calls; finish with "
+        "stop_recording. macOS only; the window must be visible.",
+        R"({"type":"object","properties":{
+                "name":{"type":"string",
+                    "description":"output file stem, default 'recording'"},
+                "fps":{"type":"number","description":"frames per second, default 30"}}})",
+        [this](const Miro::JSON& args)
+        {
+            auto name = optionalString(args, "name", "recording");
+            auto path =
+                (std::filesystem::path {recordingDir} / (name + ".mp4")).string();
+
+            auto recOpts = Graphics::ScreenRecorder::Options {};
+            if (auto fps = field(args, "fps"); fps.isNumber())
+                recOpts.frameRateHz = static_cast<int>(fps.asNumber());
+
+            auto error = std::string {};
+            if (!recorder.start(webView, path, recOpts, &error))
+                return MCP::toolError(error);
+
+            return MCP::toolText("recording to " + path);
+        });
+
+    addTool("stop_recording",
+            "Finish the recording started by start_recording and return the "
+            "MP4 file path.",
+            emptySchema(),
+            [this](const Miro::JSON&)
+            {
+                if (!recorder.isRecording())
+                    return MCP::toolError("not recording");
+
+                auto path = recorder.stop();
+
+                auto ec = std::error_code {};
+                auto size = std::filesystem::file_size(path, ec);
+                auto note =
+                    ec ? std::string {} : " (" + std::to_string(size) + " bytes)";
+                return MCP::toolText("saved " + path + note);
             });
 }
 

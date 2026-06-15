@@ -1,6 +1,7 @@
 #pragma once
 
 #include <eacp/Core/Utils/Containers.h>
+#include <eacp/Graphics/Helpers/ScreenRecorder.h>
 #include <eacp/Network/HTTPServer/HttpServer.h>
 #include <eacp/Network/MCP/McpServer.h>
 #include <eacp/WebView/Test/AppDriver.h>
@@ -74,6 +75,8 @@ private:
     Test::AppDriver driver;
     MCP::Server mcp;
     HTTP::Server http;
+    Graphics::ScreenRecorder recorder;
+    std::string recordingDir;
     std::function<void(const std::string&)> previousFinishedHandler;
     bool busy = false;
 };

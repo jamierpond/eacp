@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <eacp/Core/Utils/Containers.h>
+#include "../Helpers/ScreenRecorder.h"
 #include "../Primitives/Primitives.h"
 #include "../View/View.h"
 #include <eacp/Core/App/App.h>
@@ -193,11 +194,29 @@ public:
     bool isCommandPressed() const;
     ModifierKeys getModifiers() const;
 
+    // Records this window's on-screen content to an MP4 at `path` —
+    // the composited window, so whatever it shows (WebView, GPU, native
+    // drawing). macOS only; returns false if it can't start (already
+    // recording, not visible, missing Screen Recording permission, or
+    // an unsupported platform). See Graphics::ScreenRecorder.
+    bool startScreenRecording(const std::string& path)
+    {
+        return screenRecorder.start(*this, path);
+    }
+
+    // Finishes the recording and returns the file path (empty if not
+    // recording). Blocks until the MP4 is flushed.
+    std::string stopScreenRecording() { return screenRecorder.stop(); }
+
+    bool isScreenRecording() const { return screenRecorder.isRecording(); }
+
     // Observable window events (e.g. key-focus changes); see WindowEvents.
     WindowEvents events;
 
 private:
     WindowOptions options;
+
+    ScreenRecorder screenRecorder;
 
     struct Native;
     Pimpl<Native> impl;
