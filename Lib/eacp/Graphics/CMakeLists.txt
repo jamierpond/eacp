@@ -64,7 +64,8 @@ if (APPLE)
                 "-framework Cocoa"
                 "-framework Carbon"
                 "-framework AVFoundation"
-                "-framework CoreMedia")
+                "-framework CoreMedia"
+                "-framework ScreenCaptureKit")
     endif ()
 elseif (WIN32)
     target_sources(eacp-graphics PRIVATE

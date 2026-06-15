@@ -3,123 +3,100 @@
 #include "../View/View.h"
 #include "../Window/Window.h"
 
-#include <eacp/Core/Threads/Timer.h>
-
-#include <dlfcn.h>
+#include <cmath>
 #include <filesystem>
-#include <memory>
+#include <string>
 
 #import <AVFoundation/AVFoundation.h>
 #import <Cocoa/Cocoa.h>
 #import <CoreMedia/CoreMedia.h>
+#import <ScreenCaptureKit/ScreenCaptureKit.h>
+
+@class EacpRecorderOutput;
 
 namespace eacp::Graphics
 {
 
-namespace
-{
-// CGWindowListCreateImage is obsoleted in the macOS 15 SDK (ScreenCapture
-// Kit is the supported replacement and the eventual migration target),
-// but the symbol is still present at runtime, so resolve it dynamically
-// to capture the composited window image without an SDK dependency on a
-// removed declaration.
-using CreateWindowImageFn = CGImageRef (*) (CGRect,
-                                            CGWindowListOption,
-                                            CGWindowID,
-                                            CGWindowImageOption);
-
-CGImageRef captureWindowImage(CGWindowID windowID)
-{
-    static auto* fn = reinterpret_cast<CreateWindowImageFn>(
-        dlsym(RTLD_DEFAULT, "CGWindowListCreateImage"));
-    if (!fn)
-        return nullptr;
-
-    return fn(CGRectNull,
-              kCGWindowListOptionIncludingWindow,
-              windowID,
-              kCGWindowImageBoundsIgnoreFraming | kCGWindowImageBestResolution);
-}
-} // namespace
-
+// Captures the window through ScreenCaptureKit (the supported window
+// capture API on modern macOS) and hands each delivered frame's pixel
+// buffer straight to AVAssetWriter — no intermediate image copy and no
+// reliance on the obsoleted CGWindowList APIs.
 struct ScreenRecorder::Native
 {
-    CGWindowID windowID = kCGNullWindowID;
-    int fps = 30;
-    int width = 0;
-    int height = 0;
-    long frameIndex = 0;
-    bool recording = false;
-    std::string path;
+    SCStream* stream = nil;
+    EacpRecorderOutput* output = nil;
+    dispatch_queue_t queue = nil;
 
     AVAssetWriter* writer = nil;
     AVAssetWriterInput* input = nil;
     AVAssetWriterInputPixelBufferAdaptor* adaptor = nil;
-    CVPixelBufferRef pixelBuffer = nullptr;
 
-    std::unique_ptr<Threads::Timer> timer;
+    bool recording = false;
+    bool sessionStarted = false;
+    int fps = 30;
+    std::string path;
 
-    ~Native() { releasePixelBuffer(); }
-
-    void releasePixelBuffer()
+    // Called on the capture queue for every delivered frame.
+    void handleSampleBuffer(CMSampleBufferRef sampleBuffer)
     {
-        if (pixelBuffer)
-        {
-            CVPixelBufferRelease(pixelBuffer);
-            pixelBuffer = nullptr;
-        }
-    }
-
-    // Captures the live composited window image. Returns nil when the
-    // window has nothing on screen or the process lacks permission.
-    CGImageRef copyWindowImage() const { return captureWindowImage(windowID); }
-
-    void appendImage(CGImageRef image)
-    {
-        if (!input.isReadyForMoreMediaData)
+        if (!recording || !CMSampleBufferDataIsReady(sampleBuffer))
             return;
 
-        CVPixelBufferLockBaseAddress(pixelBuffer, 0);
-
-        auto* base = CVPixelBufferGetBaseAddress(pixelBuffer);
-        auto bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer);
-        auto colorSpace = CGColorSpaceCreateDeviceRGB();
-        auto context = CGBitmapContextCreate(
-            base,
-            static_cast<std::size_t>(width),
-            static_cast<std::size_t>(height),
-            8,
-            bytesPerRow,
-            colorSpace,
-            kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
-
-        // Drawing into the pixel-buffer-backed context lands the frame
-        // the right way up: the context's bottom-left origin and
-        // CGContextDrawImage's flip cancel out. Scales if the window has
-        // since resized.
-        CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
-
-        CGContextRelease(context);
-        CGColorSpaceRelease(colorSpace);
-        CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
-
-        [adaptor appendPixelBuffer:pixelBuffer
-              withPresentationTime:CMTimeMake(frameIndex, fps)];
-        ++frameIndex;
-    }
-
-    void captureFrame()
-    {
-        if (!recording)
+        auto* attachments = (__bridge NSArray*) CMSampleBufferGetSampleAttachmentsArray(
+            sampleBuffer, false);
+        if (attachments.count == 0)
             return;
 
-        if (auto image = copyWindowImage())
+        // Only "complete" frames carry fresh pixels; idle / blank frames
+        // (sent when nothing changed) would just bloat the file.
+        auto status = static_cast<SCFrameStatus>(
+            [attachments[0][SCStreamFrameInfoStatus] integerValue]);
+        if (status != SCFrameStatusComplete)
+            return;
+
+        auto pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+        if (!pixelBuffer)
+            return;
+
+        auto pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+
+        // Start the movie's timeline at the first real frame, so the
+        // video plays back in wall-clock time.
+        if (!sessionStarted)
         {
-            appendImage(image);
-            CGImageRelease(image);
+            [writer startSessionAtSourceTime:pts];
+            sessionStarted = true;
         }
+
+        if (input.isReadyForMoreMediaData)
+            [adaptor appendPixelBuffer:pixelBuffer withPresentationTime:pts];
     }
 };
+
+} // namespace eacp::Graphics
+
+@interface EacpRecorderOutput : NSObject <SCStreamOutput, SCStreamDelegate>
+// Set by the recorder; ScreenRecorder::Native is private, so frames are
+// forwarded through a block rather than a typed back-pointer.
+@property (nonatomic, copy) void (^onScreenSample)(CMSampleBufferRef);
+@end
+
+@implementation EacpRecorderOutput
+- (void)stream:(SCStream*)stream
+    didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+                   ofType:(SCStreamOutputType)type
+{
+    if (type == SCStreamOutputTypeScreen && self.onScreenSample)
+        self.onScreenSample(sampleBuffer);
+}
+
+- (void)stream:(SCStream*)stream didStopWithError:(NSError*)error
+{
+}
+@end
+
+namespace eacp::Graphics
+{
 
 ScreenRecorder::ScreenRecorder() = default;
 ScreenRecorder::~ScreenRecorder()
@@ -160,6 +137,16 @@ namespace
         *error = message;
     return false;
 }
+
+// Blocks the caller until an async ScreenCaptureKit handler signals, or
+// the timeout elapses. SCKit completion handlers run on background
+// queues, so this never deadlocks the main thread.
+bool waitFor(dispatch_semaphore_t semaphore, double seconds)
+{
+    auto deadline =
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t) (seconds * NSEC_PER_SEC));
+    return dispatch_semaphore_wait(semaphore, deadline) == 0;
+}
 } // namespace
 
 bool ScreenRecorder::startWindow(void* nativeWindow,
@@ -170,92 +157,159 @@ bool ScreenRecorder::startWindow(void* nativeWindow,
     if (impl->recording)
         return fail(error, "ScreenRecorder: already recording");
 
-    auto* window = (__bridge NSWindow*) nativeWindow;
-    if (!window)
+    auto* nsWindow = (__bridge NSWindow*) nativeWindow;
+    if (!nsWindow)
         return fail(error, "ScreenRecorder: no native window to record");
 
-    impl->windowID = static_cast<CGWindowID>(window.windowNumber);
-    impl->fps = options.frameRateHz > 0 ? options.frameRateHz : 30;
-    impl->frameIndex = 0;
-    impl->path = path;
-
-    // The first capture both proves we can see the window (permission +
-    // visibility) and fixes the output dimensions.
-    auto firstImage = impl->copyWindowImage();
-    if (!firstImage)
-        return fail(error,
-                    "ScreenRecorder: could not capture the window — it must "
-                    "be visible and the process needs Screen Recording "
-                    "permission");
-
-    impl->width = static_cast<int>(CGImageGetWidth(firstImage));
-    impl->height = static_cast<int>(CGImageGetHeight(firstImage));
-
-    auto fsPath = std::filesystem::path {path};
-    if (fsPath.has_parent_path())
-        std::filesystem::create_directories(fsPath.parent_path());
-    std::filesystem::remove(fsPath);
-
-    auto* url = [NSURL fileURLWithPath:@(path.c_str())];
-    NSError* writerError = nil;
-    impl->writer = [AVAssetWriter assetWriterWithURL:url
-                                            fileType:AVFileTypeMPEG4
-                                               error:&writerError];
-    if (!impl->writer)
+    if (@available(macOS 12.3, *))
     {
-        CGImageRelease(firstImage);
-        return fail(error,
-                    std::string {"ScreenRecorder: "}
-                        + writerError.localizedDescription.UTF8String);
+        auto windowID = static_cast<CGWindowID>(nsWindow.windowNumber);
+        impl->fps = options.frameRateHz > 0 ? options.frameRateHz : 30;
+        impl->path = path;
+
+        // Find the on-screen window ScreenCaptureKit knows about. Empty
+        // content / a missing window means it isn't visible or the
+        // process lacks Screen Recording permission.
+        __block SCWindow* target = nil;
+        __block NSError* contentError = nil;
+        auto contentReady = dispatch_semaphore_create(0);
+        [SCShareableContent
+            getShareableContentWithCompletionHandler:^(SCShareableContent* content,
+                                                       NSError* err) {
+                if (err)
+                    contentError = err;
+                else
+                    for (SCWindow* candidate in content.windows)
+                        if (candidate.windowID == windowID)
+                        {
+                            target = candidate;
+                            break;
+                        }
+                dispatch_semaphore_signal(contentReady);
+            }];
+        waitFor(contentReady, 5.0);
+
+        if (contentError)
+            return fail(error,
+                        std::string {"ScreenRecorder: "}
+                            + contentError.localizedDescription.UTF8String);
+        if (!target)
+            return fail(error,
+                        "ScreenRecorder: could not find the window — it must "
+                        "be visible and the process needs Screen Recording "
+                        "permission");
+
+        auto scale = nsWindow.backingScaleFactor;
+        auto width = static_cast<int>(std::llround(target.frame.size.width * scale));
+        auto height = static_cast<int>(std::llround(target.frame.size.height * scale));
+        width -= width & 1; // H.264 wants even dimensions
+        height -= height & 1;
+        if (width <= 0 || height <= 0)
+            return fail(error, "ScreenRecorder: window has no size");
+
+        auto fsPath = std::filesystem::path {path};
+        if (fsPath.has_parent_path())
+            std::filesystem::create_directories(fsPath.parent_path());
+        std::filesystem::remove(fsPath);
+
+        auto* url = [NSURL fileURLWithPath:@(path.c_str())];
+        NSError* writerError = nil;
+        impl->writer = [AVAssetWriter assetWriterWithURL:url
+                                                fileType:AVFileTypeMPEG4
+                                                   error:&writerError];
+        if (!impl->writer)
+            return fail(error,
+                        std::string {"ScreenRecorder: "}
+                            + writerError.localizedDescription.UTF8String);
+
+        impl->input = [AVAssetWriterInput
+            assetWriterInputWithMediaType:AVMediaTypeVideo
+                           outputSettings:@{
+                               AVVideoCodecKey : AVVideoCodecTypeH264,
+                               AVVideoWidthKey : @(width),
+                               AVVideoHeightKey : @(height),
+                           }];
+        impl->input.expectsMediaDataInRealTime = YES;
+        impl->adaptor = [AVAssetWriterInputPixelBufferAdaptor
+            assetWriterInputPixelBufferAdaptorWithAssetWriterInput:impl->input
+                                       sourcePixelBufferAttributes:@{
+                                           (id) kCVPixelBufferPixelFormatTypeKey :
+                                               @(kCVPixelFormatType_32BGRA),
+                                       }];
+        [impl->writer addInput:impl->input];
+        if (![impl->writer startWriting])
+        {
+            impl->writer = nil;
+            impl->input = nil;
+            impl->adaptor = nil;
+            return fail(error, "ScreenRecorder: failed to start writing");
+        }
+
+        auto* config = [[SCStreamConfiguration alloc] init];
+        config.width = static_cast<size_t>(width);
+        config.height = static_cast<size_t>(height);
+        config.pixelFormat = kCVPixelFormatType_32BGRA;
+        config.minimumFrameInterval = CMTimeMake(1, impl->fps);
+        config.queueDepth = 6;
+        config.showsCursor = NO;
+
+        auto* filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:target];
+
+        impl->output = [[EacpRecorderOutput alloc] init];
+        auto* native = impl.get();
+        impl->output.onScreenSample = ^(CMSampleBufferRef sampleBuffer) {
+            native->handleSampleBuffer(sampleBuffer);
+        };
+        impl->queue =
+            dispatch_queue_create("ai.eacp.screenrecorder", DISPATCH_QUEUE_SERIAL);
+        impl->stream = [[SCStream alloc] initWithFilter:filter
+                                          configuration:config
+                                               delegate:impl->output];
+
+        NSError* addError = nil;
+        [impl->stream addStreamOutput:impl->output
+                                 type:SCStreamOutputTypeScreen
+                   sampleHandlerQueue:impl->queue
+                                error:&addError];
+        if (addError)
+        {
+            impl->stream = nil;
+            impl->output = nil;
+            impl->writer = nil;
+            impl->input = nil;
+            impl->adaptor = nil;
+            return fail(error,
+                        std::string {"ScreenRecorder: "}
+                            + addError.localizedDescription.UTF8String);
+        }
+
+        impl->recording = true;
+
+        __block NSError* startError = nil;
+        auto started = dispatch_semaphore_create(0);
+        [impl->stream startCaptureWithCompletionHandler:^(NSError* err) {
+            startError = err;
+            dispatch_semaphore_signal(started);
+        }];
+        waitFor(started, 5.0);
+
+        if (startError)
+        {
+            impl->recording = false;
+            impl->stream = nil;
+            impl->output = nil;
+            impl->writer = nil;
+            impl->input = nil;
+            impl->adaptor = nil;
+            return fail(error,
+                        std::string {"ScreenRecorder: "}
+                            + startError.localizedDescription.UTF8String);
+        }
+
+        return true;
     }
 
-    NSDictionary* videoSettings = @{
-        AVVideoCodecKey : AVVideoCodecTypeH264,
-        AVVideoWidthKey : @(impl->width),
-        AVVideoHeightKey : @(impl->height),
-    };
-    impl->input =
-        [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo
-                                           outputSettings:videoSettings];
-    impl->input.expectsMediaDataInRealTime = YES;
-
-    NSDictionary* bufferAttributes = @{
-        (id) kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
-        (id) kCVPixelBufferWidthKey : @(impl->width),
-        (id) kCVPixelBufferHeightKey : @(impl->height),
-    };
-    impl->adaptor = [AVAssetWriterInputPixelBufferAdaptor
-        assetWriterInputPixelBufferAdaptorWithAssetWriterInput:impl->input
-                                   sourcePixelBufferAttributes:bufferAttributes];
-
-    [impl->writer addInput:impl->input];
-    if (![impl->writer startWriting])
-    {
-        CGImageRelease(firstImage);
-        impl->writer = nil;
-        impl->input = nil;
-        impl->adaptor = nil;
-        return fail(error, "ScreenRecorder: failed to start writing");
-    }
-    [impl->writer startSessionAtSourceTime:kCMTimeZero];
-
-    CVPixelBufferCreate(kCFAllocatorDefault,
-                        static_cast<std::size_t>(impl->width),
-                        static_cast<std::size_t>(impl->height),
-                        kCVPixelFormatType_32BGRA,
-                        nullptr,
-                        &impl->pixelBuffer);
-
-    impl->recording = true;
-    impl->appendImage(firstImage);
-    CGImageRelease(firstImage);
-
-    auto* native = impl.get();
-    impl->timer =
-        std::make_unique<Threads::Timer>([native] { native->captureFrame(); },
-                                         impl->fps);
-
-    return true;
+    return fail(error, "ScreenRecorder: screen recording requires macOS 12.3+");
 }
 
 std::string ScreenRecorder::stop()
@@ -264,23 +318,32 @@ std::string ScreenRecorder::stop()
         return {};
 
     impl->recording = false;
-    impl->timer.reset();
+
+    if (@available(macOS 12.3, *))
+    {
+        auto stopped = dispatch_semaphore_create(0);
+        [impl->stream stopCaptureWithCompletionHandler:^(NSError*) {
+            dispatch_semaphore_signal(stopped);
+        }];
+        waitFor(stopped, 5.0);
+    }
 
     [impl->input markAsFinished];
 
-    auto semaphore = dispatch_semaphore_create(0);
+    auto finished = dispatch_semaphore_create(0);
     [impl->writer finishWritingWithCompletionHandler:^{
-        dispatch_semaphore_signal(semaphore);
+        dispatch_semaphore_signal(finished);
     }];
-    dispatch_semaphore_wait(
-        semaphore,
-        dispatch_time(DISPATCH_TIME_NOW, (int64_t) (10 * NSEC_PER_SEC)));
+    waitFor(finished, 10.0);
 
     auto path = impl->path;
-    impl->releasePixelBuffer();
+    impl->stream = nil;
+    impl->output = nil;
+    impl->queue = nil;
     impl->writer = nil;
     impl->input = nil;
     impl->adaptor = nil;
+    impl->sessionStarted = false;
 
     return path;
 }
