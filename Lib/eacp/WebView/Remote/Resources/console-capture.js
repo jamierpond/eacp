@@ -1,4 +1,4 @@
-// Installed at document-start by Remote::DebugServer. Captures console
+// Installed at document-start by Remote::WebViewTools. Captures console
 // output, uncaught errors, and unhandled promise rejections into a
 // bounded in-page buffer so the console_logs tool can read them
 // without devtools attached.

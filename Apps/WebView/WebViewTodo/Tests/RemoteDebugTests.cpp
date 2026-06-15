@@ -2,9 +2,11 @@
 
 #include <eacp/Core/Threads/EventLoop.h>
 #include <eacp/Core/Utils/Base64.h>
+#include <eacp/Core/Utils/Containers.h>
+#include <eacp/Graphics/Remote/WindowAutoAttach.h>
+#include <eacp/Graphics/Remote/WindowDebugServer.h>
 #include <eacp/Network/MCP/McpServer.h>
-#include <eacp/WebView/Remote/AutoAttach.h>
-#include <eacp/WebView/Remote/DebugServer.h>
+#include <eacp/WebView/Remote/WebViewTools.h>
 #include <eacp/WebView/Test/TestApp.h>
 #include <eacp/WebView/WebView/ElementIds.h>
 
@@ -48,6 +50,19 @@ MyApp& app()
 AppDriver& driver()
 {
     return testApp().driver();
+}
+
+// Builds the unified debug server the way an app does: a window-level
+// capture server (eacp-graphics-remote) enriched with this WebView's DOM
+// tools. The window-level screenshot/recording need a real on-screen
+// window + permission, so headless tests exercise the DOM half here; the
+// capture half is verified live against real apps.
+void addWebViewTools(eacp::Graphics::Remote::WindowDebugServer& server)
+{
+    auto tools = eacp::OwningPointer<eacp::Graphics::Remote::ServerExtension> {};
+    tools.create<eacp::WebView::Remote::WebViewTools>(app().webView,
+                                                      app().transport.getBridge());
+    server.addExtension(std::move(tools));
 }
 
 HTTP::Request postJson(const std::string& body)
@@ -147,7 +162,9 @@ auto tSelectorResolution = nano::test("Remote/elementIdSelectorResolution") = []
 
 auto tDebugPortPolicy = nano::test("Remote/debugPortPolicy") = []
 {
-    namespace Remote = eacp::WebView::Remote;
+    // The port policy lives with the window server now (the listen port
+    // is window-level, shared by the DOM tools layered on top).
+    namespace Remote = eacp::Graphics::Remote;
 
     // Unset -> the well-known default; "off" -> disabled; a number ->
     // that port (0 = ephemeral); garbage -> the default.
@@ -275,13 +292,14 @@ auto tDomNodeAtShorthand = test("Remote/domNodeResolvesAtShorthand") = []
     check(list.find("@todo-remove").attr("aria-label") == "Remove");
 };
 
-// --- DebugServer: full tool wiring against the live app, calling the
-// transport entry point directly (no sockets).
+// --- Window debug server + WebView DOM tools: full tool wiring against
+// the live app, calling the transport entry point directly (no sockets).
 
 auto tDebugServerDrivesApp = test("Remote/debugServerDrivesAppOverMcp") = []
 {
-    auto server = WebView::Remote::DebugServer {
-        app().webView, app().transport.getBridge(), {}};
+    auto server =
+        eacp::Graphics::Remote::WindowDebugServer {app().window, {.port = 0}};
+    addWebViewTools(server);
 
     auto count = server.handleMcp(
         postJson(toolCallBody(1, "count", R"({"selector":"@todo-item"})")));
@@ -307,17 +325,19 @@ auto tDebugServerDrivesApp = test("Remote/debugServerDrivesAppOverMcp") = []
     check(isToolError(missing));
 };
 
-auto tDebugServerScreenshotAndLogs =
-    test("Remote/debugServerScreenshotAndConsoleLogs") = []
+auto tDebugServerSnapshotAndLogs =
+    test("Remote/debugServerSnapshotAndConsoleLogs") = []
 {
-    auto server = WebView::Remote::DebugServer {
-        app().webView, app().transport.getBridge(), {}};
+    auto server =
+        eacp::Graphics::Remote::WindowDebugServer {app().window, {.port = 0}};
+    addWebViewTools(server);
 
-    auto shot = server.handleMcp(postJson(toolCallBody(1, "screenshot")));
-    auto image = firstContent(shot).asObject();
-    check(image.at("type").asString() == "image");
-    check(image.at("mimeType").asString() == "image/png");
-    check(!image.at("data").asString().empty());
+    // snapshot is the in-process page render — headless-friendly, unlike
+    // the window-level SCK screenshot (which needs a visible window +
+    // Screen Recording permission, verified live against real apps).
+    auto snap = server.handleMcp(
+        postJson(toolCallBody(1, "snapshot", R"({"name":"remote-test"})")));
+    check(firstText(snap).find(".png") != std::string::npos);
 
     driver().evaluate("(console.log('mcp-console-probe'), true)");
 
@@ -335,8 +355,9 @@ auto tDebugServerScreenshotAndLogs =
 
 auto tDebugServerOverHttp = test("Remote/debugServerAnswersOverRealHttp") = []
 {
-    auto server = WebView::Remote::DebugServer {
-        app().webView, app().transport.getBridge(), {}};
+    auto server =
+        eacp::Graphics::Remote::WindowDebugServer {app().window, {.port = 0}};
+    addWebViewTools(server);
     check(server.port() > 0);
 
     auto url = "http://127.0.0.1:" + std::to_string(server.port()) + "/mcp";

@@ -10,6 +10,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Cocoa/Cocoa.h>
 #import <CoreMedia/CoreMedia.h>
+#import <ImageIO/ImageIO.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 
 @class EacpRecorderOutput;
@@ -98,6 +99,172 @@ struct ScreenRecorder::Native
 namespace eacp::Graphics
 {
 
+namespace
+{
+void setError(std::string* error, const std::string& message)
+{
+    if (error)
+        *error = message;
+}
+
+[[nodiscard]] bool fail(std::string* error, const std::string& message)
+{
+    setError(error, message);
+    return false;
+}
+
+// Blocks the caller until an async ScreenCaptureKit handler signals, or
+// the timeout elapses. SCKit completion handlers run on background
+// queues, so this never deadlocks the main thread.
+bool waitFor(dispatch_semaphore_t semaphore, double seconds)
+{
+    auto deadline =
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t) (seconds * NSEC_PER_SEC));
+    return dispatch_semaphore_wait(semaphore, deadline) == 0;
+}
+
+struct ResolvedWindow
+{
+    SCWindow* window = nil;
+    int width = 0;
+    int height = 0;
+};
+
+// Blocking: find the on-screen window ScreenCaptureKit knows about and
+// compute its pixel dimensions. An empty content list / missing window
+// means it isn't visible or the process lacks Screen Recording
+// permission. Shared by the recorder and the one-shot capture.
+bool resolveWindow(NSWindow* nsWindow, ResolvedWindow& out, std::string* error)
+    API_AVAILABLE(macos(12.3))
+{
+    auto windowID = static_cast<CGWindowID>(nsWindow.windowNumber);
+
+    __block SCWindow* target = nil;
+    __block NSError* contentError = nil;
+    auto ready = dispatch_semaphore_create(0);
+    [SCShareableContent
+        getShareableContentWithCompletionHandler:^(SCShareableContent* content,
+                                                   NSError* err) {
+            if (err)
+                contentError = err;
+            else
+                for (SCWindow* candidate in content.windows)
+                    if (candidate.windowID == windowID)
+                    {
+                        target = candidate;
+                        break;
+                    }
+            dispatch_semaphore_signal(ready);
+        }];
+    waitFor(ready, 5.0);
+
+    if (contentError)
+        return fail(error,
+                    std::string {"ScreenRecorder: "}
+                        + contentError.localizedDescription.UTF8String);
+    if (!target)
+        return fail(error,
+                    "ScreenRecorder: could not find the window — it must be "
+                    "visible and the process needs Screen Recording permission");
+
+    auto scale = nsWindow.backingScaleFactor;
+    auto width = static_cast<int>(std::llround(target.frame.size.width * scale));
+    auto height = static_cast<int>(std::llround(target.frame.size.height * scale));
+    width -= width & 1; // H.264 / encoders want even dimensions
+    height -= height & 1;
+    if (width <= 0 || height <= 0)
+        return fail(error, "ScreenRecorder: window has no size");
+
+    out = {target, width, height};
+    return true;
+}
+
+Image cgImageToImage(CGImageRef cgImage, std::string* error)
+{
+    auto* data = [NSMutableData data];
+    auto destination = CGImageDestinationCreateWithData(
+        (__bridge CFMutableDataRef) data, (__bridge CFStringRef) @"public.png", 1, nullptr);
+    if (!destination)
+    {
+        setError(error, "ScreenRecorder: could not create a PNG encoder");
+        return {};
+    }
+
+    CGImageDestinationAddImage(destination, cgImage, nullptr);
+    auto encoded = CGImageDestinationFinalize(destination);
+    CFRelease(destination);
+
+    if (!encoded)
+    {
+        setError(error, "ScreenRecorder: PNG encode failed");
+        return {};
+    }
+
+    return Image::decode(static_cast<const std::uint8_t*>(data.bytes),
+                         static_cast<int>(data.length),
+                         error);
+}
+
+Image captureWindowImage(void* nativeWindow, std::string* error)
+{
+    auto* nsWindow = (__bridge NSWindow*) nativeWindow;
+    if (!nsWindow)
+    {
+        setError(error, "ScreenRecorder: no native window to capture");
+        return {};
+    }
+
+    if (@available(macOS 14, *))
+    {
+        auto resolved = ResolvedWindow {};
+        if (!resolveWindow(nsWindow, resolved, error))
+            return {};
+
+        auto* config = [[SCStreamConfiguration alloc] init];
+        config.width = static_cast<size_t>(resolved.width);
+        config.height = static_cast<size_t>(resolved.height);
+        config.pixelFormat = kCVPixelFormatType_32BGRA;
+        config.showsCursor = NO;
+
+        auto* filter =
+            [[SCContentFilter alloc] initWithDesktopIndependentWindow:resolved.window];
+
+        __block CGImageRef shot = nullptr;
+        __block NSError* shotError = nil;
+        auto ready = dispatch_semaphore_create(0);
+        [SCScreenshotManager
+            captureImageWithFilter:filter
+                     configuration:config
+                 completionHandler:^(CGImageRef image, NSError* err) {
+                     if (image)
+                         shot = (CGImageRef) CFRetain(image);
+                     shotError = err;
+                     dispatch_semaphore_signal(ready);
+                 }];
+        waitFor(ready, 5.0);
+
+        if (shotError || !shot)
+        {
+            setError(error,
+                     shotError ? std::string {"ScreenRecorder: "}
+                                     + shotError.localizedDescription.UTF8String
+                               : std::string {"ScreenRecorder: capture "
+                                              "returned no image"});
+            if (shot)
+                CFRelease(shot);
+            return {};
+        }
+
+        auto image = cgImageToImage(shot, error);
+        CFRelease(shot);
+        return image;
+    }
+
+    setError(error, "ScreenRecorder: window image capture requires macOS 14+");
+    return {};
+}
+} // namespace
+
 ScreenRecorder::ScreenRecorder() = default;
 ScreenRecorder::~ScreenRecorder()
 {
@@ -129,26 +296,6 @@ bool ScreenRecorder::start(View& view,
                        error);
 }
 
-namespace
-{
-[[nodiscard]] bool fail(std::string* error, const std::string& message)
-{
-    if (error)
-        *error = message;
-    return false;
-}
-
-// Blocks the caller until an async ScreenCaptureKit handler signals, or
-// the timeout elapses. SCKit completion handlers run on background
-// queues, so this never deadlocks the main thread.
-bool waitFor(dispatch_semaphore_t semaphore, double seconds)
-{
-    auto deadline =
-        dispatch_time(DISPATCH_TIME_NOW, (int64_t) (seconds * NSEC_PER_SEC));
-    return dispatch_semaphore_wait(semaphore, deadline) == 0;
-}
-} // namespace
-
 bool ScreenRecorder::startWindow(void* nativeWindow,
                                  const std::string& path,
                                  Options options,
@@ -163,49 +310,15 @@ bool ScreenRecorder::startWindow(void* nativeWindow,
 
     if (@available(macOS 12.3, *))
     {
-        auto windowID = static_cast<CGWindowID>(nsWindow.windowNumber);
         impl->fps = options.frameRateHz > 0 ? options.frameRateHz : 30;
         impl->path = path;
 
-        // Find the on-screen window ScreenCaptureKit knows about. Empty
-        // content / a missing window means it isn't visible or the
-        // process lacks Screen Recording permission.
-        __block SCWindow* target = nil;
-        __block NSError* contentError = nil;
-        auto contentReady = dispatch_semaphore_create(0);
-        [SCShareableContent
-            getShareableContentWithCompletionHandler:^(SCShareableContent* content,
-                                                       NSError* err) {
-                if (err)
-                    contentError = err;
-                else
-                    for (SCWindow* candidate in content.windows)
-                        if (candidate.windowID == windowID)
-                        {
-                            target = candidate;
-                            break;
-                        }
-                dispatch_semaphore_signal(contentReady);
-            }];
-        waitFor(contentReady, 5.0);
+        auto resolved = ResolvedWindow {};
+        if (!resolveWindow(nsWindow, resolved, error))
+            return false;
 
-        if (contentError)
-            return fail(error,
-                        std::string {"ScreenRecorder: "}
-                            + contentError.localizedDescription.UTF8String);
-        if (!target)
-            return fail(error,
-                        "ScreenRecorder: could not find the window — it must "
-                        "be visible and the process needs Screen Recording "
-                        "permission");
-
-        auto scale = nsWindow.backingScaleFactor;
-        auto width = static_cast<int>(std::llround(target.frame.size.width * scale));
-        auto height = static_cast<int>(std::llround(target.frame.size.height * scale));
-        width -= width & 1; // H.264 wants even dimensions
-        height -= height & 1;
-        if (width <= 0 || height <= 0)
-            return fail(error, "ScreenRecorder: window has no size");
+        auto width = resolved.width;
+        auto height = resolved.height;
 
         auto fsPath = std::filesystem::path {path};
         if (fsPath.has_parent_path())
@@ -253,7 +366,8 @@ bool ScreenRecorder::startWindow(void* nativeWindow,
         config.queueDepth = 6;
         config.showsCursor = NO;
 
-        auto* filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:target];
+        auto* filter =
+            [[SCContentFilter alloc] initWithDesktopIndependentWindow:resolved.window];
 
         impl->output = [[EacpRecorderOutput alloc] init];
         auto* native = impl.get();
@@ -346,6 +460,18 @@ std::string ScreenRecorder::stop()
     impl->sessionStarted = false;
 
     return path;
+}
+
+Image captureWindowImage(Window& window, std::string* error)
+{
+    return captureWindowImage(window.getHandle(), error);
+}
+
+Image captureViewImage(View& view, std::string* error)
+{
+    auto* nsView = (__bridge NSView*) view.getHandle();
+    return captureWindowImage(nsView ? (__bridge void*) nsView.window : nullptr,
+                              error);
 }
 
 } // namespace eacp::Graphics

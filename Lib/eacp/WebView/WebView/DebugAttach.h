@@ -2,6 +2,7 @@
 
 #include <eacp/Core/Utils/Containers.h>
 #include <eacp/Core/Utils/Singleton.h>
+#include <eacp/Graphics/Helpers/DebugAttach.h>
 
 #include <functional>
 
@@ -18,23 +19,20 @@ class WebView;
 namespace Detail
 {
 
-// Type-erased ownership handle for whatever a debug transport attaches
-// to a WebView + bridge pair (the remote MCP debug server, in
-// practice). Lives here so the core WebView lib stays free of any
-// dependency on eacp-webview-remote.
-struct DebugAttachment
-{
-    virtual ~DebugAttachment() = default;
-};
-
+// The DebugAttachment base + the Window-level hook live in
+// Graphics/Helpers/DebugAttach.h (capture is window-level, not WebView-
+// specific). This adds the WebView-level hook: a factory keyed on a
+// WebView + bridge pair, which the debug transport uses to contribute
+// DOM-driving tools to the app's window server.
 using DebugAttachFactory =
     std::function<OwningPointer<DebugAttachment>(WebView&, Miro::Bridge&)>;
 
 // Empty until a debug transport installs itself — AutoAttachRegister.cpp
-// does, when eacp_add_webview_app compiles the debug server into the
-// binary (EACP_DEBUG_SERVER: AUTO -> Debug builds only). WebViewBridge
-// consults this at construction and keeps the returned attachment
-// alive for its own lifetime.
+// does, when the app is built with the debug server enabled.
+// WebViewBridge consults this at construction; in the unified design the
+// returned attachment is usually empty (the window server owns the DOM
+// tools), but the hook keeps the per-bridge ownership point for
+// flexibility.
 inline DebugAttachFactory& debugAttachFactory()
 {
     return Singleton::get<DebugAttachFactory>();

@@ -105,3 +105,9 @@ endif ()
 set_default_target_setting(eacp-graphics)
 eacp_enable_unity_build(eacp-graphics)
 add_ide_sources(eacp-graphics)
+
+# The window debug/capture server (screenshot + recording over MCP),
+# usable by any app. Desktop only — it needs the capture backend.
+if ((APPLE AND NOT IOS) OR WIN32)
+    add_subdirectory(Remote)
+endif ()

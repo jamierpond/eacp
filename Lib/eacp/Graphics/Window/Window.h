@@ -4,10 +4,13 @@
 #include <optional>
 #include <string>
 #include <eacp/Core/Utils/Containers.h>
+#include "../Helpers/DebugAttach.h"
 #include "../Helpers/ScreenRecorder.h"
+#include "../Image/Image.h"
 #include "../Primitives/Primitives.h"
 #include "../View/View.h"
 #include <eacp/Core/App/App.h>
+#include <eacp/Core/App/AppEnvironment.h>
 
 namespace eacp::Graphics
 {
@@ -150,6 +153,12 @@ public:
 
     void setContentView(View& view);
 
+    // The View last passed to setContentView, or null if none. Lets the
+    // debug server route synthetic input (mouse/keyboard) to the app's
+    // content the same way the window server captures it — input attaches
+    // to the window, not to any one view type.
+    View* getContentView() { return contentView; }
+
     // Brings the window to the front and activates the app so it rises above
     // other applications. No-op under headless and on iOS.
     void toFront();
@@ -210,13 +219,37 @@ public:
 
     bool isScreenRecording() const { return screenRecorder.isRecording(); }
 
+    // One-shot capture of this window's on-screen content as an image —
+    // the composited window, same source as recording. Returns an invalid
+    // Image (operator bool == false) on failure; pass error for why. See
+    // Graphics::captureWindowImage.
+    Image captureImage(std::string* error = nullptr)
+    {
+        return captureWindowImage(*this, error);
+    }
+
     // Observable window events (e.g. key-focus changes); see WindowEvents.
     WindowEvents events;
 
 private:
+    // Consults the window debug-attach hook (DebugAttach.h) and keeps the
+    // returned attachment — the embedded MCP capture/debug server, when
+    // the app is built with it — alive for this window's lifetime. Each
+    // platform constructor calls this once the native window exists.
+    // Headless runs (test fixtures) opt out so no server spawns per
+    // fixture rebuild.
+    void attachDebugServer()
+    {
+        if (auto& factory = Detail::windowDebugAttachFactory();
+            factory && !Apps::getAppEnvironment().headless)
+            debugAttachment = factory(*this);
+    }
+
     WindowOptions options;
 
+    View* contentView = nullptr;
     ScreenRecorder screenRecorder;
+    OwningPointer<Detail::DebugAttachment> debugAttachment;
 
     struct Native;
     Pimpl<Native> impl;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <eacp/Core/Utils/Pimpl.h>
+#include <eacp/Graphics/Image/Image.h>
 
 #include <string>
 
@@ -77,5 +78,13 @@ private:
     struct Native;
     Pimpl<Native> impl;
 };
+
+// One-shot capture of the *composited* window image — the same window
+// server source the recorder uses, so it captures whatever the window
+// shows (WebView, GPU, native), not any one view's contents. Returns an
+// invalid Image (operator bool == false) and sets *error on failure.
+// Window::captureImage() wraps this. macOS only; other platforms fail.
+Image captureWindowImage(Window& window, std::string* error = nullptr);
+Image captureViewImage(View& view, std::string* error = nullptr);
 
 } // namespace eacp::Graphics

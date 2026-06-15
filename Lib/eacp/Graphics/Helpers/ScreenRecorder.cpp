@@ -45,4 +45,18 @@ bool ScreenRecorder::startWindow(void*, const std::string&, Options, std::string
     return false;
 }
 
+Image captureWindowImage(Window&, std::string* error)
+{
+    if (error)
+        *error = "ScreenRecorder: window image capture is only supported on macOS";
+    return {};
+}
+
+Image captureViewImage(View&, std::string* error)
+{
+    if (error)
+        *error = "ScreenRecorder: window image capture is only supported on macOS";
+    return {};
+}
+
 } // namespace eacp::Graphics
