@@ -167,15 +167,10 @@ bool resolveWindow(NSWindow* nsWindow, ResolvedWindow& out, std::string* error)
                     "WindowRecorder: could not find the window — it must be "
                     "visible and the process needs Screen Recording permission");
 
+    // Size from the NSWindow, not target.frame: a just-shown window isn't
+    // realized in the capture system yet, so SCWindow.frame reads back zero.
     auto scale = nsWindow.backingScaleFactor;
-
-    // SCShareableContent can report a just-shown window with a zero
-    // SCWindow.frame; the NSWindow always knows its own size, so fall back
-    // to it. The SCWindow is still the capture target either way.
-    auto frame = target.frame;
-    if (frame.size.width < 1 || frame.size.height < 1)
-        frame = nsWindow.frame;
-
+    auto frame = nsWindow.frame;
     auto width = static_cast<int>(std::llround(frame.size.width * scale));
     auto height = static_cast<int>(std::llround(frame.size.height * scale));
     width -= width & 1; // H.264 / encoders want even dimensions
