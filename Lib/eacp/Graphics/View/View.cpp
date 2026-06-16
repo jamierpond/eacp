@@ -234,6 +234,18 @@ void View::dispatchMouseEvent(const MouseEvent& event)
         target->handleMouseEvent(createLocalEvent(event, target, event.type));
 }
 
+void View::dispatchKeyEvent(const KeyEvent& event)
+{
+    // The single public entry for keyboard input (the native layer and the
+    // debug server's input tools both call this), routing to the protected
+    // handlers. Mirrors dispatchMouseEvent so no caller reaches keyDown/keyUp
+    // directly.
+    if (event.type == KeyEventType::Up)
+        keyUp(event);
+    else
+        keyDown(event);
+}
+
 void View::handleMouseEvent(const MouseEvent& event)
 {
     switch (event.type)

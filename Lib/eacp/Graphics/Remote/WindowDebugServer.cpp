@@ -242,12 +242,15 @@ void WindowDebugServer::registerWindowTools()
 
 void WindowDebugServer::registerInputTools()
 {
-    // Input attaches to the window too: these synthesize events straight
-    // into the content View's handlers (the same virtuals a real mouse /
-    // keyboard reach), so an agent can drive a GPU / native app — orbit a
-    // camera, drag a slider, draw on a canvas — not just capture it.
-    // Coordinates are window points, top-left origin. (WebView apps have
-    // the selector-based DOM tools for richer page driving.)
+    // Input attaches to the window too: these feed synthetic events through
+    // the content View's *real* dispatch (View::dispatchMouseEvent — the
+    // exact entry the native mouse uses), so they go through the same
+    // hit-testing, handlesMouseEvents gate and drag capture a human does.
+    // An agent can drive a GPU / native app — orbit a camera, drag a
+    // slider, draw on a canvas — through the identical path, and a view the
+    // user can't drive (one that didn't opt into mouse events) the agent
+    // can't either. Coordinates are window points, top-left origin.
+    // (WebView apps have the selector-based DOM tools for richer driving.)
 
     auto contentOr = [this]() -> View* { return windowRef.getContentView(); };
 
@@ -266,7 +269,7 @@ void WindowDebugServer::registerInputTools()
                 event.pos = {static_cast<float>(numberOr(args, "x", 0)),
                              static_cast<float>(numberOr(args, "y", 0))};
                 event.type = MouseEventType::Moved;
-                view->mouseMoved(event);
+                view->dispatchMouseEvent(event);
                 return MCP::toolText("moved");
             });
 
@@ -292,11 +295,11 @@ void WindowDebugServer::registerInputTools()
                 down.downPos = at;
                 down.type = MouseEventType::Down;
                 down.button = button;
-                view->mouseDown(down);
+                view->dispatchMouseEvent(down);
 
                 auto up = down;
                 up.type = MouseEventType::Up;
-                view->mouseUp(up);
+                view->dispatchMouseEvent(up);
 
                 Threads::runEventLoopFor(std::chrono::milliseconds {16});
                 return MCP::toolText("clicked");
@@ -334,7 +337,7 @@ void WindowDebugServer::registerInputTools()
             down.downPos = from;
             down.type = MouseEventType::Down;
             down.button = button;
-            view->mouseDown(down);
+            view->dispatchMouseEvent(down);
 
             auto prev = from;
             for (auto i = 1; i <= steps; ++i)
@@ -349,7 +352,7 @@ void WindowDebugServer::registerInputTools()
                 drag.delta = {cur.x - prev.x, cur.y - prev.y};
                 drag.type = MouseEventType::Dragged;
                 drag.button = button;
-                view->mouseDragged(drag);
+                view->dispatchMouseEvent(drag);
 
                 // Pump a frame so the change renders (and the recorder
                 // catches it) rather than jumping straight to the end.
@@ -362,7 +365,7 @@ void WindowDebugServer::registerInputTools()
             up.downPos = from;
             up.type = MouseEventType::Up;
             up.button = button;
-            view->mouseUp(up);
+            view->dispatchMouseEvent(up);
 
             return MCP::toolText("dragged over " + std::to_string(steps) + " steps");
         });
@@ -386,7 +389,7 @@ void WindowDebugServer::registerInputTools()
                 event.delta = {static_cast<float>(numberOr(args, "dx", 0)),
                                static_cast<float>(numberOr(args, "dy", 0))};
                 event.type = MouseEventType::Wheel;
-                view->mouseWheel(event);
+                view->dispatchMouseEvent(event);
 
                 Threads::runEventLoopFor(std::chrono::milliseconds {16});
                 return MCP::toolText("scrolled");
@@ -412,11 +415,11 @@ void WindowDebugServer::registerInputTools()
                 event.keyCode =
                     static_cast<std::uint16_t>(numberOr(args, "code", 0));
                 event.type = KeyEventType::Down;
-                view->keyDown(event);
+                view->dispatchKeyEvent(event);
 
                 auto up = event;
                 up.type = KeyEventType::Up;
-                view->keyUp(up);
+                view->dispatchKeyEvent(up);
 
                 Threads::runEventLoopFor(std::chrono::milliseconds {16});
                 return MCP::toolText("key sent");

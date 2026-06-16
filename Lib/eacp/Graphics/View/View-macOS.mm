@@ -201,13 +201,13 @@ namespace eacp::Graphics
 - (void)keyDown:(NSEvent*)event
 {
     auto e = eacp::Graphics::keyEventFrom(event, eacp::Graphics::KeyEventType::Down);
-    cppView->keyDown(e);
+    cppView->dispatchKeyEvent(e);
 }
 
 - (void)keyUp:(NSEvent*)event
 {
     auto e = eacp::Graphics::keyEventFrom(event, eacp::Graphics::KeyEventType::Up);
-    cppView->keyUp(e);
+    cppView->dispatchKeyEvent(e);
 }
 
 - (void)updateTrackingAreas

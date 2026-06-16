@@ -66,18 +66,6 @@ public:
     void* getHandle();
 
     virtual void paint(Context&) {};
-    virtual void mouseDown(const MouseEvent&) {}
-    virtual void mouseUp(const MouseEvent&) {}
-    virtual void mouseDragged(const MouseEvent&) {}
-    virtual void mouseMoved(const MouseEvent&) {}
-    virtual void mouseEntered(const MouseEvent&) {}
-    virtual void mouseExited(const MouseEvent&) {}
-
-    // Scroll wheel. event.delta carries the wheel movement (y vertical,
-    // x horizontal) in WHEEL_DELTA units.
-    virtual void mouseWheel(const MouseEvent&) {}
-    virtual void keyDown(const KeyEvent&) {}
-    virtual void keyUp(const KeyEvent&) {}
     virtual void resized();
 
     Rect getBounds() const;
@@ -108,7 +96,14 @@ public:
 
     virtual View* hitTest(const Point& point);
 
+    // The single public entry points for input — the exact ones the OS
+    // native layer calls. Everything (real events, agent injection, tests)
+    // goes through these, so input always passes the same hit-testing /
+    // handlesMouseEvents gate. The per-view handlers below are protected so
+    // nothing can route around that gate (which would let automation drive
+    // a view a human can't).
     void dispatchMouseEvent(const MouseEvent& event);
+    void dispatchKeyEvent(const KeyEvent& event);
 
     bool isHovering() const;
 
@@ -120,6 +115,26 @@ public:
     View* getParent() const { return parent; }
 
     void* getNativeLayer();
+
+protected:
+    // Per-view input handlers — override to react. Deliberately NOT public:
+    // input must enter through dispatchMouseEvent / dispatchKeyEvent (the
+    // same entry the OS uses) so it always passes the view's hit-testing and
+    // handlesMouseEvents gate. Making these public again would let an agent
+    // or test drive a view a real mouse/keyboard can't reach — the exact
+    // bug this guards against.
+    virtual void mouseDown(const MouseEvent&) {}
+    virtual void mouseUp(const MouseEvent&) {}
+    virtual void mouseDragged(const MouseEvent&) {}
+    virtual void mouseMoved(const MouseEvent&) {}
+    virtual void mouseEntered(const MouseEvent&) {}
+    virtual void mouseExited(const MouseEvent&) {}
+
+    // Scroll wheel. event.delta carries the wheel movement (y vertical,
+    // x horizontal) in WHEEL_DELTA units.
+    virtual void mouseWheel(const MouseEvent&) {}
+    virtual void keyDown(const KeyEvent&) {}
+    virtual void keyUp(const KeyEvent&) {}
 
 private:
     void handleMouseEvent(const MouseEvent& event);

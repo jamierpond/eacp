@@ -72,9 +72,7 @@ void addCube(Mesh& mesh, Vec3 center, float half, Vec3 color)
         auto faceCenter = center + face.normal * half;
 
         auto corner = [&](float du, float dv)
-        {
-            return faceCenter + face.u * (du * half) + face.v * (dv * half);
-        };
+        { return faceCenter + face.u * (du * half) + face.v * (dv * half); };
 
         mesh.vertices.add({corner(-1, -1), face.normal, color});
         mesh.vertices.add({corner(1, -1), face.normal, color});
@@ -159,6 +157,90 @@ struct LatticeShader final : ShaderProgram
         setFragment(float4(varying(color * shade), 1.0f));
     }
 };
+
+// A full-screen overlay quad. The glass shape is carved out procedurally in
+// the fragment stage, so the geometry is just two triangles in clip space.
+struct GlassVertex
+{
+    float position[2];
+    float uv[2];
+};
+
+constexpr GlassVertex glassQuad[] = {
+    {{-1.0f, -1.0f}, {0.0f, 1.0f}},
+    {{1.0f, -1.0f}, {1.0f, 1.0f}},
+    {{1.0f, 1.0f}, {1.0f, 0.0f}},
+    {{-1.0f, -1.0f}, {0.0f, 1.0f}},
+    {{1.0f, 1.0f}, {1.0f, 0.0f}},
+    {{-1.0f, 1.0f}, {0.0f, 0.0f}},
+};
+
+// A procedural "liquid glass" panel, blended over the lattice. It's a rounded
+// rectangle (signed-distance field) carrying a bright refractive rim, animated
+// caustic highlights and a drifting specular blob — all driven by a time
+// uniform so it stays alive. Translucent, so the lattice shows through.
+struct GlassShader final : ShaderProgram
+{
+    Uniform<Float> time;
+    Uniform<Float> aspect;
+
+    EACP_SHADER(time, aspect)
+
+    GlassShader() { compile(); }
+
+    void define() override
+    {
+        auto position = vertexInput(&GlassVertex::position);
+        auto uv = vertexInput(&GlassVertex::uv);
+
+        setPosition(float4(position, 0.0f, 1.0f));
+
+        auto coord = varying(uv);
+        auto px = (coord.x() - constant(0.5f)) * aspect;
+        auto py = coord.y() - constant(0.5f);
+
+        // Signed distance to a rounded rectangle (negative inside).
+        auto rad = constant(0.10f);
+        auto qx = abs(px) - constant(0.30f) + rad;
+        auto qy = abs(py) - constant(0.30f) + rad;
+        auto outside =
+            length(float2(max(qx, constant(0.0f)), max(qy, constant(0.0f))));
+        auto inside = min(max(qx, qy), constant(0.0f));
+        auto sdf = outside + inside - rad;
+
+        // Soft-edged panel coverage, and a bright fresnel-ish rim at the border.
+        auto panel =
+            constant(1.0f) - smoothstep(constant(-0.004f), constant(0.004f), sdf);
+        auto rim = smoothstep(constant(0.05f), constant(0.0f), abs(sdf));
+
+        // Animated liquid caustics — layered moving sine fields.
+        auto w1 = sin(px * constant(11.0f) + time * constant(1.1f))
+                  * sin(py * constant(11.0f) - time * constant(0.8f));
+        auto w2 = sin((px + py) * constant(16.0f) - time * constant(1.6f));
+        auto caustic = clamp(
+            w1 * constant(0.5f) + constant(0.5f), constant(0.0f), constant(1.0f));
+        auto spec = pow(caustic, constant(4.0f));
+
+        // A specular blob drifting across the surface.
+        auto bx = sin(time * constant(0.6f)) * constant(0.12f);
+        auto by = cos(time * constant(0.5f)) * constant(0.12f);
+        auto blob = smoothstep(
+            constant(0.16f), constant(0.0f), length(float2(px - bx, py - by)));
+
+        auto tint = float3(constant(0.50f), constant(0.68f), constant(0.95f));
+        auto white = float3(constant(1.0f), constant(1.0f), constant(1.0f));
+        auto highlight = spec * constant(0.5f) + rim * constant(0.9f)
+                         + blob * constant(0.5f) + w2 * constant(0.04f);
+        auto color = tint * constant(0.30f) + white * highlight;
+
+        auto alpha = panel
+                     * clamp(constant(0.16f) + highlight * constant(0.8f),
+                             constant(0.0f),
+                             constant(0.95f));
+
+        setFragment(float4(color, alpha));
+    }
+};
 } // namespace
 
 struct LatticeView final : GPUView
@@ -166,15 +248,27 @@ struct LatticeView final : GPUView
     LatticeView()
         : mesh(buildLattice())
     {
+        // Opt into mouse + keyboard input so a real mouse (and the agent,
+        // through the same dispatch path) can orbit/zoom it.
+        getProperties().handlesMouseEvents = true;
+        getProperties().grabsFocusOnMouseDown = true;
+
         setDepth(true);
         shader.setVertices(mesh.vertices.data(), mesh.vertices.size());
         shader.setIndices(mesh.indices.data(), mesh.indices.size());
         shader.prepare(sampleCount(), true);
+
+        // The glass overlay: no depth (it draws on top), blending on (it's
+        // translucent over the lattice).
+        glass.setVertices(glassQuad);
+        glass.prepare(sampleCount(), false, true);
+
         setContinuous(true);
     }
 
     void update(Threads::FrameTime time) override
     {
+        elapsed += static_cast<float>(time.delta);
         if (autoSpin && !dragging)
             yaw += idleSpinPerSecond * static_cast<float>(time.delta);
     }
@@ -182,15 +276,21 @@ struct LatticeView final : GPUView
     void render(Frame& frame) override
     {
         auto bounds = getLocalBounds();
+        auto aspect = bounds.h > 0.0f ? bounds.w / bounds.h : 1.0f;
 
         shader.yaw = yaw;
         shader.pitch = pitch;
         shader.distance = distance;
-        shader.aspect = bounds.h > 0.0f ? bounds.w / bounds.h : 1.0f;
+        shader.aspect = aspect;
         shader.lightDir = std::array {0.4f, 0.6f, 0.7f};
 
         auto pass = frame.beginPass({Graphics::Color {0.05f, 0.06f, 0.09f}});
         pass.draw(shader);
+
+        // Liquid-glass panel composited over the 3D scene in the same pass.
+        glass.time = elapsed;
+        glass.aspect = aspect;
+        pass.draw(glass);
     }
 
     // Interactivity — the same handlers a real mouse/keyboard reach, and
@@ -229,9 +329,11 @@ struct LatticeView final : GPUView
 
     Mesh mesh;
     LatticeShader shader;
+    GlassShader glass;
     float yaw = 0.6f;
     float pitch = 0.5f;
     float distance = 7.0f;
+    float elapsed = 0.0f;
     bool autoSpin = true;
     bool dragging = false;
 };
