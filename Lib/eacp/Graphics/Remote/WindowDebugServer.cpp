@@ -86,6 +86,27 @@ std::string defaultRecordingDir(const WindowDebugServerOptions& options)
     return (base / "test-results" / "recordings").string();
 }
 
+// Collects each id'd view in the subtree (depth-first) as a JSON object with
+// its window-space bounds — the native sibling of list_elements' output.
+void collectViews(View* view, Miro::Json::Array& out)
+{
+    if (auto& id = view->getId(); !id.empty())
+    {
+        auto b = view->getWindowBounds();
+
+        auto entry = Miro::JSON {Miro::Json::Object {}};
+        entry.asObject()["id"] = Miro::JSON {id};
+        entry.asObject()["x"] = Miro::JSON {static_cast<int>(b.x)};
+        entry.asObject()["y"] = Miro::JSON {static_cast<int>(b.y)};
+        entry.asObject()["w"] = Miro::JSON {static_cast<int>(b.w)};
+        entry.asObject()["h"] = Miro::JSON {static_cast<int>(b.h)};
+        out.add(std::move(entry));
+    }
+
+    for (auto* child: view->getSubviews())
+        collectViews(child, out);
+}
+
 } // namespace
 
 WindowDebugServer::WindowDebugServer(Graphics::Window& windowToUse,
@@ -255,16 +276,21 @@ void WindowDebugServer::registerInputTools()
             R"({"type":"object","properties":{
                 "x":{"type":"number"},"y":{"type":"number"}},
                 "required":["x","y"]})",
-            [this, contentOr](const Miro::JSON& args)
+            [contentOr](const Miro::JSON& args)
             {
                 auto* view = contentOr();
                 if (!view)
                     return MCP::toolError("no content view to receive input");
 
-                auto event = MouseEvent {};
-                event.pos = {static_cast<float>(numberOr(args, "x", 0)),
-                             static_cast<float>(numberOr(args, "y", 0))};
-                event.type = MouseEventType::Moved;
+                auto event = MouseEvent {
+                  .pos = {static_cast<float>(numberOr(args, "x", 0)),
+                          static_cast<float>(numberOr(args, "y", 0))},
+                  .downPos = {}, // not used for move
+                  .delta = {}, // not used for move
+                  .type = MouseEventType::Moved,
+                  .modifiers = {}, // not used for move
+                };
+
                 view->dispatchMouseEvent(event);
                 return MCP::toolText("moved");
             });
@@ -276,7 +302,7 @@ void WindowDebugServer::registerInputTools()
                 "x":{"type":"number"},"y":{"type":"number"},
                 "button":{"type":"number","description":"0 left, 1 right, 2 middle"}},
                 "required":["x","y"]})",
-            [this, contentOr](const Miro::JSON& args)
+            [contentOr](const Miro::JSON& args)
             {
                 auto* view = contentOr();
                 if (!view)
@@ -286,11 +312,13 @@ void WindowDebugServer::registerInputTools()
                                  static_cast<float>(numberOr(args, "y", 0))};
                 auto button = buttonOf(args);
 
-                auto down = MouseEvent {};
-                down.pos = at;
-                down.downPos = at;
-                down.type = MouseEventType::Down;
-                down.button = button;
+                auto down = MouseEvent {
+                  .pos = at,
+                  .downPos = at,
+                  .type = MouseEventType::Down,
+                  .button = button,
+                };
+
                 view->dispatchMouseEvent(down);
 
                 auto up = down;
@@ -328,11 +356,13 @@ void WindowDebugServer::registerInputTools()
             auto button = buttonOf(args);
             auto from = Point {static_cast<float>(fx), static_cast<float>(fy)};
 
-            auto down = MouseEvent {};
-            down.pos = from;
-            down.downPos = from;
-            down.type = MouseEventType::Down;
-            down.button = button;
+            auto down = MouseEvent {
+              .pos = from,
+              .downPos = from,
+              .type = MouseEventType::Down,
+              .button = button,
+            };
+
             view->dispatchMouseEvent(down);
 
             auto prev = from;
@@ -342,12 +372,14 @@ void WindowDebugServer::registerInputTools()
                 auto cur = Point {static_cast<float>(fx + (tx - fx) * t),
                                   static_cast<float>(fy + (ty - fy) * t)};
 
-                auto drag = MouseEvent {};
-                drag.pos = cur;
-                drag.downPos = from;
-                drag.delta = {cur.x - prev.x, cur.y - prev.y};
-                drag.type = MouseEventType::Dragged;
-                drag.button = button;
+                auto drag = MouseEvent {
+                  .pos = cur,
+                  .downPos = from,
+                  .delta = {cur.x - prev.x, cur.y - prev.y},
+                  .type = MouseEventType::Dragged,
+                  .button = button,
+                };
+
                 view->dispatchMouseEvent(drag);
 
                 // Pump a frame so the change renders (and the recorder
@@ -356,11 +388,13 @@ void WindowDebugServer::registerInputTools()
                 prev = cur;
             }
 
-            auto up = MouseEvent {};
-            up.pos = prev;
-            up.downPos = from;
-            up.type = MouseEventType::Up;
-            up.button = button;
+            auto up = MouseEvent {
+              .pos = prev,
+              .downPos = from,
+              .type = MouseEventType::Up,
+              .button = button,
+            };
+
             view->dispatchMouseEvent(up);
 
             return MCP::toolText("dragged over " + std::to_string(steps) + " steps");
@@ -379,12 +413,14 @@ void WindowDebugServer::registerInputTools()
                 if (!view)
                     return MCP::toolError("no content view to receive input");
 
-                auto event = MouseEvent {};
-                event.pos = {static_cast<float>(numberOr(args, "x", 0)),
-                             static_cast<float>(numberOr(args, "y", 0))};
-                event.delta = {static_cast<float>(numberOr(args, "dx", 0)),
-                               static_cast<float>(numberOr(args, "dy", 0))};
-                event.type = MouseEventType::Wheel;
+                auto event = MouseEvent {
+                  .pos = {static_cast<float>(numberOr(args, "x", 0)),
+                          static_cast<float>(numberOr(args, "y", 0))},
+                  .delta = {static_cast<float>(numberOr(args, "dx", 0)),
+                            static_cast<float>(numberOr(args, "dy", 0))},
+                  .type = MouseEventType::Wheel,
+                };
+
                 view->dispatchMouseEvent(event);
 
                 Threads::runEventLoopFor(std::chrono::milliseconds {16});
@@ -399,18 +435,21 @@ void WindowDebugServer::registerInputTools()
                 "key":{"type":"string"},
                 "code":{"type":"number"}},
                 "required":["key"]})",
-            [this, contentOr](const Miro::JSON& args)
+            [contentOr](const Miro::JSON& args)
             {
                 auto* view = contentOr();
                 if (!view)
                     return MCP::toolError("no content view to receive input");
 
-                auto event = KeyEvent {};
-                event.characters = optionalString(args, "key");
-                event.charactersIgnoringModifiers = event.characters;
-                event.keyCode =
-                    static_cast<std::uint16_t>(numberOr(args, "code", 0));
-                event.type = KeyEventType::Down;
+                auto chars = optionalString(args, "key");
+
+                auto event = KeyEvent {
+                  .characters = chars,
+                  .charactersIgnoringModifiers = chars,
+                  .keyCode = static_cast<std::uint16_t>(numberOr(args, "code", 0)),
+                  .type = KeyEventType::Down,
+                };
+
                 view->dispatchKeyEvent(event);
 
                 auto up = event;
@@ -419,6 +458,65 @@ void WindowDebugServer::registerInputTools()
 
                 Threads::runEventLoopFor(std::chrono::milliseconds {16});
                 return MCP::toolText("key sent");
+            });
+
+    addTool("list_views",
+            "List the views tagged with an id via View::setId, one per line: "
+            "id and window-space bounds [x,y w x h]. The native analogue of "
+            "list_elements — pick a target, then drive it with click_view.",
+            emptySchema(),
+            [this](const Miro::JSON&)
+            {
+                auto* content = windowRef.getContentView();
+                if (!content)
+                    return MCP::toolError("no content view");
+
+                auto views = Miro::Json::Array {};
+                collectViews(content, views);
+
+                auto json = Miro::JSON {std::move(views)};
+                return MCP::toolText(Miro::Json::print(json, 2));
+            });
+
+    addTool("click_view",
+            "Click the centre of the view with the given id (set via "
+            "View::setId): resolves the id to a window point and dispatches a "
+            "real mouseDown + mouseUp there, so it passes the same hit-testing "
+            "a human click does. Saves computing pixel coordinates by hand.",
+            R"({"type":"object","properties":{
+                "id":{"type":"string"}},
+                "required":["id"]})",
+            [this](const Miro::JSON& args)
+            {
+                auto* content = windowRef.getContentView();
+                if (!content)
+                    return MCP::toolError("no content view to receive input");
+
+                auto id = optionalString(args, "id");
+                auto* view = content->findChildById(id);
+                if (!view)
+                    return MCP::toolError("no view with id '" + id + "'");
+
+                auto bounds = view->getWindowBounds();
+                auto at = Point {bounds.x + bounds.w / 2.0f,
+                                 bounds.y + bounds.h / 2.0f};
+
+                auto down = MouseEvent {
+                  .pos = at,
+                  .downPos = at,
+                  .type = MouseEventType::Down,
+                };
+
+                content->dispatchMouseEvent(down);
+
+                auto up = down;
+                up.type = MouseEventType::Up;
+                content->dispatchMouseEvent(up);
+
+                Threads::runEventLoopFor(std::chrono::milliseconds {16});
+                return MCP::toolText("clicked view '" + id + "' at "
+                                     + std::to_string(static_cast<int>(at.x)) + ","
+                                     + std::to_string(static_cast<int>(at.y)));
             });
 }
 

@@ -27,6 +27,38 @@ View& View::setDraggable(bool value)
     return *this;
 }
 
+View& View::setId(std::string newId)
+{
+    viewId = std::move(newId);
+    return *this;
+}
+
+View* View::findChildById(const std::string& target)
+{
+    if (viewId == target)
+        return this;
+
+    for (auto* child: subviews)
+        if (auto* found = child->findChildById(target))
+            return found;
+
+    return nullptr;
+}
+
+Rect View::getWindowBounds() const
+{
+    auto bounds = getBounds();
+
+    for (auto* ancestor = parent; ancestor != nullptr; ancestor = ancestor->parent)
+    {
+        auto parentBounds = ancestor->getBounds();
+        bounds.x += parentBounds.x;
+        bounds.y += parentBounds.y;
+    }
+
+    return bounds;
+}
+
 void View::removeFromParent()
 {
     if (parent != nullptr)

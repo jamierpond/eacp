@@ -108,18 +108,23 @@ Miro::JSON resultToJson(const ToolResult& result)
 
 ToolContent textContent(std::string text)
 {
-    auto content = ToolContent {};
-    content.type = "text";
-    content.text = std::move(text);
+    auto content = ToolContent {
+      .type = "text",
+      .text = std::move(text),
+    };
+
     return content;
 }
 
 ToolContent imageContent(std::string base64Data, std::string mimeType)
 {
-    auto content = ToolContent {};
-    content.type = "image";
-    content.data = std::move(base64Data);
-    content.mimeType = std::move(mimeType);
+    auto content = ToolContent {
+      .type = "image",
+      .text = {},
+      .data = std::move(base64Data),
+      .mimeType = std::move(mimeType),
+    };
+
     return content;
 }
 

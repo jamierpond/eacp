@@ -113,3 +113,32 @@ auto tKeyDispatch = test("View/dispatchKeyEventReachesHandler") = []
 
     check(probe.keysDown == 1);
 };
+
+// The native @id locator: setId/findChildById find a view by name, and
+// getWindowBounds walks the parent chain so the debug server's click_view can
+// turn an id into a window point — no hand-computed pixel coordinates.
+auto tViewIdLocator = test("View/idLocatorAndWindowBounds") = []
+{
+    auto root = View {};
+    root.setBounds({0, 0, 400, 400});
+
+    auto panel = View {};
+    panel.setId("panel").setBounds({50, 60, 200, 150});
+
+    auto child = View {};
+    child.setId("child").setBounds({10, 20, 80, 40});
+
+    panel.addSubview(child);
+    root.addSubview(panel);
+
+    check(root.findChildById("panel") == &panel);
+    check(root.findChildById("child") == &child);
+    check(root.findChildById("missing") == nullptr);
+
+    // Window bounds = local bounds summed up the parent chain.
+    auto bounds = child.getWindowBounds();
+    check(bounds.x == 60); // 50 + 10
+    check(bounds.y == 80); // 60 + 20
+    check(bounds.w == 80);
+    check(bounds.h == 40);
+};

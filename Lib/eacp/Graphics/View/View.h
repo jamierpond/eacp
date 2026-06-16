@@ -3,6 +3,8 @@
 #include <eacp/Core/Utils/Common.h>
 #include <eacp/Core/Utils/Containers.h>
 
+#include <string>
+
 #include "../Graphics/GraphicsContext.h"
 #include "../Layers/Layer.h"
 #include "../Graphics/Keyboard.h"
@@ -107,6 +109,23 @@ public:
 
     Point getMousePosition() const;
 
+    // A stable, app-assigned id — the native analogue of the WebView
+    // @id / data-testid handle. Empty by default; apps tag the views they
+    // want addressable from outside (tests, the debug server's list_views /
+    // click_view tools). An id is only a locator: the tools resolve it to a
+    // window point and drive through dispatchMouseEvent, so it never routes
+    // around the hit-testing / handlesMouseEvents gate.
+    View& setId(std::string newId);
+    const std::string& getId() const { return viewId; }
+
+    // Depth-first search of this view's subtree (self included) for the first
+    // view with this id, or null. Ids aren't enforced unique — tree order wins.
+    View* findChildById(const std::string& target);
+
+    // This view's bounds in window (root) coordinates: getBounds() walked up
+    // the parent chain. Turns a located view into a click point.
+    Rect getWindowBounds() const;
+
     virtual View* hitTest(const Point& point);
 
     // The single public entry points for input — the exact ones the OS
@@ -164,6 +183,7 @@ private:
     void viewAdded(View& view);
     void viewRemoved(View& view);
 
+    std::string viewId;
     Vector<View*> subviews;
     Vector<Layer*> layers;
     View* parent = nullptr;
