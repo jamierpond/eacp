@@ -17,27 +17,13 @@ struct ScreenRecorderOptions
     int frameRateHz = 30;
 };
 
-// Records the on-screen content of a window to an H.264 MP4 file.
+// Records a window's on-screen content to an H.264 MP4. It captures the
+// *composited* window from the window server — whatever the window shows
+// (WebView, GPU, native), all at once — and depends on neither the WebView
+// nor the debug server. Window::startScreenRecording() wraps it.
 //
-// It captures the *composited* window image from the window server, so
-// it records whatever the window actually shows — WebView, GPU drawing,
-// native views, all at once — and is therefore not tied to any single
-// view type. It depends on neither the WebView nor the agent debug
-// server; it's a plain Graphics API any app can use:
-//
-//     Graphics::ScreenRecorder recorder;
-//     recorder.start(window, "session.mp4");
-//     ... app runs ...
-//     recorder.stop();
-//
-// Window::startScreenRecording() wraps this for convenience, and the
-// agent debug server drives one of these when a debug-mode build is
-// asked to record — but those are just callers.
-//
-// macOS only today; on other platforms start() returns false with an
-// explanatory error. The window must be visible (the window server has
-// nothing to capture otherwise), and on recent macOS the process needs
-// Screen Recording permission.
+// macOS only; start() returns false with an error elsewhere. The window
+// must be visible, and recent macOS needs Screen Recording permission.
 class ScreenRecorder
 {
 public:
@@ -79,11 +65,9 @@ private:
     Pimpl<Native> impl;
 };
 
-// One-shot capture of the *composited* window image — the same window
-// server source the recorder uses, so it captures whatever the window
-// shows (WebView, GPU, native), not any one view's contents. Returns an
-// invalid Image (operator bool == false) and sets *error on failure.
-// Window::captureImage() wraps this. macOS only; other platforms fail.
+// One-shot capture of the *composited* window image — same source as the
+// recorder. Returns an invalid Image (operator bool == false) and sets
+// *error on failure. Window::captureImage() wraps this. macOS only.
 Image captureWindowImage(Window& window, std::string* error = nullptr);
 Image captureViewImage(View& view, std::string* error = nullptr);
 

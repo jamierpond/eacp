@@ -81,12 +81,12 @@ public:
     HTTP::Response handle(const HTTP::Request& request);
 
 private:
-    std::string handleRequest(const std::string& method,
-                              const Miro::JSON& params,
-                              const Miro::JSON& id);
-    std::string initializeResult(const Miro::JSON& params) const;
-    std::string listToolsResult() const;
-    std::string callToolResult(const Miro::JSON& params);
+    Miro::JSON handleRequest(const std::string& method,
+                             const Miro::JSON& params,
+                             const Miro::JSON& id);
+    Miro::JSON initializeResult(const Miro::JSON& params) const;
+    Miro::JSON listToolsResult() const;
+    Miro::JSON callToolResult(const Miro::JSON& params);
 
     std::string name;
     std::string version;

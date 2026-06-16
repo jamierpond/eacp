@@ -242,15 +242,11 @@ void WindowDebugServer::registerWindowTools()
 
 void WindowDebugServer::registerInputTools()
 {
-    // Input attaches to the window too: these feed synthetic events through
-    // the content View's *real* dispatch (View::dispatchMouseEvent — the
-    // exact entry the native mouse uses), so they go through the same
-    // hit-testing, handlesMouseEvents gate and drag capture a human does.
-    // An agent can drive a GPU / native app — orbit a camera, drag a
-    // slider, draw on a canvas — through the identical path, and a view the
-    // user can't drive (one that didn't opt into mouse events) the agent
-    // can't either. Coordinates are window points, top-left origin.
-    // (WebView apps have the selector-based DOM tools for richer driving.)
+    // These feed synthetic events through the content View's *real* dispatch
+    // (View::dispatchMouseEvent — the exact entry the native mouse uses), so
+    // they pass the same hit-testing and handlesMouseEvents gate a human does:
+    // an agent can't drive a view the user can't. Coordinates are window
+    // points, top-left origin.
 
     auto contentOr = [this]() -> View* { return windowRef.getContentView(); };
 
