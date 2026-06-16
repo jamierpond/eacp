@@ -1,6 +1,7 @@
 #include "App.h"
 
 #include <eacp/WebView/Test/TestApp.h>
+#include <eacp/WebView/Test/TestRecording.h>
 
 #include <NanoTest/NanoTest.h>
 
@@ -81,10 +82,14 @@ auto tSeedsThreeTodos = test("WebViewTodo/seedsThreeTodosOnStartup") = []
 
 auto tAddsNewTodo = test("WebViewTodo/addsNewTodoViaForm") = []
 {
+    auto video = ScopedTestVideo {driver(), "addsNewTodoViaForm"};
+
     auto before = driver().count(itemSelector);
 
     driver().fill(inputSelector, "Buy milk");
+    settle();
     driver().click(addSelector);
+    settle();
 
     check(driver().count(itemSelector) == before + 1);
     check(driver().text(lastItemDescendant(textSelector)) == "Buy milk");
@@ -93,9 +98,12 @@ auto tAddsNewTodo = test("WebViewTodo/addsNewTodoViaForm") = []
 auto tToggleFlipsCompletion =
     test("WebViewTodo/toggleFlipsCompletionAndUpdatesFooter") = []
 {
+    auto video = ScopedTestVideo {driver(), "toggleFlipsCompletionAndUpdatesFooter"};
+
     auto before = std::stoi(driver().text(remainingSelector));
 
     driver().click(firstItemDescendant(toggleSelector));
+    settle();
 
     auto remaining = std::stoi(driver().text(remainingSelector));
     check(remaining == before - 1);
@@ -103,9 +111,12 @@ auto tToggleFlipsCompletion =
 
 auto tRemovingTodo = test("WebViewTodo/removingTodoDecrementsCount") = []
 {
+    auto video = ScopedTestVideo {driver(), "removingTodoDecrementsCount"};
+
     auto before = driver().count(itemSelector);
 
     driver().click(firstItemDescendant(removeSelector));
+    settle();
 
     check(driver().count(itemSelector) == before - 1);
 };

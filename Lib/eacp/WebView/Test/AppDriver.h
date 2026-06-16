@@ -3,6 +3,7 @@
 #include "DomNode.h"
 
 #include <eacp/Core/Threads/Async.h>
+#include <eacp/Graphics/Helpers/WindowRecorder.h>
 #include <eacp/Graphics/Image/Image.h>
 #include <Miro/Miro.h>
 
@@ -203,6 +204,21 @@ public:
     SnapshotResult snapshot(const std::string& name,
                             const SnapshotOptions& options = {});
 
+    // Records the app window (the WebView's window) to `path` as an MP4
+    // until stopRecording() or this driver is destroyed. Unlike
+    // screenshot()/snapshot() — which render the page in-process — this
+    // captures the composited on-screen window, so it needs a *visible*
+    // window: it returns false (setting *error) under headless test runs,
+    // on non-macOS, or without Screen Recording permission. Parent
+    // directories of `path` are created.
+    bool startRecording(const std::string& path, std::string* error = nullptr);
+
+    // Finishes the MP4 and returns its path (empty if not recording).
+    // Blocks until the file is flushed.
+    std::string stopRecording();
+
+    bool isRecording() const;
+
     template <typename Fn>
     auto withSnapshot(const std::string& name,
                       Fn&& action,
@@ -245,6 +261,7 @@ private:
     Miro::Bridge& bridge;
     std::optional<int> defaultTimeoutMs;
     std::string snapshotDir;
+    Graphics::WindowRecorder recorder;
 
     Threads::AsyncPromise<> firstNavigationPromise;
     Threads::Async<> firstNavigation;

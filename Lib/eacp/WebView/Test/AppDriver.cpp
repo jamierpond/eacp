@@ -665,6 +665,21 @@ ScreenshotResult AppDriver::screenshot(const ScreenshotOptions& options)
     return result;
 }
 
+bool AppDriver::startRecording(const std::string& path, std::string* error)
+{
+    return recorder.start(webView, path, {}, error);
+}
+
+std::string AppDriver::stopRecording()
+{
+    return recorder.stop();
+}
+
+bool AppDriver::isRecording() const
+{
+    return recorder.isRecording();
+}
+
 SnapshotResult AppDriver::snapshot(const std::string& name,
                                    const SnapshotOptions& options)
 {
