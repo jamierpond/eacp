@@ -118,7 +118,7 @@ If the chosen port is taken (e.g. a second instance), the server falls
 back to an ephemeral port and logs the actual one:
 
 ```
-DebugServer: MCP endpoint at http://127.0.0.1:49184/mcp
+WindowDebugServer: MCP endpoint at http://127.0.0.1:49184/mcp
 ```
 
 So when running more than one app, read the port from the launch log
@@ -179,14 +179,23 @@ take a `selector`; interaction tools accept an optional `timeout_ms`.
 Errors (missing selector, JS exception) come back as a tool result with
 `isError: true`, not a transport failure.
 
-### Orientation
+### Capture (window-level — any app)
+These attach to the app's **window**, so they work for any eacp app — GPU,
+native drawing, SVG, WebView — capturing the *composited* window. macOS
+needs Screen Recording permission and a visible window.
+- **`screenshot`** — PNG of the composited app window, as image content.
+- **`start_recording`** `{name?, fps?}` — begin recording the window to an
+  MP4 (`name` is the file stem or an absolute path; default 30 fps).
+  Recording runs while you keep issuing tool calls.
+- **`stop_recording`** — finish the MP4 and return its path.
+
+### Orientation (WebView)
 - **`page_info`** — URL, title, load state, and the element-id attribute.
 - **`list_elements`** `{selector?}` — one line per match: tag, `@id`,
   classes, value/checked, text. Defaults to every tagged element.
 - **`dom`** `{selector?}` — outer HTML of the match (or whole document).
-- **`screenshot`** — PNG of the rendered page, returned as image content.
-- **`snapshot`** `{name}` — writes `<name>.html` + `<name>.png` to the
-  snapshot dir and returns the paths.
+- **`snapshot`** `{name}` — writes `<name>.html` + `<name>.png` (in-process
+  page render, works headless) to the snapshot dir and returns the paths.
 - **`console_logs`** `{clear?}` — captured `console.*` output, uncaught
   errors, and unhandled promise rejections from the page.
 
@@ -278,7 +287,7 @@ resolved independently.
 |---|---|
 | `EACP_AGENT_HARNESS` | the `build/agentharness/<Target>` launcher |
 | `EACP_ASAN` | AddressSanitizer on app executables |
-| `EACP_DEBUG_SERVER` | the embedded MCP debug server (WebView apps) |
+| `EACP_DEBUG_SERVER` | the embedded MCP debug server (window capture for any app; WebView DOM tools when present) |
 
 Runtime: `EACP_DEBUG_PORT` (port / `off`), `EACP_NO_DEBUGGER=1` (skip the
 debugger in the launcher).
@@ -286,22 +295,38 @@ debugger in the launcher).
 Per-app opt-outs on `eacp_add_webview_app(...)`: `NO_ASAN`,
 `NO_DEBUG_SERVER`.
 
-For a hand-rolled (non-WebView) executable target:
+For a hand-rolled (non-WebView) executable target, opt into the whole set
+in one call — launcher, ASan, and the window capture/MCP server, so the
+app can be screenshotted / recorded over MCP with no app-code changes:
 
 ```cmake
 add_executable(MyTool Main.cpp)
-eacp_add_agent_harness(MyTool)   # the launcher
-eacp_enable_agent_asan(MyTool)   # and/or ASan, independently
+eacp_enable_dev_affordances(MyTool)   # launcher + ASan + window MCP server
+```
+
+Or pick them individually:
+
+```cmake
+eacp_add_agent_harness(MyTool)            # the launcher
+eacp_enable_agent_asan(MyTool)            # ASan
+eacp_enable_window_debug_server(MyTool)   # screenshot + recording over MCP
 ```
 
 ---
 
 ## Where this lives in the source
 
-- `CMake/EacpAgentHarness.cmake` — launcher + ASan functions and switches.
+- `CMake/EacpAgentHarness.cmake` — launcher + ASan + window-debug-server
+  functions and switches (`eacp_enable_dev_affordances`).
 - `Lib/eacp/Network/MCP/` — the generic MCP server primitive.
-- `Lib/eacp/WebView/Remote/` — `DebugServer` (tools), `AutoAttach`
-  (port policy + the bridge hook), `console-capture.js`.
+- `Lib/eacp/Graphics/Remote/` — `WindowDebugServer` (window capture tools:
+  screenshot + recording), the window auto-attach + port policy. The
+  window-level server every app gets.
+- `Lib/eacp/Graphics/Helpers/ScreenRecorder.*` — the ScreenCaptureKit
+  capture/record backend behind those tools.
+- `Lib/eacp/WebView/Remote/` — `WebViewTools` (the DOM tools, added onto
+  the window server as an extension), `AutoAttach` (the bridge hook),
+  `console-capture.js`.
 - `Lib/eacp/WebView/WebView/ElementIds.*` — the `@id` / `data-testid`
   system.
 - `Lib/eacp/WebView/Test/` — `AppDriver`, the in-process driver the tools

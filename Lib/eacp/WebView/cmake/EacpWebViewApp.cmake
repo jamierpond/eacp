@@ -50,18 +50,17 @@
 # destruction ODR-uses — passing the library here covers include dirs and link
 # in one shot, so callers don't have to reach into the generated
 # ${TARGET}Schema_Codegen target by hand.
-# The embedded MCP debug server — the WebView-specific developer
-# affordance, sibling to the launcher (EACP_AGENT_HARNESS) and ASan
-# (EACP_ASAN) in CMake/EacpAgentHarness.cmake. Independently gated by
-# EACP_DEBUG_SERVER; AUTO means non-release builds, same as the others.
-set(EACP_DEBUG_SERVER "AUTO" CACHE STRING
-        "Embed the MCP debug server in WebView apps: AUTO (non-release builds), ON, OFF")
-set_property(CACHE EACP_DEBUG_SERVER PROPERTY STRINGS AUTO ON OFF)
-
-# Links the debug server into ${TARGET} and compiles the auto-attach
-# registration TU into it, so every WebViewBridge the app constructs
-# attaches a server at runtime (port policy: Remote/AutoAttach.h).
+# The MCP debug server for a WebView app. Its capture half (screenshot +
+# recording) is the window-level server EVERY app can have, enabled here
+# via eacp_enable_window_debug_server. This adds the WebView DOM tools
+# (list/click/fill/console/invoke) on top, layered onto that same server
+# so the app exposes a single MCP endpoint. Gated by EACP_DEBUG_SERVER
+# (defined in CMake/EacpAgentHarness.cmake); AUTO -> non-release builds.
 function(eacp_enable_debug_server TARGET)
+    # The window-level capture server — the base every app gets.
+    eacp_enable_window_debug_server(${TARGET})
+
+    # The WebView DOM tools, compiled in to enrich that base server.
     if (NOT TARGET eacp-webview-remote)
         return ()
     endif ()
@@ -284,6 +283,10 @@ function(eacp_add_webview_app TARGET)
             MACOSX_BUNDLE_BUNDLE_NAME "${ARG_BUNDLE_NAME}"
             MACOSX_BUNDLE_GUI_IDENTIFIER ${ARG_BUNDLE_ID}
             XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${ARG_BUNDLE_ID})
+
+    # Stable code signature (if EACP_CODESIGN_IDENTITY is set) so the app's
+    # TCC grants survive rebuilds — must run after the bundle id is set.
+    eacp_codesign_app(${TARGET})
 
     set_default_target_setting(${TARGET})
     if (ARG_APP_HEADER)

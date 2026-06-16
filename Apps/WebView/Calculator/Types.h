@@ -258,7 +258,7 @@ private:
             return "×";
         if (op == '/')
             return "÷";
-        return std::string(1, op);
+        return {1, op};
     }
 
     void publish()

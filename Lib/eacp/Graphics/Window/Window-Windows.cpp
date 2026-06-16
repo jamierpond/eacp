@@ -3,6 +3,8 @@
 #include "Window.h"
 #include "CompositionHostWindow-Windows.h"
 #include "../Helpers/StringUtils-Windows.h"
+#include "../Helpers/DarkMode-Windows.h"
+#include "../Helpers/SystemAppearance.h"
 #include <eacp/Core/App/AppEnvironment.h>
 
 // DwmSetWindowAttribute, used for Win11 rounded corners.
@@ -132,6 +134,14 @@ struct Window::Native
 
         if (host.hwnd && options.cornerRadius)
             applyRoundedCorners();
+
+        // Match the title bar to the system theme and opt the process into
+        // dark menus so any popup the app shows follows suit.
+        if (host.hwnd)
+        {
+            ensureDarkModeAppInitialised();
+            applyTitleBarTheme(host.hwnd, isSystemDarkMode());
+        }
     }
 
     // Windows 11+: ask DWM to round the window at the system radius (the
@@ -373,6 +383,13 @@ LRESULT CALLBACK Window::Native::windowProc(HWND hwnd,
             }
             break;
 
+        // The user toggled the OS light/dark setting while we are running;
+        // recolour the caption to match.
+        case WM_SETTINGCHANGE:
+            if (isThemeChangeMessage(lParam))
+                applyTitleBarTheme(hwnd, isSystemDarkMode());
+            break;
+
         case WM_DPICHANGED:
         {
             auto* suggested = reinterpret_cast<RECT*>(lParam);
@@ -404,6 +421,7 @@ Window::Window(const WindowOptions& optionsToUse)
     : options(optionsToUse)
     , impl(optionsToUse)
 {
+    attachDebugServer();
 }
 
 Window::~Window() = default;
@@ -425,6 +443,7 @@ void* Window::getContentViewHandle()
 
 void Window::setContentView(View& view)
 {
+    contentView = &view;
     impl->setContentView(&view);
 }
 

@@ -204,3 +204,82 @@ function(eacp_add_agent_harness TARGET)
 
     _eacp_generate_launcher(${TARGET})
 endfunction()
+
+# The embedded MCP debug/capture server — a window-level developer
+# affordance: screenshot + screen recording over HTTP, for ANY app (GPU,
+# native drawing, SVG, WebView), not just WebView ones. Sibling to the
+# launcher (EACP_AGENT_HARNESS) and ASan (EACP_ASAN); AUTO means
+# non-release builds, same as the others. The WebView DOM tools layer
+# onto this same server when present (see eacp_enable_debug_server).
+set(EACP_DEBUG_SERVER "AUTO" CACHE STRING
+        "Embed the MCP debug/capture server in apps: AUTO (non-release builds), ON, OFF")
+set_property(CACHE EACP_DEBUG_SERVER PROPERTY STRINGS AUTO ON OFF)
+
+# Links the window debug/capture server into ${TARGET} and compiles its
+# auto-attach registration TU in, so the app's primary window hosts an
+# MCP server (screenshot + recording) at runtime. Port policy:
+# Graphics/Remote/WindowAutoAttach.h (EACP_DEBUG_PORT).
+function(eacp_enable_window_debug_server TARGET)
+    if (NOT TARGET eacp-graphics-remote)
+        return ()
+    endif ()
+
+    eacp_tristate_enabled("${EACP_DEBUG_SERVER}" ENABLED)
+    if (NOT ENABLED)
+        return ()
+    endif ()
+
+    get_target_property(REMOTE_DIR eacp-graphics-remote SOURCE_DIR)
+    target_link_libraries(${TARGET} PRIVATE eacp-graphics-remote)
+    target_sources(${TARGET} PRIVATE ${REMOTE_DIR}/WindowAutoAttachRegister.cpp)
+endfunction()
+
+# Code-signing identity for dev app bundles. Unset (default) leaves the
+# linker-signed adhoc signature, whose designated requirement is a per-
+# build cdhash — so any TCC consent (Screen Recording, Camera, …) is lost
+# on the next rebuild, since macOS keys consent to the designated
+# requirement. Set this to a stable identity (see
+# `security find-identity -v -p codesigning`) and the requirement becomes
+# identity-based, so the grant persists across rebuilds — exactly how a
+# shipping app keeps its permissions. Local-dev convenience: never set in
+# CI.
+set(EACP_CODESIGN_IDENTITY "" CACHE STRING
+        "Code-signing identity for dev app bundles (stable TCC grants); empty = adhoc")
+
+# Re-signs ${TARGET} with EACP_CODESIGN_IDENTITY after each build, when one
+# is configured. POST_BUILD, so it runs after the launcher/ASan have
+# produced the final binary. No hardened runtime (it would demand
+# entitlements WKWebView/ASan don't carry) — a plain signature is all TCC
+# needs for a stable designated requirement.
+function(eacp_codesign_app TARGET)
+    if (NOT APPLE OR NOT EACP_CODESIGN_IDENTITY)
+        return ()
+    endif ()
+
+    get_target_property(IS_BUNDLE ${TARGET} MACOSX_BUNDLE)
+    if (IS_BUNDLE)
+        set(SIGN_PATH "$<TARGET_BUNDLE_DIR:${TARGET}>")
+    else ()
+        set(SIGN_PATH "$<TARGET_FILE:${TARGET}>")
+    endif ()
+
+    add_custom_command(TARGET ${TARGET} POST_BUILD
+            COMMAND codesign --force --deep --timestamp=none
+                    --sign "${EACP_CODESIGN_IDENTITY}" "${SIGN_PATH}"
+            COMMENT
+                "Code-signing ${TARGET} with '${EACP_CODESIGN_IDENTITY}' (stable TCC grants)"
+            VERBATIM)
+endfunction()
+
+# The full dev-affordance set for a hand-rolled app target, in one call:
+# the debugger-wrapped launcher, AddressSanitizer, the window debug/
+# capture server, and (if configured) a stable code signature — each
+# still independently gated by its own switch. eacp_add_webview_app wires
+# this same set (plus the WebView DOM tools) automatically; plain
+# executables opt in by calling this.
+function(eacp_enable_dev_affordances TARGET)
+    eacp_add_agent_harness(${TARGET})
+    eacp_enable_agent_asan(${TARGET})
+    eacp_enable_window_debug_server(${TARGET})
+    eacp_codesign_app(${TARGET})
+endfunction()
