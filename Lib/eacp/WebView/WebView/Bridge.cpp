@@ -1,5 +1,6 @@
 #include "Bridge.h"
 
+#include "DebugAttach.h"
 #include "JsStringLiteral.h"
 #include "StateBridge.h"
 
@@ -42,12 +43,11 @@ WebViewBridge::WebViewBridge(WebView& webViewToUse)
     webView.addUserScript(loadBridgeShim(), true);
 
     // Developer affordance: when the build linked a debug transport
-    // (see DebugAttach.h), attach it to this WebView + bridge pair.
-    // Headless runs (test fixtures) drive the WebView in-process and
-    // don't want servers spawning per fixture rebuild.
-    if (auto& factory = Detail::debugAttachFactory();
-        factory && !Apps::getAppEnvironment().headless)
-        debugAttachment = factory(webView, bridge);
+    // (see DebugAttach.h), let it attach to this WebView + bridge. Headless
+    // test fixtures opt out — they drive the WebView in-process.
+    if (auto& hook = Detail::webViewDebugHook();
+        hook && !Apps::getAppEnvironment().headless)
+        hook(webView, bridge);
     webView.addScriptMessageHandler(
         bridgeChannel, [this](const std::string& body) { onMessage(body); });
 }

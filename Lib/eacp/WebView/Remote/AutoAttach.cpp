@@ -14,16 +14,14 @@ namespace eacp::WebView::Remote
 
 bool installAutoAttach()
 {
-    Graphics::Detail::debugAttachFactory() =
-        [](Graphics::WebView& webView,
-           Miro::Bridge& bridge) -> OwningPointer<Graphics::Detail::DebugAttachment>
+    Graphics::Detail::webViewDebugHook() =
+        [](Graphics::WebView& webView, Miro::Bridge& bridge)
     {
         try
         {
-            // Hand the DOM tools to the app's window server — adopted now
-            // if it exists, or the moment it's created (the Window and the
-            // bridge can be constructed in either order). The window server
-            // owns the tools, so the bridge keeps no attachment of its own.
+            // Hand the DOM tools to the app's window server — adopted now,
+            // or the moment the server is created (the Window and bridge can
+            // be constructed in either order). The server owns them.
             auto tools = OwningPointer<Graphics::Remote::ServerExtension> {};
             tools.create<WebViewTools>(webView, bridge);
             Graphics::Remote::attachExtensionOrDefer(std::move(tools));
@@ -33,8 +31,6 @@ bool installAutoAttach()
             // A broken debug affordance must never take the app down.
             LOG(std::string {"WebViewTools: failed to attach: "} + e.what());
         }
-
-        return {};
     };
 
     return true;

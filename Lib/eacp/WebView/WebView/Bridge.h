@@ -1,7 +1,6 @@
 #pragma once
 
 #include "AsyncBridge.h"
-#include "DebugAttach.h"
 #include "WebView.h"
 
 #include <Miro/Miro.h>
@@ -119,12 +118,6 @@ private:
     double callCounter = 0;
     std::unordered_map<double, Threads::AsyncPromise<Miro::Json::Value>>
         pendingCalls;
-
-    // Debug transport (remote MCP server) attached via the
-    // DebugAttach hook when the build compiles one in. Empty
-    // otherwise. Declared last so it detaches before the bridge and
-    // WebView it references go down.
-    OwningPointer<Detail::DebugAttachment> debugAttachment;
 };
 
 } // namespace eacp::Graphics

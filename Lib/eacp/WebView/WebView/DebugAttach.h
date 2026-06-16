@@ -1,8 +1,6 @@
 #pragma once
 
-#include <eacp/Core/Utils/Containers.h>
 #include <eacp/Core/Utils/Singleton.h>
-#include <eacp/Graphics/Helpers/DebugAttach.h>
 
 #include <functional>
 
@@ -19,23 +17,17 @@ class WebView;
 namespace Detail
 {
 
-// The DebugAttachment base + the Window-level hook live in
-// Graphics/Helpers/DebugAttach.h (capture is window-level, not WebView-
-// specific). This adds the WebView-level hook: a factory keyed on a
-// WebView + bridge pair, which the debug transport uses to contribute
-// DOM-driving tools to the app's window server.
-using DebugAttachFactory =
-    std::function<OwningPointer<DebugAttachment>(WebView&, Miro::Bridge&)>;
+// Notifies a debug transport of each (WebView, bridge) pair so it can add
+// DOM-driving tools to the app's window server. Empty until a transport
+// installs itself (WebView/Remote/AutoAttachRegister.cpp). The window
+// server owns the tools, so this returns nothing — unlike the window-level
+// hook in Graphics/Helpers/DebugAttach.h, which hands the Window an
+// attachment to own.
+using WebViewDebugHook = std::function<void(WebView&, Miro::Bridge&)>;
 
-// Empty until a debug transport installs itself — AutoAttachRegister.cpp
-// does, when the app is built with the debug server enabled.
-// WebViewBridge consults this at construction; in the unified design the
-// returned attachment is usually empty (the window server owns the DOM
-// tools), but the hook keeps the per-bridge ownership point for
-// flexibility.
-inline DebugAttachFactory& debugAttachFactory()
+inline WebViewDebugHook& webViewDebugHook()
 {
-    return Singleton::get<DebugAttachFactory>();
+    return Singleton::get<WebViewDebugHook>();
 }
 
 } // namespace Detail
