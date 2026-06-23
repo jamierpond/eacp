@@ -30,8 +30,10 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>${MACOSX_BUNDLE_COPYRIGHT}</string>
-	<key>UILaunchScreen</key>
-	<dict/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>This example captures from the camera to demonstrate the eacp camera subsystem.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -13,9 +13,9 @@ endif ()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if(APPLE)
+if (APPLE)
     enable_language(OBJCXX)
-endif()
+endif ()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
 
@@ -24,10 +24,6 @@ option(EACP_BUILD_GRAPHICS "Build the Graphics, SVG and WebView modules" ON)
 option(EACP_BUILD_WEBVIEW "Build the WebView module" ON)
 option(EACP_CI_BUILD "Mirror the exact flag set used by CI builds" OFF)
 
-# EACP_CI_BUILD is the single switch CI passes so local builds can reproduce
-# the CI configuration exactly. It forces on the unity-build flag of every
-# project that exposes one: eacp's own (EACP_UNITY_BUILD) and Miro's
-# (MIRO_UNITY_BUILD). These are set before the dependencies are pulled in below.
 if (EACP_CI_BUILD)
     set(EACP_UNITY_BUILD ON CACHE BOOL
             "Compile eacp libraries as CMake unity builds" FORCE)
@@ -44,6 +40,8 @@ include(TargetSetup)
 include(CPM)
 include(EacpSchema)
 
+option(EACP_ENABLE_TESTS "Enable Tests for EACP" ${PROJECT_IS_TOP_LEVEL})
+
 if (PROJECT_IS_TOP_LEVEL)
     eacp_default_setup()
 endif ()
@@ -52,10 +50,10 @@ set(CMAKE_CXX_STANDARD 20)
 add_subdirectory(Lib)
 
 if (PROJECT_IS_TOP_LEVEL)
-    # enable_testing() must precede add_subdirectory(Apps) so per-app
-    # test targets (registered via eacp_add_webview_test) get picked
-    # up by CTest. The Tests/ subtree is downstream, unaffected.
-    enable_testing()
     add_subdirectory(Apps)
+endif ()
+
+if (EACP_ENABLE_TESTS)
+    enable_testing()
     add_subdirectory(Tests)
 endif ()
