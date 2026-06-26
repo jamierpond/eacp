@@ -5,6 +5,10 @@
 
 #include <eacp/Core/ObjC/Strings.h>
 
+// NSDraggingSource for native file drag-out. We drag real on-disk files as
+// public.file-url pasteboard items (NSURL is an NSPasteboardWriting), which is
+// the representation Finder, DAWs, and virtually every drop target understand
+// -- unlike a file promise, which apps that read only file-urls silently drop.
 @interface EacpDragSource : NSObject <NSDraggingSource>
 @end
 
@@ -18,6 +22,13 @@
 
 @end
 
+// WKWebView subclass that owns native file drag-out. The page arms a drag on
+// mousedown (via window.eacp.armFileDrag); by the time the pointer crosses the
+// drag threshold the armed paths have arrived over the message channel, so we
+// start the session from the genuine NSEventTypeLeftMouseDragged event. That
+// real, OS-delivered event is what lets the drag escape the app -- a session
+// started from the async script-message callback is confined to the app
+// (NSDraggingContextWithinApplication) and never reaches Finder.
 @interface EacpDragWebView : WKWebView
 @property(nonatomic) BOOL eacpAcceptFirstMouse;
 - (void)armFileDragWithPaths:(const eacp::Vector<std::string>&)paths;
@@ -29,6 +40,8 @@ namespace eacp::Graphics::detail
 {
 namespace
 {
+// One shared drag source for the whole app -- it is stateless apart from the
+// work queue, so a singleton is safe and outlives every drag session.
 EacpDragSource* sharedDragSource()
 {
     static EacpDragSource* source = [[EacpDragSource alloc] init];
@@ -65,6 +78,8 @@ bool beginFileDrag(WKWebView* webView,
         auto* icon = [workspace iconForFile:nsPath];
         icon.size = NSMakeSize(iconSize, iconSize);
 
+        // Fan the stack out a few px per item so a multi-file drag reads as
+        // multiple items rather than one.
         auto offset = (CGFloat) index * stackOffset;
         [item setDraggingFrame:NSMakeRect(anchor.x - iconSize / 2 + offset,
                                           anchor.y - iconSize / 2 - offset,
@@ -203,6 +218,9 @@ WebView* findFocusedWebView()
 
 - (void)armFileDragWithPaths:(const eacp::Vector<std::string>&)paths
 {
+    // Always lands after this gesture's mouseDown: (the page's JS mousedown is
+    // dispatched only once our mouseDown: forwards to super), so there is
+    // nothing stale to guard against here.
     armedPaths = paths;
     dragArmed = ! paths.empty();
 }
@@ -217,6 +235,9 @@ WebView* findFocusedWebView()
     windowDragArmed = YES;
 }
 
+// With eacpAcceptFirstMouse set, the click that activates an unfocused
+// window also reaches the page — so a drag region starts moving the window
+// on the FIRST click-drag instead of needing one click to focus first.
 - (BOOL)acceptsFirstMouse:(NSEvent*)event
 {
     if (self.eacpAcceptFirstMouse)
