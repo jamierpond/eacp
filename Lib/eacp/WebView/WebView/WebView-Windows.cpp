@@ -1216,10 +1216,6 @@ struct WebView::Native
         sendMouse(upKindFor(event.button), event.pos);
     }
 
-    // Programmatic focus (e.g. a launcher auto-focusing its prompt on show).
-    // A composition-hosted WebView2 only receives keystrokes while its parent
-    // HWND owns the Win32 focus, so claim that first, then hand logical focus
-    // to the web content — the same MoveFocus a click performs.
     void moveFocusToContent()
     {
         if (hostHwnd)
@@ -1272,15 +1268,11 @@ struct WebView::Native
         if (paths.empty() || !hostHwnd)
             return;
 
-        // Mirror macOS: let the app react the moment the OS drag begins (a
-        // launcher hides its panel here). SHDoDragDrop below is modal, so fire
-        // before entering it.
-        owner.onFileDragStarted();
-
-        // DoDragDrop needs the thread OLE-initialized. The app inits COM as an
-        // STA for WinRT, but OLE drag/drop wants OleInitialize specifically;
-        // balance it with OleUninitialize once the modal drag returns.
+        auto ownerWindow = hostHwnd;
+        auto onDragStarted = owner.onFileDragStarted;
         auto oleHr = OleInitialize(nullptr);
+        if (FAILED(oleHr))
+            return;
 
         auto pidls = Vector<PIDLIST_ABSOLUTE> {};
 
@@ -1308,16 +1300,18 @@ struct WebView::Native
                         nullptr, BHID_DataObject, IID_PPV_ARGS(&dataObject)))
                     && dataObject)
                 {
-                    // A null drop source lets the shell supply the default drag
-                    // image and cursor; it also runs the modal drag loop and
-                    // tracks the real (physically-down) mouse button, so the
-                    // drag can escape to Explorer.
-                    DWORD effect = DROPEFFECT_NONE;
-                    SHDoDragDrop(hostHwnd,
-                                 dataObject.Get(),
-                                 nullptr,
-                                 DROPEFFECT_COPY,
-                                 &effect);
+                    if (onDragStarted)
+                        onDragStarted();
+
+                    if (IsWindow(ownerWindow))
+                    {
+                        DWORD effect = DROPEFFECT_NONE;
+                        SHDoDragDrop(ownerWindow,
+                                     dataObject.Get(),
+                                     nullptr,
+                                     DROPEFFECT_COPY,
+                                     &effect);
+                    }
                 }
             }
         }

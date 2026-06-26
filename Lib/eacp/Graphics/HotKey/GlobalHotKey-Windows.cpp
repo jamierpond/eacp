@@ -11,8 +11,6 @@
 namespace eacp::Graphics
 {
 
-// Defined in Keyboard-Windows.cpp; maps a framework KeyCode (a macOS virtual
-// key value, see Keyboard.h) to the Windows virtual key RegisterHotKey wants.
 int virtualKeyFromKeyCode(uint16_t keyCode);
 
 namespace
@@ -32,8 +30,6 @@ UINT toWinModifiers(ModifierKeys modifiers)
     if (modifiers.command)
         flags |= MOD_WIN;
 
-    // Match the macOS behaviour: one press fires once, no auto-repeat while
-    // the combo is held.
     flags |= MOD_NOREPEAT;
 
     return flags;
@@ -85,9 +81,6 @@ struct GlobalHotKey::Native
         destroyWindow();
     }
 
-    // A WM_HOTKEY message lands here via the event loop's DispatchMessage, so
-    // the callback runs on the main thread as the contract promises — and keeps
-    // firing inside nested runFor pumps and foreign modal loops.
     static LRESULT CALLBACK wndProc(HWND hwnd,
                                     UINT msg,
                                     WPARAM wParam,
@@ -99,7 +92,10 @@ struct GlobalHotKey::Native
                 reinterpret_cast<Native*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 
             if (self != nullptr && self->onPressed)
-                self->onPressed();
+            {
+                auto callback = self->onPressed;
+                callback();
+            }
 
             return 0;
         }
@@ -109,10 +105,9 @@ struct GlobalHotKey::Native
 
     bool createWindow()
     {
-        registerClassOnce();
+        if (!registerClassOnce())
+            return false;
 
-        // A message-only window: invisible, no taskbar/Z-order cost, but still
-        // a valid target for RegisterHotKey and posted WM_HOTKEY messages.
         window = CreateWindowExW(0,
                                  hotKeyWindowClass,
                                  L"",
@@ -146,19 +141,31 @@ struct GlobalHotKey::Native
         }
     }
 
-    static void registerClassOnce()
+    static bool registerClassOnce()
     {
         static auto registered = false;
         if (registered)
-            return;
+            return true;
 
         auto wc = WNDCLASSEXW {};
         wc.cbSize = sizeof(WNDCLASSEXW);
         wc.lpfnWndProc = wndProc;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = hotKeyWindowClass;
-        RegisterClassExW(&wc);
+
+        if (!RegisterClassExW(&wc))
+        {
+            auto error = GetLastError();
+            if (error != ERROR_CLASS_ALREADY_EXISTS)
+            {
+                LOG("GlobalHotKey: window class registration failed, error "
+                    + std::to_string(error));
+                return false;
+            }
+        }
+
         registered = true;
+        return true;
     }
 
     HWND window = nullptr;

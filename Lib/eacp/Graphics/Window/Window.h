@@ -34,8 +34,7 @@ using WillResizeCallback = std::function<void(int& width, int& height)>;
 // thread.
 struct WindowEvents
 {
-    // Fires when the window gains (true) or loses (false) key focus. macOS
-    // only; other platforms never invoke it (yet).
+    // Fires when the window gains (true) or loses (false) key focus.
     std::function<void(bool isKey)> onActivationChanged;
 };
 

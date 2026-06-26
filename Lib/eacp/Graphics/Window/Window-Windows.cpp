@@ -78,9 +78,6 @@ struct Window::Native
         windowClassRegistered = true;
     }
 
-    // The work area (screen minus taskbar) of the monitor under the cursor,
-    // falling back to the primary monitor. Used to centre a window that asked
-    // for no explicit position.
     static RECT activeMonitorWorkArea()
     {
         auto cursor = POINT {};
@@ -143,9 +140,6 @@ struct Window::Native
         }
         else
         {
-            // A WS_POPUP gets no useful CW_USEDEFAULT placement (it lands at
-            // the top-left corner), so centre it on the active monitor to
-            // match the macOS default.
             auto area = activeMonitorWorkArea();
             x = area.left + ((area.right - area.left) - windowWidth) / 2;
             y = area.top + ((area.bottom - area.top) - windowHeight) / 2;
@@ -256,11 +250,6 @@ struct Window::Native
         forceForeground(host.hwnd);
     }
 
-    // SetForegroundWindow alone is silently dropped when our process doesn't
-    // own the foreground (Windows' foreground lock) — the launcher panel then
-    // appears but never takes keyboard focus, so its text box can't be typed
-    // into. Briefly attaching our input queue to the outgoing foreground
-    // thread lifts the lock so the activation and focus actually land.
     static void forceForeground(HWND hwnd)
     {
         auto foreground = GetForegroundWindow();
@@ -410,9 +399,6 @@ LRESULT CALLBACK Window::Native::windowProc(HWND hwnd,
                 return HTCLIENT;
             break;
 
-        // Mirror the macOS windowDidBecomeKey/windowDidResignKey bridge: a
-        // launcher panel uses this to hide itself the moment focus leaves it,
-        // so any click outside the window dismisses it.
         case WM_ACTIVATE:
             if (self->events && self->events->onActivationChanged)
                 self->events->onActivationChanged(LOWORD(wParam) != WA_INACTIVE);

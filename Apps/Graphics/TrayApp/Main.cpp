@@ -11,6 +11,7 @@ using namespace Graphics;
 
 static constexpr ModifierKeys launcherModifiers {.alt = true, .command = true};
 static constexpr uint16_t launcherKeyCode = KeyCode::L;
+static constexpr const char* searchDownloadsCommand = "searchDownloads";
 
 // A smooth orange disc, generated so the example needs no asset file. On
 // macOS the menu bar renders it as a template (alpha-only, system tinted);
@@ -65,13 +66,11 @@ struct TrayApp
         { return Clipboard::copyFiles(paths); };
         api.onSubmit = [this](const std::string&) { swallowAndHide(); };
         api.onDismiss = [this] { hidePanel(); };
-        transport.setCommandExecution("searchDownloads",
+
+        transport.setCommandExecution(searchDownloadsCommand,
                                       CommandExecution::WorkerThread);
-        webView.onFileDragStarted =
-            [this]
-            {
-                Threads::callAsync([this] { hidePanel(); });
-            };
+
+        webView.onFileDragStarted = [this] { hidePanel(); };
         webView.onNavigationFinished =
             [this](const std::string&)
             {
@@ -153,20 +152,21 @@ struct TrayApp
     void focusPrompt()
     {
         webView.focusContent();
-        webView.evaluateJavaScript(
-            "(() => {"
-            "const focus = () => {"
-            "const input = document.querySelector('input[name=\"prompt\"]');"
-            "if (!input) return false;"
-            "input.focus();"
-            "input.select?.();"
-            "return document.activeElement === input;"
-            "};"
-            "if (focus()) return;"
-            "setTimeout(focus, 0);"
-            "setTimeout(focus, 50);"
-            "setTimeout(focus, 150);"
-            "})();");
+        webView.evaluateJavaScript(R"js(
+(() => {
+    const focus = () => {
+        const input = document.querySelector('input[name="prompt"]');
+        if (!input) return false;
+        input.focus();
+        input.select?.();
+        return document.activeElement === input;
+    };
+    if (focus()) return;
+    setTimeout(focus, 0);
+    setTimeout(focus, 50);
+    setTimeout(focus, 150);
+})();
+)js");
     }
 
     void hidePanel()
@@ -177,9 +177,10 @@ struct TrayApp
 
     void swallowAndHide()
     {
-        webView.evaluateJavaScript(
-            "const i=document.querySelector('input[name=\"prompt\"]');"
-            "if(i){i.value='';}");
+        webView.evaluateJavaScript(R"js(
+const input = document.querySelector('input[name="prompt"]');
+if (input) input.value = '';
+)js");
         hidePanel();
     }
 

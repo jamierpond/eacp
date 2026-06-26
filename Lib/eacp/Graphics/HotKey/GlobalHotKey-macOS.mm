@@ -62,23 +62,32 @@ OSStatus hotKeyHandler(EventHandlerCallRef, EventRef event, void*)
         || !(*found->second))
         return eventNotHandledErr;
 
-    (*found->second)();
+    auto callback = *found->second;
+    callback();
     return noErr;
 }
 
-void installHandlerOnce()
+bool installHandlerOnce()
 {
     static bool installed = false;
     if (installed)
-        return;
+        return true;
 
     auto eventType = EventTypeSpec {kEventClassKeyboard, kEventHotKeyPressed};
-    InstallApplicationEventHandler(NewEventHandlerUPP(hotKeyHandler),
-                                   1,
-                                   &eventType,
-                                   nullptr,
-                                   nullptr);
+    auto status = InstallApplicationEventHandler(NewEventHandlerUPP(hotKeyHandler),
+                                                 1,
+                                                 &eventType,
+                                                 nullptr,
+                                                 nullptr);
+    if (status != noErr)
+    {
+        LOG("GlobalHotKey handler installation failed: status "
+            + std::to_string(status));
+        return false;
+    }
+
     installed = true;
+    return true;
 }
 } // namespace
 
@@ -90,7 +99,8 @@ struct GlobalHotKey::Native
         if (eacp::Apps::getAppEnvironment().headless)
             return;
 
-        installHandlerOnce();
+        if (!installHandlerOnce())
+            return;
 
         id = nextHotKeyID();
         auto eventID = EventHotKeyID {hotKeySignature, id};
