@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <optional>
 #include <string>
 
@@ -298,22 +299,37 @@ struct TrayApp
         copyToastView.setOpacity(copyToastOpacity(elapsed));
     }
 
-    // A quick fade in, a hold, then a fade out over the toast's lifetime.
+    // Snappy exponential ease-out: most of the rise happens immediately, then
+    // it glides into place — reads as deliberate and expensive rather than a
+    // flat linear ramp.
+    static float easeOutExpo(float t)
+    {
+        return t >= 1.f ? 1.f : 1.f - std::pow(2.f, -10.f * t);
+    }
+
+    // Eased at both ends, for an unhurried, settled fade out.
+    static float easeInOutCubic(float t)
+    {
+        return t < 0.5f ? 4.f * t * t * t
+                        : 1.f - std::pow(-2.f * t + 2.f, 3.f) / 2.f;
+    }
+
+    // A fast, eased fade in, a hold, then an unhurried eased fade out.
     static float copyToastOpacity(std::chrono::steady_clock::duration elapsed)
     {
         using Millis = std::chrono::duration<float, std::milli>;
-        constexpr auto fadeIn = 130.f;
-        constexpr auto fadeOut = 300.f;
+        constexpr auto fadeIn = 90.f;
+        constexpr auto fadeOut = 360.f;
 
         auto total = std::chrono::duration_cast<Millis>(copyToastDuration).count();
         auto now = std::chrono::duration_cast<Millis>(elapsed).count();
         auto remaining = total - now;
 
         if (now < fadeIn)
-            return now / fadeIn;
+            return easeOutExpo(now / fadeIn);
 
         if (remaining < fadeOut)
-            return std::clamp(remaining / fadeOut, 0.f, 1.f);
+            return easeInOutCubic(std::clamp(remaining / fadeOut, 0.f, 1.f));
 
         return 1.f;
     }
@@ -343,7 +359,10 @@ if (input) input.value = '';
     Window copyToastWindow {getCopyToastOptions()};
     bool copyToastVisible = false;
     std::chrono::steady_clock::time_point copyToastStart {};
-    Threads::Timer copyToastTimer {[this] { updateCopyToast(); }, 10};
+    // Note: the second arg is the tick rate in Hz, not milliseconds. This
+    // drives the toast's opacity fade, so it wants display-refresh frequency —
+    // at 10Hz the fade visibly stepped at ~10fps.
+    Threads::Timer copyToastTimer {[this] { updateCopyToast(); }, 120};
     TrayIcon tray;
     std::optional<GlobalHotKey> hotKey;
 };
