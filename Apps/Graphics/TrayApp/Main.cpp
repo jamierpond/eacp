@@ -1,4 +1,8 @@
+#include "Types.h"
+
+#include <eacp/Core/Threads/Async.h>
 #include <eacp/Graphics/Graphics.h>
+#include <eacp/WebView/WebView.h>
 
 #include <optional>
 
@@ -38,38 +42,15 @@ static Image makeTrayIcon()
     return image;
 }
 
-struct PanelView final : View
+static WebView::Options getWebViewOptions()
 {
-    PanelView()
-        : textInput(FontOptions().withName("Helvetica").withSize(18.f))
-    {
-        background->setFillColor({0.11f, 0.11f, 0.13f});
-
-        textInput.setPlaceholder("What can I help you with today?");
-        textInput.setTextColor({0.95f, 0.95f, 0.95f});
-        textInput.setBackgroundColor({0.11f, 0.11f, 0.13f});
-        textInput.setBorderColor({0.f, 0.f, 0.f, 0.f});
-        textInput.setPadding(18.f);
-
-        addChildren({background});
-        addSubview(textInput);
-    }
-
-    void resized() override
-    {
-        auto bounds = getLocalBounds();
-
-        auto path = Path();
-        path.addRect(bounds);
-        background->setPath(path);
-
-        scaleToFit({background});
-        textInput.setBounds({0.f, 0.f, bounds.w, bounds.h});
-    }
-
-    ShapeLayerView background;
-    TextInput textInput;
-};
+    auto options = embeddedOptions("TrayApp");
+    options.embedded.devServerURL = "http://localhost:5179";
+    options.embedded.preferDevServer = false;
+    options.embedded.autoLoad = false;
+    options.acceptFirstMouse = true;
+    return options;
+}
 
 struct TrayApp
 {
@@ -78,14 +59,30 @@ struct TrayApp
         Apps::setDockIconVisible(false);
         Apps::setLaunchAtLogin(true);
 
-        panelView.textInput.onSubmit([this](const std::string&) { swallowAndHide(); });
+        api.onArmDrag = [this](const EA::Vector<std::string>& paths)
+        { webView.armFileDrag(paths); };
+        api.onSubmit = [this](const std::string&) { swallowAndHide(); };
+        api.onDismiss = [this] { hidePanel(); };
+        webView.onNavigationFinished =
+            [this](const std::string&)
+            {
+                if (window.isVisible())
+                    focusPrompt();
+            };
+        webView.loadURL("app://local/index.html");
 
         // The window shows itself on construction; hide it immediately so
         // the app starts as a bare tray icon. setVisible keeps the window
         // (and its content) alive across toggles, so it reappears exactly
         // where the user left it.
-        window.setContentView(panelView);
+        window.setContentView(webView);
         window.setVisible(false);
+        window.events.onActivationChanged =
+            [this](bool isKey)
+            {
+                if (!isKey && window.isVisible())
+                    hidePanel();
+            };
 
         tray.setIcon(makeTrayIcon());
         tray.setTooltip("eacp Tray App");
@@ -108,12 +105,12 @@ struct TrayApp
     {
         auto options = WindowOptions();
 
-        options.width = 320;
-        options.height = 180;
+        options.width = 760;
+        options.height = 430;
         options.isPrimary = false;
 
         options.flags = {WindowFlags::Borderless};
-        options.cornerRadius = 14.f;
+        options.cornerRadius = 18.f;
 
         options.alwaysOnTop = true;
         options.visibleOnAllWorkspaces = true;
@@ -135,14 +132,45 @@ struct TrayApp
     {
         window.setVisible(true);
         window.toFront();
-        panelView.textInput.focus();
+        focusPrompt();
+        Threads::callAsync(
+            [this]
+            {
+                if (window.isVisible())
+                    focusPrompt();
+            });
     }
 
-    void hidePanel() { window.setVisible(false); }
+    void focusPrompt()
+    {
+        webView.focusContent();
+        webView.evaluateJavaScript(
+            "(() => {"
+            "const focus = () => {"
+            "const input = document.querySelector('input[name=\"prompt\"]');"
+            "if (!input) return false;"
+            "input.focus();"
+            "input.select?.();"
+            "return document.activeElement === input;"
+            "};"
+            "if (focus()) return;"
+            "setTimeout(focus, 0);"
+            "setTimeout(focus, 50);"
+            "setTimeout(focus, 150);"
+            "})();");
+    }
+
+    void hidePanel()
+    {
+        api.stopAudio();
+        window.setVisible(false);
+    }
 
     void swallowAndHide()
     {
-        panelView.textInput.setText("");
+        webView.evaluateJavaScript(
+            "const i=document.querySelector('input[name=\"prompt\"]');"
+            "if(i){i.value='';}");
         hidePanel();
     }
 
@@ -154,7 +182,9 @@ struct TrayApp
             showPanel();
     }
 
-    PanelView panelView;
+    Api::TrayLauncherApi api;
+    WebView webView {getWebViewOptions()};
+    WebViewBridge transport {webView, api};
     Window window {getPanelOptions()};
     TrayIcon tray;
     std::optional<GlobalHotKey> hotKey;

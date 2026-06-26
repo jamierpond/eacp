@@ -190,6 +190,11 @@ public:
     void setZoom(double level);
     double getZoom() const;
 
+    // Focuses the browser runtime itself, not just the framework wrapper View.
+    // Use this before JS focus() calls that should leave page inputs ready for
+    // typing.
+    void focusContent();
+
     static WebView* focused();
 
     // True when the platform web runtime backing WebView is present. Always

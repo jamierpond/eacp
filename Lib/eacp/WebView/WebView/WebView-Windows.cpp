@@ -1635,6 +1635,11 @@ void WebView::evaluateJavaScript(const std::string& script,
                          { impl->evaluateScript(script, callback); });
 }
 
+void WebView::focusContent()
+{
+    focus();
+}
+
 void WebView::takeSnapshot(SnapshotCallback callback)
 {
     if (!callback)

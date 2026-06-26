@@ -1,5 +1,15 @@
-add_executable(TrayApp Main.cpp)
-target_link_libraries(TrayApp PRIVATE eacp-graphics)
+find_package(MakeASound REQUIRED)
+
+eacp_add_webview_app(TrayApp
+        SOURCES     Main.cpp
+        API         Api::TrayLauncherApi
+        API_HEADER  Types.h
+        WEB_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/web
+        BUNDLE_ID   com.eacp.trayapp
+        BUNDLE_NAME "Tray App"
+        LINK_LIBRARIES MakeASound miniaudio
+        CATEGORY    TrayApp
+        REACT)
 
 set(BUNDLE_ID "com.eacp.trayapp")
 
