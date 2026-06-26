@@ -5,7 +5,7 @@
 using namespace eacp;
 using namespace Graphics;
 
-static constexpr ModifierKeys launcherModifiers {.shift = true, .control = true};
+static constexpr ModifierKeys launcherModifiers {.alt = true, .command = true};
 static constexpr uint16_t launcherKeyCode = KeyCode::L;
 
 // A smooth orange disc, generated so the example needs no asset file. On
