@@ -65,6 +65,8 @@ struct TrayApp
         { return Clipboard::copyFiles(paths); };
         api.onSubmit = [this](const std::string&) { swallowAndHide(); };
         api.onDismiss = [this] { hidePanel(); };
+        transport.setCommandExecution("searchDownloads",
+                                      CommandExecution::WorkerThread);
         webView.onFileDragStarted =
             [this]
             {
