@@ -231,6 +231,7 @@ public:
     std::function<bool(OwningPointer<WebView> popup, const std::string& url)>
         onNewWindowRequested = [](auto&&, auto&&) { return false; };
 
+    std::function<void()> onFileDragStarted = [] {};
     std::function<void()> onClose = [] {};
 
     struct Native;

@@ -134,6 +134,9 @@ struct WebView::Native
               .acceptFirstMouse = options.acceptFirstMouse
             }
         );
+        detail::setFileDragStartedCallback(
+            webView.get(),
+            [this] { owner.onFileDragStarted(); });
 
         webView.get().navigationDelegate = delegate.get();
         webView.get().UIDelegate = delegate.get();

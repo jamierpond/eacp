@@ -63,6 +63,11 @@ struct TrayApp
         { webView.armFileDrag(paths); };
         api.onSubmit = [this](const std::string&) { swallowAndHide(); };
         api.onDismiss = [this] { hidePanel(); };
+        webView.onFileDragStarted =
+            [this]
+            {
+                Threads::callAsync([this] { hidePanel(); });
+            };
         webView.onNavigationFinished =
             [this](const std::string&)
             {

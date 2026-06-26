@@ -32,6 +32,7 @@
 @interface EacpDragWebView : WKWebView
 @property(nonatomic) BOOL eacpAcceptFirstMouse;
 - (void)armFileDragWithPaths:(const eacp::Vector<std::string>&)paths;
+- (void)setFileDragStartedCallback:(eacp::Callback)callback;
 - (void)armWindowDrag;
 @end
 
@@ -115,6 +116,14 @@ void armFileDrag(WKWebView* webView, const Vector<std::string>& paths)
         return;
 
     [(EacpDragWebView*) webView armFileDragWithPaths:paths];
+}
+
+void setFileDragStartedCallback(WKWebView* webView, Callback callback)
+{
+    if (![webView isKindOfClass:[EacpDragWebView class]])
+        return;
+
+    [(EacpDragWebView*) webView setFileDragStartedCallback:std::move(callback)];
 }
 
 void armWindowDrag(WKWebView* webView)
@@ -201,6 +210,7 @@ WebView* findFocusedWebView()
 @implementation EacpDragWebView
 {
     eacp::Vector<std::string> armedPaths;
+    eacp::Callback fileDragStartedCallback;
     NSPoint mouseDownLocation;
     BOOL dragArmed;
     BOOL dragStarted;
@@ -214,6 +224,11 @@ WebView* findFocusedWebView()
     // nothing stale to guard against here.
     armedPaths = paths;
     dragArmed = ! paths.empty();
+}
+
+- (void)setFileDragStartedCallback:(eacp::Callback)callback
+{
+    fileDragStartedCallback = std::move(callback);
 }
 
 - (void)armWindowDrag
@@ -255,6 +270,12 @@ WebView* findFocusedWebView()
             dragArmed = NO;
             eacp::Graphics::detail::beginFileDrag(self, event, armedPaths);
             armedPaths.clear();
+            if (fileDragStartedCallback)
+            {
+                auto callback = fileDragStartedCallback;
+                dispatch_async(dispatch_get_main_queue(),
+                               ^{ callback(); });
+            }
             return; // consume: no WebKit selection/drag underneath
         }
     }

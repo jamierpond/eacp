@@ -217,8 +217,6 @@ public:
     {
         if (onArmDrag)
             onArmDrag(request.paths);
-
-        dismiss();
     }
 
     void playAudio(const PlayAudioRequest& request)
