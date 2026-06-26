@@ -1,4 +1,4 @@
-find_package(MakeASound REQUIRED)
+include(${CMAKE_CURRENT_SOURCE_DIR}/MakeASound.cmake)
 
 eacp_add_webview_app(TrayApp
         SOURCES     Main.cpp
