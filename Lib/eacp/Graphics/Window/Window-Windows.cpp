@@ -42,12 +42,13 @@ NonClientInsets nonClientInsets(HWND hwnd)
 
 struct Window::Native
 {
-    Native(const WindowOptions& options)
+    Native(const WindowOptions& options, WindowEvents& eventsToUse)
         : quitCallback(options.effectiveOnQuit())
         , onResize(options.onResize)
         , onWillResize(options.onWillResize)
         , minWidth(options.minWidth)
         , minHeight(options.minHeight)
+        , events(&eventsToUse)
     {
         // Process-wide DPI awareness (per-monitor v2) is established by
         // initLoopThread() before any app code runs.
@@ -75,6 +76,25 @@ struct Window::Native
 
         RegisterClassExW(&wc);
         windowClassRegistered = true;
+    }
+
+    // The work area (screen minus taskbar) of the monitor under the cursor,
+    // falling back to the primary monitor. Used to centre a window that asked
+    // for no explicit position.
+    static RECT activeMonitorWorkArea()
+    {
+        auto cursor = POINT {};
+        GetCursorPos(&cursor);
+
+        auto monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
+
+        auto info = MONITORINFO {};
+        info.cbSize = sizeof(info);
+        if (GetMonitorInfoW(monitor, &info))
+            return info.rcWork;
+
+        return RECT {
+            0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
     }
 
     void createWindow(const WindowOptions& options)
@@ -111,12 +131,24 @@ struct Window::Native
         DWORD exStyle = options.alwaysOnTop ? WS_EX_TOPMOST : 0;
         showWithoutActivating = options.showInactive;
 
+        auto windowWidth = rect.right - rect.left;
+        auto windowHeight = rect.bottom - rect.top;
+
         auto x = CW_USEDEFAULT;
         auto y = CW_USEDEFAULT;
         if (options.initialPosition)
         {
             x = static_cast<int>(options.initialPosition->x * dpiScale);
             y = static_cast<int>(options.initialPosition->y * dpiScale);
+        }
+        else
+        {
+            // A WS_POPUP gets no useful CW_USEDEFAULT placement (it lands at
+            // the top-left corner), so centre it on the active monitor to
+            // match the macOS default.
+            auto area = activeMonitorWorkArea();
+            x = area.left + ((area.right - area.left) - windowWidth) / 2;
+            y = area.top + ((area.bottom - area.top) - windowHeight) / 2;
         }
 
         host.hwnd = CreateWindowExW(exStyle,
@@ -221,7 +253,30 @@ struct Window::Native
             return;
 
         ShowWindow(host.hwnd, SW_SHOW);
-        SetForegroundWindow(host.hwnd);
+        forceForeground(host.hwnd);
+    }
+
+    // SetForegroundWindow alone is silently dropped when our process doesn't
+    // own the foreground (Windows' foreground lock) — the launcher panel then
+    // appears but never takes keyboard focus, so its text box can't be typed
+    // into. Briefly attaching our input queue to the outgoing foreground
+    // thread lifts the lock so the activation and focus actually land.
+    static void forceForeground(HWND hwnd)
+    {
+        auto foreground = GetForegroundWindow();
+        auto thisThread = GetCurrentThreadId();
+        auto foregroundThread =
+            foreground ? GetWindowThreadProcessId(foreground, nullptr) : thisThread;
+
+        auto attached = foregroundThread != thisThread
+                        && AttachThreadInput(foregroundThread, thisThread, TRUE);
+
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
+        SetFocus(hwnd);
+
+        if (attached)
+            AttachThreadInput(foregroundThread, thisThread, FALSE);
     }
 
     void setTitle(const std::string& title) const
@@ -302,6 +357,7 @@ struct Window::Native
     Callback quitCallback = [] {};
     ResizeCallback onResize;
     WillResizeCallback onWillResize;
+    WindowEvents* events = nullptr;
     int minWidth = 0;
     int minHeight = 0;
     bool showWithoutActivating = false;
@@ -352,6 +408,14 @@ LRESULT CALLBACK Window::Native::windowProc(HWND hwnd,
         case WM_NCHITTEST:
             if (self->framelessRounded && !self->framelessResizable)
                 return HTCLIENT;
+            break;
+
+        // Mirror the macOS windowDidBecomeKey/windowDidResignKey bridge: a
+        // launcher panel uses this to hide itself the moment focus leaves it,
+        // so any click outside the window dismisses it.
+        case WM_ACTIVATE:
+            if (self->events && self->events->onActivationChanged)
+                self->events->onActivationChanged(LOWORD(wParam) != WA_INACTIVE);
             break;
 
         case WM_CLOSE:
@@ -419,7 +483,7 @@ LRESULT CALLBACK Window::Native::windowProc(HWND hwnd,
 
 Window::Window(const WindowOptions& optionsToUse)
     : options(optionsToUse)
-    , impl(optionsToUse)
+    , impl(optionsToUse, events)
 {
 }
 

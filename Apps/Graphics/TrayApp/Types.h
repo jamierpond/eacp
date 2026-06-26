@@ -189,8 +189,19 @@ public:
         auto ec = std::error_code {};
         auto candidates = EA::Vector<DownloadResult> {};
 
-        for (const auto& entry: std::filesystem::directory_iterator(downloads, ec))
+        // Walk Downloads and every subfolder, flattening audio files from any
+        // depth into a single result list. skip_permission_denied plus an
+        // error-code increment keep an unreadable subfolder from throwing or
+        // aborting the walk.
+        auto options = std::filesystem::directory_options::skip_permission_denied;
+        auto entries =
+            std::filesystem::recursive_directory_iterator(downloads, options, ec);
+        auto end = std::filesystem::recursive_directory_iterator {};
+
+        for (; !ec && entries != end; entries.increment(ec))
         {
+            const auto& entry = *entries;
+
             if (!entry.is_regular_file(ec))
                 continue;
 
@@ -256,10 +267,7 @@ public:
                 auto decoded = decodeAudioFile(path, sampleRate);
 
                 eacp::Threads::callAsync(
-                    [this,
-                     generation,
-                     path,
-                     decoded = std::move(decoded)]() mutable
+                    [this, generation, path, decoded = std::move(decoded)]() mutable
                     {
                         if (generation != decodeGeneration.load())
                             return;
@@ -343,8 +351,7 @@ private:
 
     static DecodedAudio decodeAudioFile(const std::string& path, int sampleRate)
     {
-        auto decoderConfig =
-            ma_decoder_config_init(ma_format_f32, 0, sampleRate);
+        auto decoderConfig = ma_decoder_config_init(ma_format_f32, 0, sampleRate);
         auto decoder = ma_decoder {};
 
         if (ma_decoder_init_file(path.c_str(), &decoderConfig, &decoder)
@@ -387,7 +394,8 @@ private:
             return;
 
         auto startFrame = playbackPosition.load(std::memory_order_relaxed);
-        auto totalFrames = audioSamples.size() / static_cast<std::size_t>(audioChannels);
+        auto totalFrames =
+            audioSamples.size() / static_cast<std::size_t>(audioChannels);
         auto framesToWrite =
             std::min<std::size_t>(output.getNumSamples(), totalFrames - startFrame);
 

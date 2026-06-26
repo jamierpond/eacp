@@ -3,6 +3,7 @@
 #include <eacp/Core/Utils/WinInclude.h>
 
 #include <shellapi.h>
+#include <shlobj.h>
 
 #include <cstring>
 #include <vector>

@@ -117,6 +117,14 @@ uint16_t keyCodeFromVirtualKey(int vk)
     return KeyCode::Unknown;
 }
 
+// Used by GlobalHotKey-Windows to translate a framework KeyCode into the
+// Windows virtual key RegisterHotKey expects. The reverse of
+// keyCodeFromVirtualKey; returns 0 when the code has no mapping.
+int virtualKeyFromKeyCode(uint16_t keyCode)
+{
+    return toVirtualKey(keyCode);
+}
+
 bool Keyboard::isKeyPressed(uint16_t keyCode)
 {
     int vk = toVirtualKey(keyCode);

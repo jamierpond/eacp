@@ -1216,6 +1216,19 @@ struct WebView::Native
         sendMouse(upKindFor(event.button), event.pos);
     }
 
+    // Programmatic focus (e.g. a launcher auto-focusing its prompt on show).
+    // A composition-hosted WebView2 only receives keystrokes while its parent
+    // HWND owns the Win32 focus, so claim that first, then hand logical focus
+    // to the web content — the same MoveFocus a click performs.
+    void moveFocusToContent()
+    {
+        if (hostHwnd)
+            SetFocus(hostHwnd);
+
+        if (controller)
+            controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    }
+
     void handleMouseMove(const MouseEvent& event)
     {
         sendMouse(
@@ -1258,6 +1271,11 @@ struct WebView::Native
     {
         if (paths.empty() || !hostHwnd)
             return;
+
+        // Mirror macOS: let the app react the moment the OS drag begins (a
+        // launcher hides its panel here). SHDoDragDrop below is modal, so fire
+        // before entering it.
+        owner.onFileDragStarted();
 
         // DoDragDrop needs the thread OLE-initialized. The app inits COM as an
         // STA for WinRT, but OLE drag/drop wants OleInitialize specifically;
@@ -1638,6 +1656,8 @@ void WebView::evaluateJavaScript(const std::string& script,
 void WebView::focusContent()
 {
     focus();
+    impl->ensureInitialized();
+    impl->queueOperation([this] { impl->moveFocusToContent(); });
 }
 
 void WebView::takeSnapshot(SnapshotCallback callback)
