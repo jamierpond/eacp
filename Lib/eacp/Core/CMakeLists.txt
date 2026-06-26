@@ -34,6 +34,7 @@ if (APPLE)
         target_sources(eacp-core PRIVATE
                 App/App-iOS.mm
                 App/Clipboard-iOS.mm
+                App/LoginItem-iOS.cpp
                 Process/Process-iOS.cpp
                 Threads/EventLoop-iOS.mm)
         target_link_libraries(eacp-core PRIVATE "-framework UIKit")

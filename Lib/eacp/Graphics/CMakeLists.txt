@@ -39,6 +39,7 @@ if (APPLE)
         target_sources(eacp-graphics PRIVATE
                 Graphics/Keyboard-iOS.mm
                 Helpers/DisplayLink-iOS.mm
+                HotKey/GlobalHotKey-iOS.mm
                 Menu/Menu-iOS.mm
                 Tray/TrayIcon-iOS.mm
                 View/View-iOS.mm
