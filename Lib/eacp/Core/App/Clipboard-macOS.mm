@@ -4,9 +4,18 @@
 
 #include <eacp/Core/ObjC/Strings.h>
 
-namespace TrayAppNative
+namespace eacp::Clipboard
 {
-bool copyFilesToClipboard(const EA::Vector<std::string>& paths)
+bool copyText(std::string_view text)
+{
+    auto storage = std::string {text};
+    auto* pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    return [pasteboard setString:Strings::toNSString(storage)
+                         forType:NSPasteboardTypeString];
+}
+
+bool copyFiles(const Vector<std::string>& paths)
 {
     if (paths.empty())
         return false;
@@ -15,7 +24,7 @@ bool copyFilesToClipboard(const EA::Vector<std::string>& paths)
 
     for (const auto& path: paths)
     {
-        auto* nsPath = eacp::Strings::toNSString(path);
+        auto* nsPath = Strings::toNSString(path);
         auto* url = [NSURL fileURLWithPath:nsPath];
 
         if (url == nil)
@@ -32,4 +41,4 @@ bool copyFilesToClipboard(const EA::Vector<std::string>& paths)
 
     return [pasteboard writeObjects:urls];
 }
-} // namespace TrayAppNative
+} // namespace eacp::Clipboard
