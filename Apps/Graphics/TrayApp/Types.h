@@ -205,7 +205,7 @@ public:
             if (!entry.is_regular_file(ec))
                 continue;
 
-            auto path = entry.path();
+            const auto& path = entry.path();
             if (!Detail::isAudioFile(path))
                 continue;
 
@@ -231,21 +231,21 @@ public:
                       return a.name < b.name;
                   });
 
-        auto limit = std::min<std::size_t>(candidates.size(), 12);
-        response.results.reserveAtLeast(limit);
+        auto limit = std::min<size_t>(candidates.size(), 12);
+        response.results.reserveAtLeast(static_cast<int>(limit));
         for (auto i = std::size_t {0}; i < limit; ++i)
             response.results.push_back(candidates[i]);
 
         return response;
     }
 
-    void armDrag(const ArmDragRequest& request)
+    void armDrag(const ArmDragRequest& request) const
     {
         if (onArmDrag)
             onArmDrag(request.paths);
     }
 
-    CopyFilesResponse copyFiles(const CopyFilesRequest& request)
+    CopyFilesResponse copyFiles(const CopyFilesRequest& request) const
     {
         return {.copied = onCopyFiles && onCopyFiles(request.paths)};
     }
@@ -307,13 +307,13 @@ public:
         return {.playing = playing.load(), .path = currentPath};
     }
 
-    void submitPrompt(const SubmitPromptRequest& request)
+    void submitPrompt(const SubmitPromptRequest& request) const
     {
         if (onSubmit)
             onSubmit(request.text);
     }
 
-    void dismiss()
+    void dismiss() const
     {
         if (onDismiss)
             onDismiss();
