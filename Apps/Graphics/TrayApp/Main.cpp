@@ -1,92 +1,7 @@
-#include "Api.h"
-#include <eacp/Core/Threads/Async.h>
-#include <eacp/Core/Threads/Timer.h>
-#include <eacp/Core/App/Clipboard.h>
 #include <eacp/Graphics/Graphics.h>
-#include <eacp/Graphics/Graphics/GraphicsContext.h>
-#include <eacp/Graphics/Primitives/TextMetrics.h>
-#include <eacp/WebView/WebView.h>
-
-#include <algorithm>
-#include <chrono>
-#include <cmath>
-#include <optional>
-#include <string>
 
 using namespace eacp;
 using namespace Graphics;
-
-static constexpr ModifierKeys launcherModifiers {.alt = true, .command = true};
-static constexpr uint16_t launcherKeyCode = KeyCode::L;
-static constexpr const char* searchDownloadsCommand = "searchDownloads";
-static constexpr auto copyToastDuration = std::chrono::milliseconds {1500};
-
-// The "Copied" HUD, drawn natively rather than through a WebView — a tiny
-// confirmation card doesn't justify a second WebView2 environment (which also
-// rendered blank while it span up). Fills its rounded window with a dark card
-// and centres the asterisk mark, title and detail; the toast timer drives the
-// fade via View::setOpacity.
-class CopyToastView : public View
-{
-public:
-    void setSampleName(const std::string& name)
-    {
-        detail = name + " to clipboard";
-        repaint();
-    }
-
-    void paint(Context& g) override
-    {
-        auto bounds = getLocalBounds();
-
-        g.setColor(Color {0.110f, 0.110f, 0.125f, 0.96f});
-        g.fillRect(bounds);
-
-        auto centreX = bounds.x + bounds.w * 0.5f;
-
-        paintMark(g, centreX, bounds.y + 58.f);
-
-        g.setColor(Color {0.965f, 0.957f, 0.949f, 1.f});
-        drawCentred(g, "Copied", centreX, bounds.y + 130.f, titleFont);
-
-        g.setColor(Color {0.965f, 0.957f, 0.949f, 0.66f});
-        drawCentred(g, detail, centreX, bounds.y + 160.f, detailFont);
-    }
-
-private:
-    void drawCentred(Context& g,
-                     const std::string& text,
-                     float centreX,
-                     float baselineY,
-                     const Font& font) const
-    {
-        auto width = TextMetrics::measureWidth(text, font);
-        g.drawText(text, {centreX - width * 0.5f, baselineY}, font);
-    }
-
-    // Eight rounded bars fanned around a centre — the same asterisk mark the
-    // launcher composer shows.
-    void paintMark(Context& g, float centreX, float centreY) const
-    {
-        constexpr auto bars = 8;
-        constexpr auto half = 26.f;
-
-        g.setColor(Color {0.945f, 0.945f, 0.949f, 1.f});
-
-        for (auto i = 0; i < bars; ++i)
-        {
-            g.saveState();
-            g.translate(centreX, centreY);
-            g.rotate(static_cast<float>(i) * 3.14159265f / bars);
-            g.fillRoundedRect(Rect {-3.f, -half, 6.f, half * 2.f}, 3.f);
-            g.restoreState();
-        }
-    }
-
-    std::string detail = " to clipboard";
-    Font titleFont {FontOptions().withSize(25.f)};
-    Font detailFont {FontOptions().withSize(13.f)};
-};
 
 // A smooth orange disc, generated so the example needs no asset file. On
 // macOS the menu bar renders it as a template (alpha-only, system tinted);
@@ -118,54 +33,49 @@ static Image makeTrayIcon()
     return image;
 }
 
-static WebView::Options getWebViewOptions()
+// The content of the floating panel below. The window's cornerRadius clips
+// this view, so it just fills its bounds — the rounding comes for free.
+struct PanelView final : View
 {
-    auto options = embeddedOptions("TrayApp");
-    options.embedded.devServerURL = "http://localhost:5179";
-    options.embedded.preferDevServer = false;
-    options.embedded.autoLoad = false;
-    options.acceptFirstMouse = true;
-    return options;
-}
+    PanelView()
+    {
+        background->setFillColor({0.11f, 0.11f, 0.13f});
+        title->setColor({0.95f, 0.95f, 0.95f});
+        subtitle->setColor({0.62f, 0.62f, 0.68f});
+
+        addChildren({background, title, subtitle});
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds();
+
+        auto path = Path();
+        path.addRect(bounds);
+        background->setPath(path);
+
+        scaleToFit({background, title, subtitle});
+        title->setPosition({20.f, bounds.h - 44.f});
+        subtitle->setPosition({20.f, bounds.h - 70.f});
+    }
+
+    ShapeLayerView background;
+    TextLayerView title {"Quick Panel"};
+    TextLayerView subtitle {"Toggled from the tray, never recreated"};
+};
 
 struct TrayApp
 {
     TrayApp()
     {
         Apps::setDockIconVisible(false);
-        Apps::setLaunchAtLogin(true);
-
-        api.onArmDrag = [this](const EA::Vector<std::string>& paths)
-        { webView.armFileDrag(paths); };
-        api.onCopyFiles = [](const EA::Vector<std::string>& paths)
-        { return Clipboard::copyFiles(paths); };
-        api.onShowCopyToast = [this](const std::string& name)
-        { showCopyToast(name); };
-        api.onSubmit = [this](const std::string&) { swallowAndHide(); };
-        api.onDismiss = [this] { hidePanel(); };
-
-        transport.setCommandExecution(searchDownloadsCommand,
-                                      CommandExecution::WorkerThread);
-
-        webView.onFileDragStarted = [this] { hidePanel(); };
-        webView.onNavigationFinished = [this](const std::string&)
-        {
-            if (window.isVisible())
-                focusPrompt();
-        };
-        webView.loadURL("app://local/index.html");
 
         // The window shows itself on construction; hide it immediately so
         // the app starts as a bare tray icon. setVisible keeps the window
         // (and its content) alive across toggles, so it reappears exactly
         // where the user left it.
-        window.setContentView(webView);
+        window.setContentView(panelView);
         window.setVisible(false);
-        window.events.onActivationChanged = [this](bool isKey)
-        {
-            if (!isKey && window.isVisible())
-                hidePanel();
-        };
 
         tray.setIcon(makeTrayIcon());
         tray.setTooltip("eacp Tray App");
@@ -176,11 +86,6 @@ struct TrayApp
         // menu stays on right-click). On macOS the menu owns the click, so
         // this never fires there — use the menu item instead.
         tray.setOnClick([this] { togglePanel(); });
-
-        hotKey.emplace(launcherModifiers, launcherKeyCode, [this] { showPanel(); });
-
-        copyToastWindow.setContentView(copyToastView);
-        copyToastWindow.setVisible(false);
     }
 
     // A small tray companion: borderless and rounded (cornerRadius defines
@@ -191,35 +96,16 @@ struct TrayApp
     {
         auto options = WindowOptions();
 
-        options.width = 760;
-        options.height = 430;
-        options.isPrimary = false;
-
-        options.flags = {WindowFlags::Borderless};
-        options.cornerRadius = 18.f;
-
-        options.alwaysOnTop = true;
-        options.visibleOnAllWorkspaces = true;
-        options.showInactive = true;
-
-        return options;
-    }
-
-    static WindowOptions getCopyToastOptions()
-    {
-        auto options = WindowOptions();
-
         options.width = 320;
-        options.height = 220;
+        options.height = 180;
         options.isPrimary = false;
 
         options.flags = {WindowFlags::Borderless};
-        options.cornerRadius = 32.f;
+        options.cornerRadius = 14.f;
 
         options.alwaysOnTop = true;
         options.visibleOnAllWorkspaces = true;
         options.showInactive = true;
-        options.ignoresMouseEvents = true;
 
         return options;
     }
@@ -228,143 +114,18 @@ struct TrayApp
     {
         auto menu = Menu();
         menu.add(MenuItem::withAction("Toggle Panel", [this] { togglePanel(); }));
+        menu.add(
+            MenuItem::withAction("Say Hello", [] { LOG("Hello from the tray!"); }));
         menu.addSeparator();
         menu.add(MenuItem::withAction("Quit", [] { Apps::quit(); }));
         return menu;
     }
 
-    void showPanel()
-    {
-        api.setPlaybackEnabled(true);
-        window.setVisible(true);
-        window.toFront();
-        focusPrompt();
-        Threads::callAsync(
-            [this]
-            {
-                if (window.isVisible())
-                    focusPrompt();
-            });
-    }
+    void togglePanel() { window.setVisible(!window.isVisible()); }
 
-    void focusPrompt()
-    {
-        webView.focusContent();
-        webView.evaluateJavaScript(R"js(
-(() => {
-    const focus = () => {
-        const input = document.querySelector('input[name="prompt"]');
-        if (!input) return false;
-        input.focus();
-        input.select?.();
-        return document.activeElement === input;
-    };
-    if (focus()) return;
-    setTimeout(focus, 0);
-    setTimeout(focus, 50);
-    setTimeout(focus, 150);
-})();
-)js");
-    }
-
-    void hidePanel()
-    {
-        api.setPlaybackEnabled(false);
-        window.setVisible(false);
-    }
-
-    void showCopyToast(const std::string& sampleName)
-    {
-        copyToastView.setSampleName(sampleName);
-        copyToastVisible = true;
-        copyToastStart = std::chrono::steady_clock::now();
-        copyToastView.setOpacity(0.f);
-        copyToastWindow.setVisible(true);
-    }
-
-    void updateCopyToast()
-    {
-        if (!copyToastVisible)
-            return;
-
-        auto elapsed = std::chrono::steady_clock::now() - copyToastStart;
-
-        if (elapsed >= copyToastDuration)
-        {
-            copyToastVisible = false;
-            copyToastWindow.setVisible(false);
-            return;
-        }
-
-        copyToastView.setOpacity(copyToastOpacity(elapsed));
-    }
-
-    // Snappy exponential ease-out: most of the rise happens immediately, then
-    // it glides into place — reads as deliberate and expensive rather than a
-    // flat linear ramp.
-    static float easeOutExpo(float t)
-    {
-        return t >= 1.f ? 1.f : 1.f - std::pow(2.f, -10.f * t);
-    }
-
-    // Eased at both ends, for an unhurried, settled fade out.
-    static float easeInOutCubic(float t)
-    {
-        return t < 0.5f ? 4.f * t * t * t
-                        : 1.f - std::pow(-2.f * t + 2.f, 3.f) / 2.f;
-    }
-
-    // A fast, eased fade in, a hold, then an unhurried eased fade out.
-    static float copyToastOpacity(std::chrono::steady_clock::duration elapsed)
-    {
-        using Millis = std::chrono::duration<float, std::milli>;
-        constexpr auto fadeIn = 90.f;
-        constexpr auto fadeOut = 360.f;
-
-        auto total = std::chrono::duration_cast<Millis>(copyToastDuration).count();
-        auto now = std::chrono::duration_cast<Millis>(elapsed).count();
-        auto remaining = total - now;
-
-        if (now < fadeIn)
-            return easeOutExpo(now / fadeIn);
-
-        if (remaining < fadeOut)
-            return easeInOutCubic(std::clamp(remaining / fadeOut, 0.f, 1.f));
-
-        return 1.f;
-    }
-
-    void swallowAndHide()
-    {
-        webView.evaluateJavaScript(R"js(
-const input = document.querySelector('input[name="prompt"]');
-if (input) input.value = '';
-)js");
-        hidePanel();
-    }
-
-    void togglePanel()
-    {
-        if (window.isVisible())
-            hidePanel();
-        else
-            showPanel();
-    }
-
-    Api::TrayLauncherApi api;
-    WebView webView {getWebViewOptions()};
-    WebViewBridge transport {webView, api};
+    PanelView panelView;
     Window window {getPanelOptions()};
-    CopyToastView copyToastView;
-    Window copyToastWindow {getCopyToastOptions()};
-    bool copyToastVisible = false;
-    std::chrono::steady_clock::time_point copyToastStart {};
-    // Note: the second arg is the tick rate in Hz, not milliseconds. This
-    // drives the toast's opacity fade, so it wants display-refresh frequency —
-    // at 10Hz the fade visibly stepped at ~10fps.
-    Threads::Timer copyToastTimer {[this] { updateCopyToast(); }, 120};
     TrayIcon tray;
-    std::optional<GlobalHotKey> hotKey;
 };
 
 int main()

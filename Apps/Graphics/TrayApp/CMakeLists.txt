@@ -1,15 +1,5 @@
-include(${CMAKE_CURRENT_SOURCE_DIR}/MakeASound.cmake)
-
-eacp_add_webview_app(TrayApp
-        SOURCES     Main.cpp
-        API         Api::TrayLauncherApi
-        API_HEADER  Api.h
-        WEB_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/web
-        BUNDLE_ID   com.eacp.trayapp
-        BUNDLE_NAME "Tray App"
-        LINK_LIBRARIES MakeASound miniaudio
-        CATEGORY    TrayApp
-        REACT)
+add_executable(TrayApp Main.cpp)
+target_link_libraries(TrayApp PRIVATE eacp-graphics)
 
 set(BUNDLE_ID "com.eacp.trayapp")
 
