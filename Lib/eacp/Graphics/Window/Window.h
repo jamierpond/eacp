@@ -127,6 +127,12 @@ struct WindowOptions
     // macOS applies it as the Dock icon. Unset keeps the system default.
     std::function<Image()> applicationIcon;
 
+    // Windows: overrides the icon the Alt-Tab switcher shows (the big-icon
+    // slot); the title bar and taskbar keep applicationIcon. Unset falls
+    // back to applicationIcon. No-op on macOS, which has no per-window
+    // icons.
+    std::function<Image()> altTabIcon;
+
     // Rounds the window's corners (points). Borderless windows are square
     // by default; set this to get the standard macOS rounded shape. On
     // macOS this makes the window non-opaque with a clear background

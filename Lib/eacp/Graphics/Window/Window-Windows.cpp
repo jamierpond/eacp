@@ -66,6 +66,9 @@ struct Window::Native
 
         if (applicationIcon)
             DestroyIcon(applicationIcon);
+
+        if (altTabIcon)
+            DestroyIcon(altTabIcon);
     }
 
     static void registerWindowClass()
@@ -181,26 +184,30 @@ struct Window::Native
             applyTitleBarTheme(host.hwnd, isSystemDarkMode());
         }
 
-        if (host.hwnd && options.applicationIcon)
-            applyApplicationIcon(options.applicationIcon());
+        if (host.hwnd)
+            applyApplicationIcons(options);
     }
 
-    // The same image serves both slots: ICON_SMALL drives the title bar and
-    // taskbar, ICON_BIG the Alt-Tab switcher; the system scales as needed.
-    void applyApplicationIcon(const Image& image)
+    // ICON_SMALL drives the title bar and taskbar, ICON_BIG the Alt-Tab
+    // switcher; the system scales as needed. The Alt-Tab override wins the
+    // big slot when present, otherwise applicationIcon serves both.
+    void applyApplicationIcons(const WindowOptions& options)
     {
-        applicationIcon = toHIcon(image);
-        if (!applicationIcon)
-            return;
+        if (options.applicationIcon)
+            applicationIcon = toHIcon(options.applicationIcon());
 
-        SendMessageW(host.hwnd,
-                     WM_SETICON,
-                     ICON_SMALL,
-                     reinterpret_cast<LPARAM>(applicationIcon));
-        SendMessageW(host.hwnd,
-                     WM_SETICON,
-                     ICON_BIG,
-                     reinterpret_cast<LPARAM>(applicationIcon));
+        if (options.altTabIcon)
+            altTabIcon = toHIcon(options.altTabIcon());
+
+        if (applicationIcon)
+            SendMessageW(host.hwnd,
+                         WM_SETICON,
+                         ICON_SMALL,
+                         reinterpret_cast<LPARAM>(applicationIcon));
+
+        if (auto* bigIcon = altTabIcon ? altTabIcon : applicationIcon)
+            SendMessageW(
+                host.hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(bigIcon));
     }
 
     // Windows 11+: ask DWM to round the window at the system radius (the
@@ -377,6 +384,7 @@ struct Window::Native
 
     CompositionHostWindow host;
     HICON applicationIcon = nullptr;
+    HICON altTabIcon = nullptr;
     Callback quitCallback = [] {};
     ResizeCallback onResize;
     WillResizeCallback onWillResize;

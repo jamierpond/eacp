@@ -8,9 +8,11 @@ using namespace Graphics;
 
 // A minimal browser demonstrating the window chrome options:
 //
-//   WindowOptions::applicationIcon   decodes the PNG embedded with ResEmbed
-//       (CMakeLists.txt) — the Windows taskbar / Alt-Tab switcher and the
-//       macOS Dock show it instead of the generic application icon
+//   WindowOptions::applicationIcon   decodes a PNG embedded with ResEmbed
+//       (CMakeLists.txt) — the Windows taskbar and the macOS Dock show it
+//       instead of the generic application icon
+//   WindowOptions::altTabIcon        the blue icon everywhere, except the
+//       Windows Alt-Tab switcher, which shows this orange override
 //   WebView::Options::statusBar      off, so hovering a link shows no URL
 //       overlay — the same behaviour as WKWebView
 //
@@ -69,13 +71,16 @@ struct BrowserApp
         options.minWidth = 480;
         options.minHeight = 320;
 
-        options.applicationIcon = []
-        {
-            auto png = ResEmbed::get("Icon.png", "Browser");
-            return Image::decode(png.data(), png.getSize());
-        };
+        options.applicationIcon = [] { return decodeIcon("Icon.png"); };
+        options.altTabIcon = [] { return decodeIcon("AltTabIcon.png"); };
 
         return options;
+    }
+
+    static Image decodeIcon(const std::string& name)
+    {
+        auto png = ResEmbed::get(name, "Browser");
+        return Image::decode(png.data(), png.getSize());
     }
 
     BrowserView view;

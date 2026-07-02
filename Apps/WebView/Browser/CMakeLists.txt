@@ -12,9 +12,10 @@ set_target_properties(Browser PROPERTIES
 eacp_set_gui_subsystem(Browser)
 set_default_target_setting(Browser)
 
-# The app icon travels as a plain embedded resource; Main.cpp decodes it
-# and hands it to WindowOptions::applicationIcon.
+# The icons travel as plain embedded resources; Main.cpp decodes them into
+# WindowOptions::applicationIcon and (Windows) the altTabIcon override.
 res_embed_add(Browser
         FILES     Icon.png
+                  AltTabIcon.png
         NAMESPACE Browser
         CATEGORY  Browser)
