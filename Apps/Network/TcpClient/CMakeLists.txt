@@ -8,3 +8,5 @@ set_target_properties(TcpClient PROPERTIES
         MACOSX_BUNDLE_BUNDLE_NAME "TCP Client App"
         MACOSX_BUNDLE_GUI_IDENTIFIER ${BUNDLE_ID}
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${BUNDLE_ID})
+
+eacp_set_icon(TcpClient)

@@ -11,3 +11,5 @@ set_target_properties(Sprites PROPERTIES
 
 eacp_set_gui_subsystem(Sprites)
 set_default_target_setting(Sprites)
+
+eacp_set_icon(Sprites MAIN_ICON Icon.png)

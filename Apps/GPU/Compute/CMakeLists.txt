@@ -10,3 +10,5 @@ set_target_properties(Compute PROPERTIES
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${BUNDLE_ID})
 
 set_default_target_setting(Compute)
+
+eacp_set_icon(Compute)

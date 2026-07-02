@@ -16,3 +16,5 @@ set_target_properties(EmbeddedPopups PROPERTIES
 
 eacp_set_gui_subsystem(EmbeddedPopups)
 set_default_target_setting(EmbeddedPopups)
+
+eacp_set_icon(EmbeddedPopups MAIN_ICON Icon.png)

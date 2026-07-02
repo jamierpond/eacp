@@ -17,3 +17,5 @@ set_default_target_setting(MixedViews)
 set_target_properties(MixedViews PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST
         "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in")
+
+eacp_set_icon(MixedViews MAIN_ICON Icon.png)

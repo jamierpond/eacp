@@ -17,3 +17,5 @@ set_target_properties(SVG PROPERTIES
 
 eacp_set_gui_subsystem(SVG)
 set_default_target_setting(SVG)
+
+eacp_set_icon(SVG MAIN_ICON Icon.png)

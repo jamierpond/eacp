@@ -6,3 +6,5 @@ eacp_add_webview_app(WebViewReactAnim
         CATEGORY    ReactAnimApp
         BUNDLE_ID   com.eacp.webviewreactanim
         BUNDLE_NAME "WebView React Anim")
+
+eacp_set_icon(WebViewReactAnim MAIN_ICON Icon.png)

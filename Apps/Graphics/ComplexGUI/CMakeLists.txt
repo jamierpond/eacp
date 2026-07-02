@@ -11,3 +11,5 @@ set_target_properties(TaskBoard PROPERTIES
 
 eacp_set_gui_subsystem(TaskBoard)
 set_default_target_setting(TaskBoard)
+
+eacp_set_icon(TaskBoard MAIN_ICON Icon.png)

@@ -10,3 +10,5 @@ if (APPLE)
             MACOSX_BUNDLE_GUI_IDENTIFIER ${BUNDLE_ID}
             XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${BUNDLE_ID})
 endif ()
+
+eacp_set_icon(Console)

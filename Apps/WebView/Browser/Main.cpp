@@ -7,10 +7,11 @@ using namespace Graphics;
 
 // A minimal browser demonstrating the Windows chrome options:
 //
-//   WindowOptions::useEmbeddedApplicationIcon   the taskbar / Alt-Tab icon
-//       comes from the icon embedded in the executable (see Browser.rc)
-//   WebView::Options::statusBar                 off, so hovering a link
-//       shows no URL overlay — the same behaviour as WKWebView
+//   eacp_set_icon (CMakeLists.txt)   embeds the app icon, plus a distinct
+//       Alt-Tab icon via WINDOWS_ALT_TAB_ICON; windows pick both up
+//       automatically (WindowOptions::useEmbeddedApplicationIcon)
+//   WebView::Options::statusBar      off, so hovering a link shows no URL
+//       overlay — the same behaviour as WKWebView
 //
 // Type a URL in the address bar and press return to navigate.
 
@@ -66,7 +67,6 @@ struct BrowserApp
         options.height = 760;
         options.minWidth = 480;
         options.minHeight = 320;
-        options.useEmbeddedApplicationIcon = true;
 
         return options;
     }

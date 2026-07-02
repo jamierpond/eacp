@@ -11,3 +11,5 @@ set_target_properties(Texture PROPERTIES
 
 eacp_set_gui_subsystem(Texture)
 set_default_target_setting(Texture)
+
+eacp_set_icon(Texture MAIN_ICON Icon.png)

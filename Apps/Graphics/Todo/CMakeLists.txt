@@ -8,3 +8,5 @@ set_target_properties(Todo PROPERTIES
 
 eacp_set_gui_subsystem(Todo)
 set_default_target_setting(Todo)
+
+eacp_set_icon(Todo MAIN_ICON Icon.png)

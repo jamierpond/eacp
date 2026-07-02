@@ -11,3 +11,5 @@ set_target_properties(RotatingTriangle PROPERTIES
 
 eacp_set_gui_subsystem(RotatingTriangle)
 set_default_target_setting(RotatingTriangle)
+
+eacp_set_icon(RotatingTriangle MAIN_ICON Icon.png)

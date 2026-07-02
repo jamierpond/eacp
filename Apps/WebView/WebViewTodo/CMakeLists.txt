@@ -10,3 +10,5 @@ eacp_add_webview_app(WebViewTodo
         REACT)
 
 add_subdirectory(Tests)
+
+eacp_set_icon(WebViewTodo MAIN_ICON Icon.png)

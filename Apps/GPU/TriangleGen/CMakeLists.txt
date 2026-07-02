@@ -11,3 +11,5 @@ set_target_properties(TriangleGen PROPERTIES
 
 eacp_set_gui_subsystem(TriangleGen)
 set_default_target_setting(TriangleGen)
+
+eacp_set_icon(TriangleGen MAIN_ICON Icon.png)

@@ -11,3 +11,5 @@ set_target_properties(Teapot PROPERTIES
 
 eacp_set_gui_subsystem(Teapot)
 set_default_target_setting(Teapot)
+
+eacp_set_icon(Teapot MAIN_ICON Icon.png)

@@ -63,27 +63,43 @@ BOOL CALLBACK firstIconGroupName(HMODULE, LPCWSTR, LPWSTR name, LONG_PTR param)
     return FALSE;
 }
 
+// The icon group IDs eacp_set_icon (IconSetup.cmake) embeds: 1 is the
+// application icon, 2 the optional Alt-Tab override.
+constexpr auto mainIconResourceId = 1;
+constexpr auto altTabIconResourceId = 2;
+
 // LR_SHARED icons live in the system's per-resource cache and must not be
 // destroyed, so they safely outlive the window.
-HICON loadEmbeddedApplicationIcon(int size)
+HICON loadIconResource(LPCWSTR name, int size)
 {
-    auto* module = GetModuleHandleW(nullptr);
+    return static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr),
+                                         name,
+                                         IMAGE_ICON,
+                                         size,
+                                         size,
+                                         LR_DEFAULTCOLOR | LR_SHARED));
+}
 
-    // RT_GROUP_ICON comes from the ANSI MAKEINTRESOURCE (UNICODE is not
-    // defined project-wide); the W API wants the same ordinal as a wide
-    // pointer.
+HICON loadEmbeddedApplicationIcon(int size, int preferredResourceId)
+{
+    if (auto* icon = loadIconResource(MAKEINTRESOURCEW(preferredResourceId), size))
+        return icon;
+
+    // Hand-authored resource scripts can use any ID, so fall back to the
+    // first icon group in the executable. RT_GROUP_ICON comes from the ANSI
+    // MAKEINTRESOURCE (UNICODE is not defined project-wide); the W API wants
+    // the same ordinal as a wide pointer.
     auto* iconGroupType = reinterpret_cast<LPCWSTR>(RT_GROUP_ICON);
 
     auto name = IconGroupName {};
-    EnumResourceNamesW(module,
+    EnumResourceNamesW(GetModuleHandleW(nullptr),
                        iconGroupType,
                        firstIconGroupName,
                        reinterpret_cast<LONG_PTR>(&name));
     if (!name.found)
         return nullptr;
 
-    return static_cast<HICON>(LoadImageW(
-        module, name.get(), IMAGE_ICON, size, size, LR_DEFAULTCOLOR | LR_SHARED));
+    return loadIconResource(name.get(), size);
 }
 } // namespace
 
@@ -224,13 +240,17 @@ struct Window::Native
             applyEmbeddedApplicationIcon();
     }
 
+    // Alt-Tab shows the big icon, so the override group wins there when
+    // present; otherwise the main group serves both slots.
     void applyEmbeddedApplicationIcon()
     {
-        if (auto* icon = loadEmbeddedApplicationIcon(GetSystemMetrics(SM_CXSMICON)))
+        if (auto* icon = loadEmbeddedApplicationIcon(GetSystemMetrics(SM_CXSMICON),
+                                                     mainIconResourceId))
             SendMessageW(
                 host.hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon));
 
-        if (auto* icon = loadEmbeddedApplicationIcon(GetSystemMetrics(SM_CXICON)))
+        if (auto* icon = loadEmbeddedApplicationIcon(GetSystemMetrics(SM_CXICON),
+                                                     altTabIconResourceId))
             SendMessageW(
                 host.hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon));
     }

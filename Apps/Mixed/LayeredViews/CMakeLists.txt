@@ -11,3 +11,5 @@ set_target_properties(LayeredViews PROPERTIES
 
 eacp_set_gui_subsystem(LayeredViews)
 set_default_target_setting(LayeredViews)
+
+eacp_set_icon(LayeredViews MAIN_ICON Icon.png)

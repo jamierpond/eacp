@@ -1,11 +1,6 @@
 add_executable(Browser Main.cpp)
 target_link_libraries(Browser PRIVATE eacp-webview)
 
-# The embedded icon useEmbeddedApplicationIcon stamps onto the window.
-if (WIN32)
-    target_sources(Browser PRIVATE Browser.rc)
-endif ()
-
 set(BUNDLE_ID "com.eacp.browser")
 
 set_target_properties(Browser PROPERTIES
@@ -16,3 +11,7 @@ set_target_properties(Browser PROPERTIES
 
 eacp_set_gui_subsystem(Browser)
 set_default_target_setting(Browser)
+
+# The blue icon everywhere, except the Windows Alt-Tab switcher, which shows
+# the orange one — demonstrating the WINDOWS_ALT_TAB_ICON override.
+eacp_set_icon(Browser MAIN_ICON Icon.png WINDOWS_ALT_TAB_ICON AltTabIcon.png)

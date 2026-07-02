@@ -17,3 +17,5 @@ set_target_properties(Triangle PROPERTIES
 
 eacp_set_gui_subsystem(Triangle)
 set_default_target_setting(Triangle)
+
+eacp_set_icon(Triangle MAIN_ICON Icon.png)
