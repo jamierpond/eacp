@@ -8,5 +8,3 @@ set_target_properties(TcpServer PROPERTIES
         MACOSX_BUNDLE_BUNDLE_NAME "TCP Server App"
         MACOSX_BUNDLE_GUI_IDENTIFIER ${BUNDLE_ID}
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${BUNDLE_ID})
-
-eacp_set_icon(TcpServer)

@@ -21,6 +21,3 @@ add_executable(HttpRpcClient Client.cpp)
 target_link_libraries(HttpRpcClient PRIVATE eacp-network-rpc)
 eacp_target_uses_schema(HttpRpcClient HttpRpcDemoSchema)
 set_default_target_setting(HttpRpcClient)
-
-eacp_set_icon(HttpRpcServer)
-eacp_set_icon(HttpRpcClient)

@@ -16,5 +16,3 @@ set_default_target_setting(CameraProbe)
 set_target_properties(CameraProbe PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST
         "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in")
-
-eacp_set_icon(CameraProbe)
