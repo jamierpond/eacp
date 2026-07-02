@@ -11,5 +11,3 @@ set_target_properties(FancyWindow PROPERTIES
 
 eacp_set_gui_subsystem(FancyWindow)
 set_default_target_setting(FancyWindow)
-
-eacp_set_icon(FancyWindow MAIN_ICON Icon.png)

@@ -13,5 +13,3 @@ set_target_properties(SimpleView PROPERTIES
 
 eacp_set_gui_subsystem(SimpleView)
 set_default_target_setting(SimpleView)
-
-eacp_set_icon(SimpleView MAIN_ICON Icon.png)

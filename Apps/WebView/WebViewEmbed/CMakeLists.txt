@@ -6,5 +6,3 @@ eacp_add_webview_app(WebViewEmbed
         BUNDLE_ID   com.eacp.webviewembed
         BUNDLE_NAME "WebView Embed"
         REACT)
-
-eacp_set_icon(WebViewEmbed MAIN_ICON Icon.png)

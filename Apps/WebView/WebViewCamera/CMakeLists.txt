@@ -18,5 +18,3 @@ set_default_target_setting(WebViewCamera)
 set_target_properties(WebViewCamera PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST
         "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in")
-
-eacp_set_icon(WebViewCamera MAIN_ICON Icon.png)

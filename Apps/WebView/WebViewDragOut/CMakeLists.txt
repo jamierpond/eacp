@@ -19,5 +19,3 @@ set_target_properties(WebViewDragOut PROPERTIES
 
 eacp_set_gui_subsystem(WebViewDragOut)
 set_default_target_setting(WebViewDragOut)
-
-eacp_set_icon(WebViewDragOut MAIN_ICON Icon.png)

@@ -11,5 +11,3 @@ set_target_properties(GUI PROPERTIES
 
 eacp_set_gui_subsystem(GUI)
 set_default_target_setting(GUI)
-
-eacp_set_icon(GUI MAIN_ICON Icon.png)

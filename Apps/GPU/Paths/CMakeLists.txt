@@ -11,5 +11,3 @@ set_target_properties(Paths PROPERTIES
 
 eacp_set_gui_subsystem(Paths)
 set_default_target_setting(Paths)
-
-eacp_set_icon(Paths MAIN_ICON Icon.png)

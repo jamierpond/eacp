@@ -17,5 +17,3 @@ set_target_properties(TrayApp PROPERTIES
 
 eacp_set_gui_subsystem(TrayApp)
 set_default_target_setting(TrayApp)
-
-eacp_set_icon(TrayApp MAIN_ICON Icon.png)

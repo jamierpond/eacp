@@ -11,5 +11,3 @@ set_target_properties(Maze PROPERTIES
 
 eacp_set_gui_subsystem(Maze)
 set_default_target_setting(Maze)
-
-eacp_set_icon(Maze MAIN_ICON Icon.png)

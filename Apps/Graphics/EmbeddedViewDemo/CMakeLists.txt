@@ -11,5 +11,3 @@ set_target_properties(EmbeddedViewDemo PROPERTIES
 
 eacp_set_gui_subsystem(EmbeddedViewDemo)
 set_default_target_setting(EmbeddedViewDemo)
-
-eacp_set_icon(EmbeddedViewDemo MAIN_ICON Icon.png)
