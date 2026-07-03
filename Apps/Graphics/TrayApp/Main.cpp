@@ -20,27 +20,40 @@ static constexpr std::string_view logoSvgMarkup()
 )SVG";
 }
 
-// The logo SVG rasterized at tray size and centred on a square transparent
-// canvas (the art is slightly wider than tall). The rendered strokes supply
-// coverage through their alpha; the colour follows the system theme, which
-// is what Windows shows in the notification area. macOS ignores the colour
-// and tints the template icon from alpha by itself.
-static Image makeTrayIcon()
+// The logo SVG rasterized at the given size, tinted, and centred on a
+// square transparent canvas (the art is slightly wider than tall). The
+// rendered strokes supply coverage through their alpha; the tint sets the
+// colour.
+static Image makeLogoImage(int size, const Color& tint)
 {
-    constexpr auto size = 36;
-
     auto logo = SVG::toImage(std::string {logoSvgMarkup()}, size);
     auto icon = Image(size, size);
 
     auto offsetX = (size - logo.width()) / 2;
     auto offsetY = (size - logo.height()) / 2;
-    auto tint = isSystemDarkMode() ? Color::white() : Color::black();
 
     for (auto y = 0; y < logo.height(); ++y)
         for (auto x = 0; x < logo.width(); ++x)
             icon.set(offsetX + x, offsetY + y, tint.withAlpha(logo.at(x, y).a));
 
     return icon;
+}
+
+// The tray follows the system theme: Windows shows these pixels in the
+// notification area, so the strokes flip between white and black; macOS
+// ignores the colour and tints the template icon from alpha by itself.
+static Image makeTrayIcon()
+{
+    auto tint = isSystemDarkMode() ? Color::white() : Color::black();
+    return makeLogoImage(36, tint);
+}
+
+// The application icon (Dock on macOS; window, taskbar and Alt-Tab on
+// Windows) keeps the logo's own colour at a size that stays crisp in the
+// large Alt-Tab / Dock slots.
+static Image makeApplicationIcon()
+{
+    return makeLogoImage(256, Color::black());
 }
 
 // The content of the floating panel below. The window's cornerRadius clips
@@ -116,6 +129,8 @@ struct TrayApp
         options.alwaysOnTop = true;
         options.visibleOnAllWorkspaces = true;
         options.showInactive = true;
+
+        options.applicationIcon = [] { return makeApplicationIcon(); };
 
         return options;
     }
