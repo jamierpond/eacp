@@ -28,6 +28,10 @@ public:
     // without stroke-join support ignore it.
     virtual void setLineJoin(LineJoin) {}
 
+    // Cap style for subsequent stroke calls. Defaults to Butt; contexts
+    // without stroke-cap support ignore it.
+    virtual void setLineCap(LineCap) {}
+
     virtual void strokeRect(const Rect& rect) = 0;
     virtual void drawLine(const Point& start, const Point& end) = 0;
 

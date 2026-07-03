@@ -198,6 +198,55 @@ Transform parseTransform(const std::string& value)
     return result;
 }
 
+Vector<TransformOp> parseTransformList(const std::string& value)
+{
+    auto result = Vector<TransformOp>();
+    auto pos = size_t {0};
+
+    while (pos < value.size())
+    {
+        skipWhitespace(value, pos);
+        if (pos >= value.size())
+            break;
+
+        auto op = TransformOp {};
+        if (value.compare(pos, 9, "translate") == 0)
+            op.type = TransformOp::Type::Translate;
+        else if (value.compare(pos, 5, "scale") == 0)
+            op.type = TransformOp::Type::Scale;
+        else if (value.compare(pos, 6, "rotate") == 0)
+            op.type = TransformOp::Type::Rotate;
+        else
+        {
+            ++pos;
+            continue;
+        }
+
+        if (!advanceToArgumentList(value, pos))
+            break;
+
+        auto reader = NumberReader {value, pos};
+        op.a = reader.readFloat();
+        if (op.type == TransformOp::Type::Scale)
+        {
+            auto saved = reader.pos;
+            op.b = reader.readFloat();
+            if (reader.pos == saved)
+                op.b = op.a;
+        }
+        else if (op.type == TransformOp::Type::Translate)
+        {
+            op.b = reader.readFloat();
+        }
+
+        pos = reader.pos;
+        advancePastClosingParen(value, pos);
+        result.add(op);
+    }
+
+    return result;
+}
+
 Vector<float> parseNumberList(const std::string& value)
 {
     auto result = Vector<float>();
@@ -234,6 +283,16 @@ Graphics::LineJoin parseLineJoin(const std::string& value)
     return Graphics::LineJoin::Miter;
 }
 
+Graphics::LineCap parseLineCap(const std::string& value)
+{
+    auto lower = Strings::toLower(value);
+    if (lower == "round")
+        return Graphics::LineCap::Round;
+    if (lower == "square")
+        return Graphics::LineCap::Square;
+    return Graphics::LineCap::Butt;
+}
+
 InheritedStyle InheritedStyle::applied(const SVGElement& element) const
 {
     auto result = *this;
@@ -246,6 +305,8 @@ InheritedStyle InheritedStyle::applied(const SVGElement& element) const
         result.strokeWidth = element.attr("stroke-width");
     if (element.hasAttr("stroke-linejoin"))
         result.strokeLinejoin = element.attr("stroke-linejoin");
+    if (element.hasAttr("stroke-linecap"))
+        result.strokeLinecap = element.attr("stroke-linecap");
 
     return result;
 }

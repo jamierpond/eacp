@@ -20,6 +20,7 @@ public:
     void setStrokeColor(const Color& color);
     void setStrokeWidth(float width);
     void setStrokeJoin(LineJoin join);
+    void setStrokeCap(LineCap cap);
 
     void* getNativeLayer() override;
 

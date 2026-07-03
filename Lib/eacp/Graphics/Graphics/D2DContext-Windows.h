@@ -45,6 +45,19 @@ inline D2D1_LINE_JOIN toD2DLineJoin(LineJoin join)
     }
 }
 
+inline D2D1_CAP_STYLE toD2DCapStyle(LineCap cap)
+{
+    switch (cap)
+    {
+        case LineCap::Round:
+            return D2D1_CAP_STYLE_ROUND;
+        case LineCap::Square:
+            return D2D1_CAP_STYLE_SQUARE;
+        default:
+            return D2D1_CAP_STYLE_FLAT;
+    }
+}
+
 class D2DContext final : public Context
 {
 public:
@@ -98,7 +111,8 @@ public:
 
     void saveState() override
     {
-        savedStates.push_back({userTransform, currentColor, lineWidth, lineJoin});
+        savedStates.push_back(
+            {userTransform, currentColor, lineWidth, lineJoin, lineCap});
     }
 
     void restoreState() override
@@ -111,6 +125,7 @@ public:
         currentColor = state.color;
         lineWidth = state.lineWidth;
         setLineJoin(state.lineJoin);
+        setLineCap(state.lineCap);
         savedStates.pop_back();
         applyColor();
     }
@@ -164,6 +179,15 @@ public:
             return;
 
         lineJoin = join;
+        strokeStyle.Reset();
+    }
+
+    void setLineCap(LineCap cap) override
+    {
+        if (lineCap == cap)
+            return;
+
+        lineCap = cap;
         strokeStyle.Reset();
     }
 
@@ -247,6 +271,7 @@ private:
         Color color;
         float lineWidth;
         LineJoin lineJoin;
+        LineCap lineCap;
     };
 
     static D2D1_RECT_F toD2DRect(const Rect& rect)
@@ -254,13 +279,13 @@ private:
         return D2D1::RectF(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
     }
 
-    // The D2D stroke style carrying the current join; null keeps the D2D
-    // default (miter). Built lazily from the drawing context's factory and
-    // reused until the join changes. Only called between ensureDrawing()
-    // and finish(), while `dc` is live.
+    // The D2D stroke style carrying the current join and cap; null keeps
+    // the D2D defaults (miter, flat). Built lazily from the drawing
+    // context's factory and reused until either changes. Only called
+    // between ensureDrawing() and finish(), while `dc` is live.
     ID2D1StrokeStyle* currentStrokeStyle()
     {
-        if (lineJoin == LineJoin::Miter)
+        if (lineJoin == LineJoin::Miter && lineCap == LineCap::Butt)
             return nullptr;
 
         if (!strokeStyle)
@@ -270,6 +295,9 @@ private:
 
             auto properties = D2D1::StrokeStyleProperties();
             properties.lineJoin = toD2DLineJoin(lineJoin);
+            properties.startCap = toD2DCapStyle(lineCap);
+            properties.endCap = toD2DCapStyle(lineCap);
+            properties.dashCap = toD2DCapStyle(lineCap);
             factory->CreateStrokeStyle(
                 properties, nullptr, 0, strokeStyle.GetAddressOf());
         }
@@ -297,6 +325,7 @@ private:
     Color currentColor {1.0f, 1.0f, 1.0f, 1.0f};
     float lineWidth = 1.0f;
     LineJoin lineJoin = LineJoin::Miter;
+    LineCap lineCap = LineCap::Butt;
 
     std::vector<SavedState> savedStates;
     bool drawing = false;

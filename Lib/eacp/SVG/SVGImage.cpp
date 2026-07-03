@@ -51,6 +51,7 @@ void renderShape(Graphics::Context& context,
                            : Strings::parseFloatOr(style.strokeWidth, 1.f);
     context.setLineWidth(strokeWidth * (sx + sy) * 0.5f);
     context.setLineJoin(parseLineJoin(style.strokeLinejoin));
+    context.setLineCap(parseLineCap(style.strokeLinecap));
     context.setColor(stroke.color.withAlpha(stroke.color.a * opacity));
     context.strokePath(path);
 }
@@ -92,6 +93,33 @@ void renderText(Graphics::Context& context,
     context.drawText(text, {drawX, y}, font);
 }
 
+constexpr auto degreesToRadians = 0.01745329252f;
+
+// Geometry is pre-scaled by (sx, sy), so translations scale with it while
+// scale factors stay unitless. Applied in source order — SVG composes the
+// transform list left to right.
+void applyTransform(Graphics::Context& context,
+                    const std::string& transform,
+                    float sx,
+                    float sy)
+{
+    for (auto& op: parseTransformList(transform))
+    {
+        switch (op.type)
+        {
+            case TransformOp::Type::Translate:
+                context.translate(op.a * sx, op.b * sy);
+                break;
+            case TransformOp::Type::Scale:
+                context.scale(op.a, op.b);
+                break;
+            case TransformOp::Type::Rotate:
+                context.rotate(op.a * degreesToRadians);
+                break;
+        }
+    }
+}
+
 void renderElement(Graphics::Context& context,
                    const SVGElement& element,
                    const InheritedStyle& style,
@@ -104,19 +132,8 @@ void renderGroup(Graphics::Context& context,
                  float sx,
                  float sy)
 {
-    context.saveState();
-
-    auto transform = element.attr("transform");
-    if (!transform.empty())
-    {
-        auto t = parseTransform(transform);
-        context.translate(t.translateX * sx, t.translateY * sy);
-    }
-
     for (auto& child: element.children)
         renderElement(context, child, style, sx, sy);
-
-    context.restoreState();
 }
 
 void renderElement(Graphics::Context& context,
@@ -126,6 +143,13 @@ void renderElement(Graphics::Context& context,
                    float sy)
 {
     auto resolved = style.applied(element);
+    auto transform = element.attr("transform");
+
+    if (!transform.empty())
+    {
+        context.saveState();
+        applyTransform(context, transform, sx, sy);
+    }
 
     if (auto path = makeShapePath(element, sx, sy))
         renderShape(context, element, resolved, *path, sx, sy);
@@ -133,6 +157,9 @@ void renderElement(Graphics::Context& context,
         renderText(context, element, resolved, sx, sy);
     else if (element.tag == "g")
         renderGroup(context, element, resolved, sx, sy);
+
+    if (!transform.empty())
+        context.restoreState();
 }
 
 int roundedPixels(float value)

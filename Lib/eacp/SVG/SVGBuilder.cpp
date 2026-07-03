@@ -31,6 +31,7 @@ static void applyFillAndStroke(Graphics::ShapeLayer& layer,
                              * 0.5f);
 
     layer.setStrokeJoin(parseLineJoin(style.strokeLinejoin));
+    layer.setStrokeCap(parseLineCap(style.strokeLinecap));
 
     auto opacity = element.attr("opacity");
     if (!opacity.empty())

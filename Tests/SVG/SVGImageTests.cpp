@@ -53,6 +53,12 @@ Image renderTestFile(const std::string& name)
 {
     return eacp::SVG::toImage(readTestFile(name), 128, 128);
 }
+
+bool matches(const Color& color, const Color& expected)
+{
+    return roughly(color.r, expected.r) && roughly(color.g, expected.g)
+           && roughly(color.b, expected.b) && roughly(color.a, expected.a);
+}
 } // namespace
 
 auto tNaturalSize = test("SVGImage/naturalSize") = []
@@ -288,6 +294,61 @@ auto tTablerStar = test("SVGImage/realWorld/tablerStar") = []
     check(isOpaque(image.at(64, 12)));
     check(isTransparent(image.at(64, 64)));
     check(isTransparent(image.at(4, 4)));
+};
+
+// Multi-colour fills survive into the output pixels: the Twemoji face is
+// #FFCC4D yellow with a #664500 mouth.
+auto tTwemojiSmileColors = test("SVGImage/realWorld/twemojiSmileColors") = []
+{
+    auto image = renderTestFile("twemoji-smile.svg");
+    check(matches(image.at(20, 40), {1.f, 0.8f, 0.3f}));
+    check(matches(image.at(64, 100), {0.4f, 0.27f, 0.f}));
+    check(isTransparent(image.at(2, 2)));
+};
+
+auto tFrenchFlagColors = test("SVGImage/realWorld/frenchFlagColors") = []
+{
+    auto image = eacp::SVG::toImage(readTestFile("flag-fr.svg"), 128);
+    check(image.height() == 96);
+    check(matches(image.at(21, 48), {0.f, 0.f, 0.57f}));
+    check(matches(image.at(64, 48), {1.f, 1.f, 1.f}));
+    check(matches(image.at(107, 48), {0.88f, 0.f, 0.06f}));
+};
+
+// The disc is a <circle> carrying its own compound transform,
+// translate(-168.4 8.6)scale(.76554), inside a translated group. Applying
+// the functions out of source order (or not at all) shoves it off-centre.
+auto tJapanFlagShapeTransform =
+    test("SVGImage/realWorld/japanFlagShapeTransform") = []
+{
+    auto image = eacp::SVG::toImage(readTestFile("flag-jp.svg"), 128);
+    check(matches(image.at(64, 48), {0.74f, 0.f, 0.18f}));
+    check(matches(image.at(10, 10), {1.f, 1.f, 1.f}));
+};
+
+// A round cap extends the stroke half a width past the endpoint; the butt
+// default stops dead on it.
+auto tRoundCapExtendsLine = test("SVGImage/roundCapExtendsLine") = []
+{
+    constexpr auto butt = R"SVG(<svg width="16" height="16">
+      <path d="M4 8L12 8" stroke="black" stroke-width="4" fill="none"/>
+    </svg>)SVG";
+    constexpr auto round = R"SVG(<svg width="16" height="16">
+      <path d="M4 8L12 8" stroke="black" stroke-width="4" fill="none" stroke-linecap="round"/>
+    </svg>)SVG";
+
+    check(isTransparent(eacp::SVG::toImage(butt).at(3, 8)));
+    check(isOpaque(eacp::SVG::toImage(round).at(3, 8)));
+};
+
+// The star path ends exactly where it began without a closing `z` and
+// relies on its round caps to fuse the joint. Without cap support the
+// bottom vertex shows a wedge-shaped notch.
+auto tStarJointCloses = test("SVGImage/realWorld/tablerStarJointCloses") = []
+{
+    auto image = renderTestFile("tabler-star.svg");
+    check(isOpaque(image.at(64, 92)));
+    check(isOpaque(image.at(64, 94)));
 };
 
 // Writes every render into the temp dir so a test run leaves the images

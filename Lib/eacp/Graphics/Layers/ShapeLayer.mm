@@ -146,6 +146,16 @@ struct ShapeLayer::Native : public NativeLayer
         }
     }
 
+    void setStrokeCap(LineCap cap)
+    {
+        switch (cap)
+        {
+            case LineCap::Round: layer.get().lineCap = kCALineCapRound; break;
+            case LineCap::Square: layer.get().lineCap = kCALineCapSquare; break;
+            default: layer.get().lineCap = kCALineCapButt; break;
+        }
+    }
+
     ObjC::Ptr<ImmediateShapeLayer> layer;
     ObjC::Ptr<ImmediateGradientLayer> gradientLayer;
     LinearGradient currentGradient;
@@ -189,6 +199,11 @@ void ShapeLayer::setStrokeWidth(float width)
 void ShapeLayer::setStrokeJoin(LineJoin join)
 {
     impl->setStrokeJoin(join);
+}
+
+void ShapeLayer::setStrokeCap(LineCap cap)
+{
+    impl->setStrokeCap(cap);
 }
 
 void* ShapeLayer::getNativeLayer()

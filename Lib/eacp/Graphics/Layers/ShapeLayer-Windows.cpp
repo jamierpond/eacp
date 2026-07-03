@@ -38,18 +38,33 @@ struct ShapeLayer::Native : NativeLayerBase
     Color strokeColor;
     float strokeWidth = 1.0f;
     LineJoin strokeJoin = LineJoin::Miter;
+    LineCap strokeCap = LineCap::Butt;
     bool hasStroke = false;
 
-    // Null keeps the D2D default (miter); anything else needs an explicit
-    // stroke style from the factory.
+    static D2D1_CAP_STYLE toD2DCap(LineCap cap)
+    {
+        if (cap == LineCap::Round)
+            return D2D1_CAP_STYLE_ROUND;
+        if (cap == LineCap::Square)
+            return D2D1_CAP_STYLE_SQUARE;
+        return D2D1_CAP_STYLE_FLAT;
+    }
+
+    // Null keeps the D2D defaults (miter join, flat caps); anything else
+    // needs an explicit stroke style from the factory.
     ComPtr<ID2D1StrokeStyle> makeStrokeStyle() const
     {
-        if (strokeJoin == LineJoin::Miter)
+        if (strokeJoin == LineJoin::Miter && strokeCap == LineCap::Butt)
             return {};
 
         auto properties = D2D1::StrokeStyleProperties();
-        properties.lineJoin = strokeJoin == LineJoin::Round ? D2D1_LINE_JOIN_ROUND
-                                                            : D2D1_LINE_JOIN_BEVEL;
+        if (strokeJoin != LineJoin::Miter)
+            properties.lineJoin = strokeJoin == LineJoin::Round
+                                      ? D2D1_LINE_JOIN_ROUND
+                                      : D2D1_LINE_JOIN_BEVEL;
+        properties.startCap = toD2DCap(strokeCap);
+        properties.endCap = toD2DCap(strokeCap);
+        properties.dashCap = toD2DCap(strokeCap);
 
         auto style = ComPtr<ID2D1StrokeStyle> {};
         getD2DFactory()->CreateStrokeStyle(
@@ -230,6 +245,12 @@ void ShapeLayer::setStrokeWidth(float width)
 void ShapeLayer::setStrokeJoin(LineJoin join)
 {
     impl->strokeJoin = join;
+    impl->markContentDirty();
+}
+
+void ShapeLayer::setStrokeCap(LineCap cap)
+{
+    impl->strokeCap = cap;
     impl->markContentDirty();
 }
 

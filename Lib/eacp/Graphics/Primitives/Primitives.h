@@ -90,6 +90,15 @@ enum class LineJoin
     Bevel
 };
 
+// How open stroke ends are drawn. Butt is the platform default; Round
+// caps fuse an unclosed path whose endpoints meet.
+enum class LineCap
+{
+    Butt,
+    Round,
+    Square
+};
+
 struct GradientStop
 {
     Color color;

@@ -70,6 +70,11 @@ public:
         CGContextSetLineJoin(context, toCGLineJoin(join));
     }
 
+    void setLineCap(LineCap cap) override
+    {
+        CGContextSetLineCap(context, toCGLineCap(cap));
+    }
+
     void strokeRect(const Rect& r) override
     {
         CGContextStrokeRect(context, toCGRect(r));
@@ -104,6 +109,19 @@ private:
                 return kCGLineJoinBevel;
             default:
                 return kCGLineJoinMiter;
+        }
+    }
+
+    static CGLineCap toCGLineCap(LineCap cap)
+    {
+        switch (cap)
+        {
+            case LineCap::Round:
+                return kCGLineCapRound;
+            case LineCap::Square:
+                return kCGLineCapSquare;
+            default:
+                return kCGLineCapButt;
         }
     }
 

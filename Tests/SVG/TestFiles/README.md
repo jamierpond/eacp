@@ -11,3 +11,5 @@ inherited presentation attributes, leading XML comments).
 | material-home.svg | github.com/google/material-design-icons | Apache-2.0 |
 | simpleicons-github.svg | github.com/simple-icons/simple-icons | CC0-1.0 |
 | tabler-star.svg | github.com/tabler/tabler-icons | MIT |
+| flag-fr.svg, flag-jp.svg | github.com/lipis/flag-icons | MIT |
+| twemoji-smile.svg (1f604) | github.com/twitter/twemoji | CC-BY 4.0 |
