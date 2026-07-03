@@ -29,7 +29,7 @@ static Image makeTrayIcon()
 {
     constexpr auto size = 36;
 
-    auto logo = SVG::toImage(std::string{logoSvgMarkup()}, size);
+    auto logo = SVG::toImage(std::string {logoSvgMarkup()}, size);
     auto icon = Image(size, size);
 
     auto offsetX = (size - logo.width()) / 2;

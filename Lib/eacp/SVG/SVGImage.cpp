@@ -149,9 +149,6 @@ void render(Graphics::Context& context, const SVGElement& root, float sx, float 
 
 Graphics::Image toImage(const std::string& svgMarkup, int width, int height)
 {
-    auto h = static_cast<float>(height);
-    auto w = static_cast<float>(width);
-
     auto root = parseXML(svgMarkup);
     if (!root || root->tag != "svg")
         return {};
@@ -167,15 +164,15 @@ Graphics::Image toImage(const std::string& svgMarkup, int width, int height)
     }
     else if (width <= 0)
     {
-        width = roundedPixels(h * natural.x / natural.y);
+        width = roundedPixels(static_cast<float>(height) * natural.x / natural.y);
     }
     else if (height <= 0)
     {
-        height = roundedPixels(w * natural.y / natural.x);
+        height = roundedPixels(static_cast<float>(width) * natural.y / natural.x);
     }
 
-    auto sx = w / natural.x;
-    auto sy = h / natural.y;
+    auto sx = static_cast<float>(width) / natural.x;
+    auto sy = static_cast<float>(height) / natural.y;
 
     return Graphics::renderToImage(width,
                                    height,

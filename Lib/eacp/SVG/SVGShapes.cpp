@@ -21,8 +21,8 @@ Graphics::Path rectPath(const SVGElement& element, float sx, float sy)
     if (ry <= 0.f && rx > 0.f)
         ry = rx;
 
-    Graphics::Path path;
-    Graphics::Rect rect {x, y, w, h};
+    auto path = Graphics::Path();
+    auto rect = Graphics::Rect {x, y, w, h};
 
     if (rx > 0.f || ry > 0.f)
         path.addRoundedRect(rect, rx);
@@ -34,7 +34,7 @@ Graphics::Path rectPath(const SVGElement& element, float sx, float sy)
 
 Graphics::Path ellipsePath(float cx, float cy, float rx, float ry)
 {
-    Graphics::Path path;
+    auto path = Graphics::Path();
     path.addEllipse({cx - rx, cy - ry, rx * 2.f, ry * 2.f});
     return path;
 }
@@ -57,7 +57,7 @@ Graphics::Path ovalPath(const SVGElement& element, float sx, float sy)
 
 Graphics::Path linePath(const SVGElement& element, float sx, float sy)
 {
-    Graphics::Path path;
+    auto path = Graphics::Path();
     path.moveTo({element.numAttr("x1") * sx, element.numAttr("y1") * sy});
     path.lineTo({element.numAttr("x2") * sx, element.numAttr("y2") * sy});
     return path;
@@ -70,7 +70,7 @@ std::optional<Graphics::Path>
     if (points.empty())
         return std::nullopt;
 
-    Graphics::Path path;
+    auto path = Graphics::Path();
     path.moveTo({points[0].x * sx, points[0].y * sy});
     for (auto i = 1; i < points.size(); ++i)
         path.lineTo({points[i].x * sx, points[i].y * sy});
