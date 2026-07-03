@@ -10,10 +10,9 @@ namespace eacp::Graphics
 class MacOSContext final : public Context
 {
 public:
-
     explicit MacOSContext(CGContextRef contextToUse)
         : context(contextToUse)
-        , currentColor{1.0f, 1.0f, 1.0f, 1.0f}
+        , currentColor {1.0f, 1.0f, 1.0f, 1.0f}
     {
         saveState();
     }
@@ -66,6 +65,11 @@ public:
         CGContextSetLineWidth(context, width);
     }
 
+    void setLineJoin(LineJoin join) override
+    {
+        CGContextSetLineJoin(context, toCGLineJoin(join));
+    }
+
     void strokeRect(const Rect& r) override
     {
         CGContextStrokeRect(context, toCGRect(r));
@@ -85,9 +89,24 @@ public:
         strokePath(p);
     }
 
-    void drawText(const std::string& text, const Point& position, const Font& font) override;
+    void drawText(const std::string& text,
+                  const Point& position,
+                  const Font& font) override;
 
 private:
+    static CGLineJoin toCGLineJoin(LineJoin join)
+    {
+        switch (join)
+        {
+            case LineJoin::Round:
+                return kCGLineJoinRound;
+            case LineJoin::Bevel:
+                return kCGLineJoinBevel;
+            default:
+                return kCGLineJoinMiter;
+        }
+    }
+
     CGContextRef context;
     Color currentColor;
 };

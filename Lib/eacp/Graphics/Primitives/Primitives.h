@@ -81,6 +81,15 @@ struct Color
     float a = 1.f;
 };
 
+// How stroked path segments meet at corners. Miter is the platform
+// default everywhere (sharp spikes, subject to the platform miter limit).
+enum class LineJoin
+{
+    Miter,
+    Round,
+    Bevel
+};
+
 struct GradientStop
 {
     Color color;

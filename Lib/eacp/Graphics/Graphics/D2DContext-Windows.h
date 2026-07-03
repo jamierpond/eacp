@@ -32,6 +32,19 @@ struct BackingSurface
 
 inline constexpr float radiansToDegrees = 57.29577951308232f;
 
+inline D2D1_LINE_JOIN toD2DLineJoin(LineJoin join)
+{
+    switch (join)
+    {
+        case LineJoin::Round:
+            return D2D1_LINE_JOIN_ROUND;
+        case LineJoin::Bevel:
+            return D2D1_LINE_JOIN_BEVEL;
+        default:
+            return D2D1_LINE_JOIN_MITER;
+    }
+}
+
 class D2DContext final : public Context
 {
 public:
@@ -85,7 +98,7 @@ public:
 
     void saveState() override
     {
-        savedStates.push_back({userTransform, currentColor, lineWidth});
+        savedStates.push_back({userTransform, currentColor, lineWidth, lineJoin});
     }
 
     void restoreState() override
@@ -97,6 +110,7 @@ public:
         userTransform = state.transform;
         currentColor = state.color;
         lineWidth = state.lineWidth;
+        setLineJoin(state.lineJoin);
         savedStates.pop_back();
         applyColor();
     }
@@ -144,13 +158,23 @@ public:
 
     void setLineWidth(float width) override { lineWidth = width; }
 
+    void setLineJoin(LineJoin join) override
+    {
+        if (lineJoin == join)
+            return;
+
+        lineJoin = join;
+        strokeStyle.Reset();
+    }
+
     void strokeRect(const Rect& rect) override
     {
         if (!ensureDrawing())
             return;
 
         applyTransform();
-        dc->DrawRectangle(toD2DRect(rect), brush.Get(), lineWidth);
+        dc->DrawRectangle(
+            toD2DRect(rect), brush.Get(), lineWidth, currentStrokeStyle());
     }
 
     void drawLine(const Point& start, const Point& end) override
@@ -162,7 +186,8 @@ public:
         dc->DrawLine(D2D1::Point2F(start.x, start.y),
                      D2D1::Point2F(end.x, end.y),
                      brush.Get(),
-                     lineWidth);
+                     lineWidth,
+                     currentStrokeStyle());
     }
 
     void fillPath(const Path& path) override
@@ -182,7 +207,7 @@ public:
             return;
 
         applyTransform();
-        dc->DrawGeometry(geometry, brush.Get(), lineWidth);
+        dc->DrawGeometry(geometry, brush.Get(), lineWidth, currentStrokeStyle());
     }
 
     void drawText(const std::string& text,
@@ -221,11 +246,35 @@ private:
         D2D1::Matrix3x2F transform;
         Color color;
         float lineWidth;
+        LineJoin lineJoin;
     };
 
     static D2D1_RECT_F toD2DRect(const Rect& rect)
     {
         return D2D1::RectF(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
+    }
+
+    // The D2D stroke style carrying the current join; null keeps the D2D
+    // default (miter). Built lazily from the drawing context's factory and
+    // reused until the join changes. Only called between ensureDrawing()
+    // and finish(), while `dc` is live.
+    ID2D1StrokeStyle* currentStrokeStyle()
+    {
+        if (lineJoin == LineJoin::Miter)
+            return nullptr;
+
+        if (!strokeStyle)
+        {
+            auto factory = Microsoft::WRL::ComPtr<ID2D1Factory> {};
+            dc->GetFactory(factory.GetAddressOf());
+
+            auto properties = D2D1::StrokeStyleProperties();
+            properties.lineJoin = toD2DLineJoin(lineJoin);
+            factory->CreateStrokeStyle(
+                properties, nullptr, 0, strokeStyle.GetAddressOf());
+        }
+
+        return strokeStyle.Get();
     }
 
     void applyTransform() { dc->SetTransform(userTransform * baseTransform); }
@@ -240,12 +289,14 @@ private:
     BackingSurface& target;
     ID2D1DeviceContext* dc = nullptr;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
+    Microsoft::WRL::ComPtr<ID2D1StrokeStyle> strokeStyle;
 
     D2D1::Matrix3x2F baseTransform = D2D1::Matrix3x2F::Identity();
     D2D1::Matrix3x2F userTransform = D2D1::Matrix3x2F::Identity();
 
     Color currentColor {1.0f, 1.0f, 1.0f, 1.0f};
     float lineWidth = 1.0f;
+    LineJoin lineJoin = LineJoin::Miter;
 
     std::vector<SavedState> savedStates;
     bool drawing = false;

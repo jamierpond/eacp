@@ -136,6 +136,16 @@ struct ShapeLayer::Native : public NativeLayer
 
     void setStrokeWidth(float width) { layer.get().lineWidth = width; }
 
+    void setStrokeJoin(LineJoin join)
+    {
+        switch (join)
+        {
+            case LineJoin::Round: layer.get().lineJoin = kCALineJoinRound; break;
+            case LineJoin::Bevel: layer.get().lineJoin = kCALineJoinBevel; break;
+            default: layer.get().lineJoin = kCALineJoinMiter; break;
+        }
+    }
+
     ObjC::Ptr<ImmediateShapeLayer> layer;
     ObjC::Ptr<ImmediateGradientLayer> gradientLayer;
     LinearGradient currentGradient;
@@ -174,6 +184,11 @@ void ShapeLayer::setStrokeColor(const Color& color)
 void ShapeLayer::setStrokeWidth(float width)
 {
     impl->setStrokeWidth(width);
+}
+
+void ShapeLayer::setStrokeJoin(LineJoin join)
+{
+    impl->setStrokeJoin(join);
 }
 
 void* ShapeLayer::getNativeLayer()

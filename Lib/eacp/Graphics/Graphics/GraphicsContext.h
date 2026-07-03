@@ -23,6 +23,11 @@ public:
     virtual void fillRoundedRect(const Rect& rect, float radius) = 0;
 
     virtual void setLineWidth(float width) = 0;
+
+    // Join style for subsequent stroke calls. Defaults to Miter; contexts
+    // without stroke-join support ignore it.
+    virtual void setLineJoin(LineJoin) {}
+
     virtual void strokeRect(const Rect& rect) = 0;
     virtual void drawLine(const Point& start, const Point& end) = 0;
 

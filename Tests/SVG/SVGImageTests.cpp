@@ -151,6 +151,28 @@ auto tLogoStrokeWidthScalesDown = test("SVGImage/logoStrokeWidthScalesDown") = [
     check(isTransparent(image.at(7, 7)));
 };
 
+// The V path carries stroke-linejoin="bevel": its bottom vertex at
+// (292, 182) must be cut flat. A miter join would spike ~55 units past
+// the vertex (half stroke width / sin(half angle)) and blacken the space
+// above the bowl.
+auto tBevelJoinFlattensTheVee = test("SVGImage/bevelJoinFlattensTheVee") = []
+{
+    auto image = eacp::SVG::toImage(logoSvg);
+    check(isTransparent(image.at(292, 235)));
+};
+
+// A V without stroke-linejoin keeps the default miter spike.
+auto tMiterJoinStaysPointy = test("SVGImage/miterJoinStaysPointy") = []
+{
+    constexpr auto svg =
+        R"SVG(<svg width="585" height="510" fill="none">
+      <path d="M197.445 13.622L292.413 182.393L387.709 13.622" stroke="black" stroke-width="54"/>
+    </svg>)SVG";
+
+    auto image = eacp::SVG::toImage(svg);
+    check(!isTransparent(image.at(292, 235)));
+};
+
 // Writes the rendered logo next to the executable's temp dir so it can be
 // inspected by eye after a test run.
 auto tLogoRendersToDisk = test("SVGImage/logoRendersToDisk") = []

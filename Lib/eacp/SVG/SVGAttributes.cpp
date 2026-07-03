@@ -224,6 +224,16 @@ Vector<Graphics::Point> parsePointList(const std::string& value)
     return points;
 }
 
+Graphics::LineJoin parseLineJoin(const std::string& value)
+{
+    auto lower = Strings::toLower(value);
+    if (lower == "round")
+        return Graphics::LineJoin::Round;
+    if (lower == "bevel")
+        return Graphics::LineJoin::Bevel;
+    return Graphics::LineJoin::Miter;
+}
+
 InheritedStyle InheritedStyle::applied(const SVGElement& element) const
 {
     auto result = *this;
@@ -234,6 +244,8 @@ InheritedStyle InheritedStyle::applied(const SVGElement& element) const
         result.stroke = element.attr("stroke");
     if (element.hasAttr("stroke-width"))
         result.strokeWidth = element.attr("stroke-width");
+    if (element.hasAttr("stroke-linejoin"))
+        result.strokeLinejoin = element.attr("stroke-linejoin");
 
     return result;
 }

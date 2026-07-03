@@ -50,6 +50,7 @@ void renderShape(Graphics::Context& context,
                            ? 1.f
                            : Strings::parseFloatOr(style.strokeWidth, 1.f);
     context.setLineWidth(strokeWidth * (sx + sy) * 0.5f);
+    context.setLineJoin(parseLineJoin(style.strokeLinejoin));
     context.setColor(stroke.color.withAlpha(stroke.color.a * opacity));
     context.strokePath(path);
 }

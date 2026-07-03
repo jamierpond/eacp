@@ -30,6 +30,8 @@ static void applyFillAndStroke(Graphics::ShapeLayer& layer,
         layer.setStrokeWidth(Strings::parseFloatOr(style.strokeWidth) * (sx + sy)
                              * 0.5f);
 
+    layer.setStrokeJoin(parseLineJoin(style.strokeLinejoin));
+
     auto opacity = element.attr("opacity");
     if (!opacity.empty())
         layer.setOpacity(Strings::parseFloatOr(opacity));

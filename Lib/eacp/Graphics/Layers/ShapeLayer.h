@@ -19,6 +19,7 @@ public:
     void setFillGradient(const LinearGradient& gradient);
     void setStrokeColor(const Color& color);
     void setStrokeWidth(float width);
+    void setStrokeJoin(LineJoin join);
 
     void* getNativeLayer() override;
 

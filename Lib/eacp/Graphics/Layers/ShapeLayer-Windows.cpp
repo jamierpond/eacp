@@ -37,7 +37,25 @@ struct ShapeLayer::Native : NativeLayerBase
     // Stroke settings
     Color strokeColor;
     float strokeWidth = 1.0f;
+    LineJoin strokeJoin = LineJoin::Miter;
     bool hasStroke = false;
+
+    // Null keeps the D2D default (miter); anything else needs an explicit
+    // stroke style from the factory.
+    ComPtr<ID2D1StrokeStyle> makeStrokeStyle() const
+    {
+        if (strokeJoin == LineJoin::Miter)
+            return {};
+
+        auto properties = D2D1::StrokeStyleProperties();
+        properties.lineJoin = strokeJoin == LineJoin::Round ? D2D1_LINE_JOIN_ROUND
+                                                            : D2D1_LINE_JOIN_BEVEL;
+
+        auto style = ComPtr<ID2D1StrokeStyle> {};
+        getD2DFactory()->CreateStrokeStyle(
+            properties, nullptr, 0, style.GetAddressOf());
+        return style;
+    }
 
     void renderContent() override
     {
@@ -141,8 +159,10 @@ struct ShapeLayer::Native : NativeLayerBase
             if (strokeBrush)
             {
                 dc->SetTransform(baseTransform);
-                dc->DrawGeometry(
-                    pathGeometry.Get(), strokeBrush.Get(), strokeWidth * dpiScale);
+                dc->DrawGeometry(pathGeometry.Get(),
+                                 strokeBrush.Get(),
+                                 strokeWidth * dpiScale,
+                                 makeStrokeStyle().Get());
             }
         }
 
@@ -204,6 +224,12 @@ void ShapeLayer::setStrokeColor(const Color& color)
 void ShapeLayer::setStrokeWidth(float width)
 {
     impl->strokeWidth = width;
+    impl->markContentDirty();
+}
+
+void ShapeLayer::setStrokeJoin(LineJoin join)
+{
+    impl->strokeJoin = join;
     impl->markContentDirty();
 }
 
