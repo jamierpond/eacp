@@ -98,6 +98,8 @@ public:
                   const Point& position,
                   const Font& font) override;
 
+    void drawImage(const Image& image, const Rect& rect) override;
+
 private:
     static CGLineJoin toCGLineJoin(LineJoin join)
     {

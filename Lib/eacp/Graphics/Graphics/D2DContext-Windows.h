@@ -234,6 +234,39 @@ public:
         dc->DrawGeometry(geometry, brush.Get(), lineWidth, currentStrokeStyle());
     }
 
+    void drawImage(const Image& image, const Rect& rect) override
+    {
+        if (!image.isValid() || !ensureDrawing())
+            return;
+
+        // Image stores straight RGBA; D2D bitmaps want premultiplied BGRA.
+        auto premultiplied = std::vector<std::uint8_t>(image.pixels().size());
+        const auto* src = image.pixels().data();
+        for (auto i = std::size_t {0}; i < premultiplied.size(); i += 4)
+        {
+            auto a = static_cast<unsigned>(src[i + 3]);
+            premultiplied[i] = static_cast<std::uint8_t>(src[i + 2] * a / 255);
+            premultiplied[i + 1] = static_cast<std::uint8_t>(src[i + 1] * a / 255);
+            premultiplied[i + 2] = static_cast<std::uint8_t>(src[i] * a / 255);
+            premultiplied[i + 3] = static_cast<std::uint8_t>(a);
+        }
+
+        auto properties = D2D1::BitmapProperties(D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+
+        auto bitmap = Microsoft::WRL::ComPtr<ID2D1Bitmap> {};
+        if (FAILED(dc->CreateBitmap(D2D1::SizeU(static_cast<UINT32>(image.width()),
+                                                static_cast<UINT32>(image.height())),
+                                    premultiplied.data(),
+                                    static_cast<UINT32>(image.width()) * 4,
+                                    properties,
+                                    bitmap.GetAddressOf())))
+            return;
+
+        applyTransform();
+        dc->DrawBitmap(bitmap.Get(), toD2DRect(rect));
+    }
+
     void drawText(const std::string& text,
                   const Point& position,
                   const Font& font) override

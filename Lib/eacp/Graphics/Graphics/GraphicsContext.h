@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../Image/Image.h"
 #include "../Primitives/Path.h"
 #include "../Primitives/Font.h"
 
@@ -41,5 +42,9 @@ public:
     virtual void drawText(const std::string& text,
                           const Point& position,
                           const Font& font) = 0;
+
+    // Draws a straight-alpha RGBA image scaled into `rect`. An invalid
+    // image is a no-op; contexts without image support ignore it.
+    virtual void drawImage(const Image&, const Rect&) {}
 };
 } // namespace eacp::Graphics
