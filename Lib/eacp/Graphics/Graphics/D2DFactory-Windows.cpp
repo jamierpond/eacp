@@ -101,21 +101,36 @@ private:
 
         createRenderingDevice();
 
-        compositor = wuc::Compositor();
+        // The WinRT Compositor needs the thread's DispatcherQueue, which only
+        // exists once the event loop set it up (initLoopThread). Headless
+        // processes — the test binaries — never do, so composition stays
+        // unavailable there while the factories and rendering device above
+        // keep offscreen work (renderToImage) going. Windows and layers
+        // already tolerate a null compositor.
+        try
+        {
+            compositor = wuc::Compositor();
 
-        namespace Interop = ABI::Windows::UI::Composition;
-        auto interop = compositor.as<Interop::ICompositorInterop>();
-        winrt::com_ptr<Interop::ICompositionGraphicsDevice> abiDevice;
-        winrt::check_hresult(
-            interop->CreateGraphicsDevice(d2dDevice.get(), abiDevice.put()));
+            namespace Interop = ABI::Windows::UI::Composition;
+            auto interop = compositor.as<Interop::ICompositorInterop>();
+            winrt::com_ptr<Interop::ICompositionGraphicsDevice> abiDevice;
+            winrt::check_hresult(
+                interop->CreateGraphicsDevice(d2dDevice.get(), abiDevice.put()));
 
-        graphicsDevice = abiDevice.as<wuc::CompositionGraphicsDevice>();
+            graphicsDevice = abiDevice.as<wuc::CompositionGraphicsDevice>();
 
-        // Fires after SetRenderingDevice below, and also when the system
-        // replaces the device on its own (driver update, GPU reset). Surfaces
-        // survive the swap but lose their pixels, so everything re-renders.
-        graphicsDevice.RenderingDeviceReplaced([](auto&&, auto&&)
-                                               { handleRenderingDeviceReplaced(); });
+            // Fires after SetRenderingDevice below, and also when the system
+            // replaces the device on its own (driver update, GPU reset).
+            // Surfaces survive the swap but lose their pixels, so everything
+            // re-renders.
+            graphicsDevice.RenderingDeviceReplaced(
+                [](auto&&, auto&&) { handleRenderingDeviceReplaced(); });
+        }
+        catch (const winrt::hresult_error&)
+        {
+            compositor = nullptr;
+            graphicsDevice = nullptr;
+        }
 
         initialized = true;
     }
@@ -176,10 +191,13 @@ private:
         {
             createRenderingDevice();
 
-            namespace Interop = ABI::Windows::UI::Composition;
-            auto interop =
-                graphicsDevice.as<Interop::ICompositionGraphicsDeviceInterop>();
-            winrt::check_hresult(interop->SetRenderingDevice(d2dDevice.get()));
+            if (graphicsDevice)
+            {
+                namespace Interop = ABI::Windows::UI::Composition;
+                auto interop =
+                    graphicsDevice.as<Interop::ICompositionGraphicsDeviceInterop>();
+                winrt::check_hresult(interop->SetRenderingDevice(d2dDevice.get()));
+            }
 
             // RenderingDeviceReplaced notifies too, but it can arrive
             // asynchronously; notify directly so recovery doesn't depend on
