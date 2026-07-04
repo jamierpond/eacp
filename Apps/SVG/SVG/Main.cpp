@@ -84,14 +84,28 @@ struct MainView final : Graphics::View
     void resized() override
     {
         auto bounds = getLocalBounds();
-        auto vectorBounds = bounds.removeFromTop(170.f);
+        constexpr auto vectorHeight = 170.f;
 
-        if (vectorView != nullptr)
-            vectorView->setBounds(vectorBounds.inset(8.f));
-        farm.setBounds(bounds);
+        auto farmArea = Graphics::Rect {
+            bounds.x, bounds.y + vectorHeight, bounds.w, bounds.h - vectorHeight};
+        farm.setBounds(farmArea);
+
+        if (vectorView == nullptr || vectorSize.x <= 0.f || vectorSize.y <= 0.f)
+            return;
+
+        // Fit the SVG's natural aspect inside the top panel, centred, so
+        // stretchToFit scales it uniformly instead of squishing it.
+        auto area =
+            Graphics::Rect {bounds.x, bounds.y, bounds.w, vectorHeight}.inset(8.f);
+        auto scale = std::min(area.w / vectorSize.x, area.h / vectorSize.y);
+        auto w = vectorSize.x * scale;
+        auto h = vectorSize.y * scale;
+        vectorView->setBounds(
+            {area.x + (area.w - w) / 2.f, area.y + (area.h - h) / 2.f, w, h});
     }
 
     Graphics::View* vectorView = nullptr;
+    Graphics::Point vectorSize;
     SvgFarm farm;
 };
 
@@ -114,6 +128,7 @@ struct MyApp
         {
             result.root->stretchToFit();
             main.vectorView = result.root;
+            main.vectorSize = {result.width, result.height};
             main.addSubview(*result.root);
         }
 
