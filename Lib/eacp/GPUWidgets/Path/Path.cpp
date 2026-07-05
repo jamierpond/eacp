@@ -12,7 +12,7 @@ namespace
 // Curves and arcs flatten to this many line segments. A fixed subdivision is
 // plenty for the shapes this version draws; flatness-adaptive subdivision is a
 // future refinement.
-constexpr int curveSegments = 24;
+constexpr auto curveSegments = 24;
 
 Graphics::Point lerp(const Graphics::Point& a, const Graphics::Point& b, float t)
 {
@@ -31,10 +31,10 @@ bool Path::isEmpty() const
     return subPaths.empty();
 }
 
+// A line/curve before any moveTo seeds a sub-path at the current point so its
+// first vertex is not lost.
 Path::SubPath& Path::currentSubPath()
 {
-    // A line/curve before any moveTo seeds a sub-path at the current point so its
-    // first vertex is not lost.
     if (subPaths.empty())
     {
         auto seeded = SubPath {};
@@ -123,6 +123,9 @@ void Path::addRect(const Graphics::Rect& rect)
     currentPoint = {rect.x, rect.y};
 }
 
+// Each corner is a quarter-circle sweep appended in order. Angles run in a
+// y-down screen space, so the four corners trace the outline with the straight
+// edges formed implicitly between them.
 void Path::addRoundedRect(const Graphics::Rect& rect, float cornerRadius)
 {
     auto radius = std::min(cornerRadius, std::min(rect.w, rect.h) * 0.5f);
@@ -136,9 +139,6 @@ void Path::addRoundedRect(const Graphics::Rect& rect, float cornerRadius)
     auto sub = SubPath {};
     auto cornerSegments = std::max(2, curveSegments / 3);
 
-    // Sweeps a quarter-circle of the given corner, appending its points. Angles
-    // run in a y-down screen space, so the four corners trace the outline in
-    // order with the straight edges formed implicitly between them.
     auto addArc = [&](float centerX, float centerY, float startAngle)
     {
         for (auto i = 0; i <= cornerSegments; ++i)
@@ -155,10 +155,10 @@ void Path::addRoundedRect(const Graphics::Rect& rect, float cornerRadius)
     auto top = rect.y + radius;
     auto bottom = rect.y + rect.h - radius;
 
-    addArc(left, top, pi); // top-left
-    addArc(right, top, pi * 1.5f); // top-right
-    addArc(right, bottom, 0.0f); // bottom-right
-    addArc(left, bottom, pi * 0.5f); // bottom-left
+    addArc(left, top, pi);
+    addArc(right, top, pi * 1.5f);
+    addArc(right, bottom, 0.0f);
+    addArc(left, bottom, pi * 0.5f);
 
     sub.closed = true;
     subPaths.add(std::move(sub));

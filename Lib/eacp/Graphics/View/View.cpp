@@ -139,7 +139,7 @@ MouseEvent View::createLocalEvent(const MouseEvent& event,
                                   View* target,
                                   MouseEventType type)
 {
-    MouseEvent localEvent = event;
+    auto localEvent = event;
     localEvent.pos = convertPointToDescendant(event.pos, target);
     localEvent.downPos = convertPointToDescendant(event.downPos, target);
     localEvent.type = type;

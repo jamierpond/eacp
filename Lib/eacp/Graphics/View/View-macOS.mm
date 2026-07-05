@@ -58,7 +58,7 @@ namespace eacp::Graphics
 
 - (void)setFrame:(NSRect)newFrame
 {
-    NSRect oldFrame = [self frame];
+    auto oldFrame = [self frame];
     [super setFrame:newFrame];
 
     if (!NSEqualSizes(oldFrame.size, newFrame.size))
@@ -74,7 +74,7 @@ namespace eacp::Graphics
 
 - (NativeView*)rootView
 {
-    NativeView* root = self;
+    auto* root = self;
     NSView* current = self.superview;
 
     while (current != nil)
@@ -217,11 +217,11 @@ namespace eacp::Graphics
     for (NSTrackingArea* area in self.trackingAreas)
         [self removeTrackingArea:area];
 
-    NSTrackingAreaOptions options =
+    auto options =
         NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved
         | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect;
 
-    NSTrackingArea* trackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
+    auto* trackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
                                                                 options:options
                                                                   owner:self
                                                                userInfo:nil];

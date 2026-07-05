@@ -12,6 +12,9 @@ namespace eacp::GPU
 {
 struct Buffer::Native
 {
+    // Shared storage keeps the buffer CPU-visible, so read() is a memcpy and
+    // a compute output needs no staging copy. The usage flag is a Metal no-op:
+    // a plain MTLBuffer already serves as a vertex or a device storage buffer.
     Native(Device& device, const void* data, std::size_t bytes, BufferUsage)
         : length(bytes)
     {
@@ -20,9 +23,6 @@ struct Buffer::Native
         if (metalDevice == nil || bytes == 0)
             return;
 
-        // Shared storage keeps the buffer CPU-visible, so read() is a memcpy and
-        // a compute output needs no staging copy. The usage flag is a Metal no-op:
-        // a plain MTLBuffer already serves as a vertex or a device storage buffer.
         if (data != nullptr)
             buffer = [metalDevice newBufferWithBytes:data
                                               length:bytes

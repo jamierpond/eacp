@@ -10,7 +10,7 @@ public:
     Timer(const Callback& cbToUse, int intervalHz);
 
 private:
-    Callback callback;
+    Callback callback = [] {};
 
     struct Native;
     Pimpl<Native> impl;

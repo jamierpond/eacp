@@ -100,8 +100,8 @@ struct TodoItemView final : View
     void resized() override
     {
         auto bounds = getLocalBounds();
-        float checkboxSize = 20.f;
-        float padding = 10.f;
+        auto checkboxSize = 20.f;
+        auto padding = 10.f;
 
         auto checkboxPath = Path();
         checkboxPath.addRoundedRect(
@@ -110,13 +110,13 @@ struct TodoItemView final : View
         checkboxLayer->setPath(checkboxPath);
 
         auto checkmarkPath = Path();
-        float cx = padding + checkboxSize / 2.f;
-        float cy = bounds.h / 2.f;
+        auto cx = padding + checkboxSize / 2.f;
+        auto cy = bounds.h / 2.f;
         checkmarkPath.addEllipse({cx - 6.f, cy - 6.f, 12.f, 12.f});
         checkmarkLayer->setPath(checkmarkPath);
 
-        float textX = padding * 2 + checkboxSize + 10.f;
-        float textY = bounds.h / 2.f - 8.f;
+        auto textX = padding * 2 + checkboxSize + 10.f;
+        auto textY = bounds.h / 2.f - 8.f;
 
         if (editing)
         {
@@ -179,13 +179,13 @@ struct TodoListView final : View
         backgroundLayer->setPath(bgPath);
         scaleToFit({backgroundLayer});
 
-        float contentX = bounds.w * 0.05f + 20.f;
-        float contentWidth = bounds.w * 0.9f - 40.f;
+        auto contentX = bounds.w * 0.05f + 20.f;
+        auto contentWidth = bounds.w * 0.9f - 40.f;
 
         header.setBounds({contentX, bounds.h * 0.85f, contentWidth, 60.f});
 
-        float itemHeight = 40.f;
-        float startY = bounds.h * 0.8f - 20.f;
+        auto itemHeight = 40.f;
+        auto startY = bounds.h * 0.8f - 20.f;
 
         item1.setBounds(
             {contentX, startY - 0.f * itemHeight, contentWidth, itemHeight});

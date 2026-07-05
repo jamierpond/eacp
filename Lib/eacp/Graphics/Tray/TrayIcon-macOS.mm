@@ -12,13 +12,13 @@ namespace eacp::Graphics
 
 struct TrayIcon::Native
 {
+    // statusItemWithLength: hands back an item owned by the status bar.
+    // Retain it so it survives past this call, and remove it on destruction.
     Native()
     {
         if (eacp::Apps::getAppEnvironment().headless)
             return;
 
-        // statusItemWithLength: hands back an item owned by the status bar.
-        // Retain it so it survives past this call, and remove it on destruction.
         auto* item = [[NSStatusBar systemStatusBar]
             statusItemWithLength:NSVariableStatusItemLength];
         statusItem = ObjC::Ptr<NSStatusItem> {item, ObjC::RetainMode {}};
@@ -30,6 +30,8 @@ struct TrayIcon::Native
             [[NSStatusBar systemStatusBar] removeStatusItem:statusItem.get()];
     }
 
+    // Menu-bar icons read best at ~18pt tall; scale preserving aspect so
+    // a high-resolution source still renders crisply on Retina.
     void setIcon(const Image& icon)
     {
         if (!statusItem)
@@ -39,9 +41,7 @@ struct TrayIcon::Native
         if (nsImage == nil)
             return;
 
-        // Menu-bar icons read best at ~18pt tall; scale preserving aspect so
-        // a high-resolution source still renders crisply on Retina.
-        constexpr CGFloat menuBarHeight = 18.0;
+        constexpr auto menuBarHeight = 18.0;
         auto scale = menuBarHeight / icon.height();
         [nsImage setSize:NSMakeSize(icon.width() * scale, menuBarHeight)];
 
@@ -68,6 +68,8 @@ struct TrayIcon::Native
         [statusItem.get() setMenu:nsMenu];
     }
 
+    // A status item with a menu opens it on click and never calls the
+    // button action, so this only takes effect when no menu is set.
     void setOnClick(Callback callback)
     {
         onClick = std::move(callback);
@@ -75,8 +77,6 @@ struct TrayIcon::Native
         if (!statusItem)
             return;
 
-        // A status item with a menu opens it on click and never calls the
-        // button action, so this only takes effect when no menu is set.
         clickTarget = makeActionTarget(onClick);
         auto* button = statusItem.get().button;
         [button setTarget:clickTarget.get()];
@@ -97,7 +97,7 @@ struct TrayIcon::Native
     ObjC::Ptr<EacpMenuTarget> clickTarget;
     MenuTargets targets;
     bool templateRendering = true;
-    Callback onClick;
+    Callback onClick = [] {};
 };
 
 TrayIcon::TrayIcon() = default;

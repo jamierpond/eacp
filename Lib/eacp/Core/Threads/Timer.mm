@@ -11,7 +11,7 @@ struct Timer::Native
         : cb(cbToUse)
     {
         assertMainThread();
-        double intervalSec = 1.0 / (double) intervalHz;
+        auto intervalSec = 1.0 / (double) intervalHz;
 
         auto timerBlock = ^(NSTimer* _Nonnull) {
           cb();
@@ -31,7 +31,7 @@ struct Timer::Native
         [nsTimer.get() invalidate];
     }
 
-    Callback cb;
+    Callback cb = [] {};
     ObjC::Ptr<NSTimer> nsTimer;
 };
 
