@@ -63,6 +63,8 @@ bool toMetalFormat(CVPixelBufferRef pixelBuffer, MTLPixelFormat& out)
 
 struct Texture::Native
 {
+    // The default storage mode keeps replaceRegion valid on every Mac
+    // generation; it handles the CPU-to-GPU synchronisation itself.
     Native(Device& device, const TextureDescriptor& descriptor, const void* pixels)
         : width(descriptor.width)
         , height(descriptor.height)
@@ -81,8 +83,6 @@ struct Texture::Native
 
         texture = [metalDevice newTextureWithDescriptor:textureDescriptor];
 
-        // The default storage mode keeps replaceRegion valid on every Mac
-        // generation; it handles the CPU-to-GPU synchronisation itself.
         if (texture.get() != nil && pixels != nullptr)
             update(pixels, 0);
 
@@ -91,7 +91,9 @@ struct Texture::Native
 
     // Zero-copy wrap of a CVPixelBuffer: the texture cache maps the buffer's
     // IOSurface straight into an MTLTexture. cvTexture owns that mapping and
-    // keeps it alive for the texture's lifetime.
+    // keeps it alive for the texture's lifetime; the mapping in turn owns the
+    // MTLTexture, which is therefore retained (reset) so the Ptr's release on
+    // destruction stays balanced.
     Native(Device& device,
            void* pixelBufferHandle,
            TextureFilter filter,
@@ -127,9 +129,6 @@ struct Texture::Native
             return;
 
         cvTexture.reset(mapped);
-
-        // The MTLTexture is owned by the CVMetalTexture mapping; retain it so
-        // the Ptr's release on destruction stays balanced.
         texture.reset(CVMetalTextureGetTexture(mapped));
         sampler = makeSampler(metalDevice, filter, addressMode);
     }

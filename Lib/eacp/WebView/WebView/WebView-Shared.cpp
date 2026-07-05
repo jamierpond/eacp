@@ -25,9 +25,9 @@
 
 namespace eacp::Graphics
 {
+// Matches on a lowercased copy so MyClip.WAV maps the same as .wav.
 std::string mimeForPath(std::string_view path)
 {
-    // Match on a lowercased copy so MyClip.WAV maps the same as .wav.
     auto lower = std::string {path};
     std::transform(lower.begin(),
                    lower.end(),
@@ -37,7 +37,6 @@ std::string mimeForPath(std::string_view path)
 
     auto endsWith = [&](std::string_view ext) { return lower.ends_with(ext); };
 
-    // Text / web
     if (endsWith(".html"))
         return "text/html; charset=utf-8";
     if (endsWith(".js") || endsWith(".mjs") || endsWith(".cjs"))
@@ -49,7 +48,6 @@ std::string mimeForPath(std::string_view path)
     if (endsWith(".wasm"))
         return "application/wasm";
 
-    // Images
     if (endsWith(".svg"))
         return "image/svg+xml";
     if (endsWith(".png"))
@@ -61,11 +59,9 @@ std::string mimeForPath(std::string_view path)
     if (endsWith(".webp"))
         return "image/webp";
 
-    // Fonts
     if (endsWith(".woff2"))
         return "font/woff2";
 
-    // Audio
     if (endsWith(".mp3"))
         return "audio/mpeg";
     if (endsWith(".wav"))
@@ -84,6 +80,10 @@ std::string mimeForPath(std::string_view path)
     return "application/octet-stream";
 }
 
+// WebKit hands custom-scheme handlers the full URL including any fragment
+// (it only strips fragments for standard schemes like http). A hash-routed
+// SPA loads e.g. app://local/index.html#/route — the fragment is stripped so
+// the resource key stays "index.html", and the query string the same way.
 std::string pathFromURL(std::string_view url, std::string_view indexFile)
 {
     auto schemeEnd = url.find("://");
@@ -98,10 +98,6 @@ std::string pathFromURL(std::string_view url, std::string_view indexFile)
 
     auto path = url.substr(afterHost + 1);
 
-    // WebKit hands custom-scheme handlers the full URL including any fragment
-    // (it only strips fragments for standard schemes like http). A hash-routed
-    // SPA loads e.g. app://local/index.html#/route — strip the fragment so the
-    // resource key stays "index.html". Strip the query string the same way.
     auto fragment = path.find('#');
 
     if (fragment != std::string_view::npos)
@@ -173,6 +169,9 @@ std::string percentDecode(std::string_view encoded)
 }
 } // namespace
 
+// Serves a single range only: a comma marks a multi-range request, which
+// falls back to the full resource. The suffix form `bytes=-N` selects the
+// last N bytes.
 ResolvedRange resolveRangeHeader(std::string_view headerValue, RangeSize size)
 {
     auto full = ResolvedRange {RangeRequest::Full, ByteRange {0, size}};
@@ -185,20 +184,17 @@ ResolvedRange resolveRangeHeader(std::string_view headerValue, RangeSize size)
 
     auto spec = headerValue.substr(prefix.size());
 
-    // We serve a single range only; a comma marks a multi-range request.
     auto dash = spec.find('-');
 
     if (spec.find(',') != std::string_view::npos || dash == std::string_view::npos)
         return full;
 
-    // Any byte range over an empty resource is unsatisfiable.
     if (size == 0)
         return unsatisfiable;
 
     auto firstText = spec.substr(0, dash);
     auto lastText = spec.substr(dash + 1);
 
-    // Suffix form `bytes=-N`: the last N bytes.
     if (firstText.empty())
     {
         auto suffix = parseRangeSize(lastText);
@@ -245,6 +241,8 @@ std::string contentRangeValue(const ByteRange& served, RangeSize size)
            + std::to_string(served.end() - 1) + "/" + std::to_string(size);
 }
 
+// WebView2 enforces cross-origin rules on our own custom scheme, so fetch()
+// needs an explicit allow-origin header; added here so both backends agree.
 StreamingResponsePlan planStreamingResponse(std::string_view rangeHeader,
                                             const StreamingResource& resource)
 {
@@ -255,8 +253,6 @@ StreamingResponsePlan planStreamingResponse(std::string_view rangeHeader,
     plan.statusCode = resource.statusCode;
 
     plan.headers.add({"Content-Type", resource.mimeType});
-    // WebView2 enforces cross-origin rules on our own custom scheme, so fetch()
-    // needs an explicit allow-origin header; kept here so both backends agree.
     plan.headers.add({"Access-Control-Allow-Origin", "*"});
     plan.headers.add({"Accept-Ranges", "bytes"});
 
@@ -283,6 +279,9 @@ StreamingResponsePlan planStreamingResponse(std::string_view rangeHeader,
     return plan;
 }
 
+// A Windows drive path arrives as "/C:/dir/file"; the leading slash is
+// dropped so it parses as the native "C:/dir/file". POSIX paths ("/var/...")
+// have no drive letter and are left untouched.
 std::string fileURLToPath(std::string_view url)
 {
     auto schemeEnd = url.find("://");
@@ -303,9 +302,6 @@ std::string fileURLToPath(std::string_view url)
 
     auto decoded = percentDecode(rest.substr(slash));
 
-    // A Windows drive path arrives as "/C:/dir/file"; drop the leading slash
-    // so it parses as the native "C:/dir/file". POSIX paths ("/var/...") have
-    // no drive letter and are left untouched.
     if (decoded.size() >= 3 && decoded[0] == '/'
         && std::isalpha(static_cast<unsigned char>(decoded[1])) && decoded[2] == ':')
         decoded.erase(0, 1);
@@ -327,6 +323,9 @@ FileProvider fromResEmbed(std::string category)
     };
 }
 
+// The file is kept open behind a shared_ptr so the reader can pull chunks
+// across many scheme-task callbacks, then closes when the last reader drops.
+// File::isUnder canonicalises, so a raw path is fine.
 StreamingProvider
     fileStreamProvider(Vector<std::string> roots,
                        std::function<std::string(std::string_view path)> mimeForFile)
@@ -339,9 +338,6 @@ StreamingProvider
         if (pathStr.empty())
             return std::nullopt;
 
-        // Kept open behind a shared_ptr so the reader can pull chunks across
-        // many scheme-task callbacks, then closes when the last reader drops.
-        // File::isUnder canonicalises, so a raw path is fine here.
         auto file = std::make_shared<eacp::File>(std::filesystem::path {pathStr});
 
         auto allowed =
@@ -405,6 +401,12 @@ WebView::WebView()
 {
 }
 
+// Headless test harnesses install user scripts and navigation callbacks
+// AFTER construction (TestApp wires the agent script and AppDriver hook once
+// the WebView already exists). Loading inline would race those — the first
+// navigation could fire before the agent is registered — so headless runs
+// defer the initial load to the next runloop tick, letting the harness
+// finish wiring before the load starts.
 WebView::WebView(Options options)
 {
     auto useDevServer = shouldUseDevServer(options.embedded);
@@ -422,12 +424,6 @@ WebView::WebView(Options options)
                             : embedded.scheme + "://" + embedded.host + "/"
                                   + embedded.indexFile;
 
-    // Headless test harnesses install user scripts and navigation
-    // callbacks AFTER construction (TestApp wires the agent script
-    // and AppDriver hook once the WebView already exists). Loading
-    // inline would race those — the first navigation could fire
-    // before the agent is registered. Defer to the next runloop
-    // tick so the harness finishes wiring before the load starts.
     if (Apps::getAppEnvironment().headless)
     {
         auto weak = std::weak_ptr<Native> {impl};
@@ -499,9 +495,9 @@ void unregisterWebView(WebView* view)
 
 namespace
 {
-constexpr double minZoomLevel = 0.25;
-constexpr double maxZoomLevel = 5.0;
-constexpr double zoomStep = 1.1;
+constexpr auto minZoomLevel = 0.25;
+constexpr auto maxZoomLevel = 5.0;
+constexpr auto zoomStep = 1.1;
 } // namespace
 
 double detail::clampZoom(double level)
@@ -524,17 +520,17 @@ void WebView::resetZoom()
     setZoom(1.0);
 }
 
+// On Windows, WebView2's ExecuteScript reports JS exceptions as a "null"
+// result with HRESULT S_OK — there's no native error path, unlike
+// WKWebView's NSError-on-throw. The user script is wrapped in a try/catch
+// IIFE that prefixes its return value with "OK"/"ER" so failures route into
+// promise.reject() the way macOS callers already expect.
 Threads::Async<std::string> WebView::callJS(const std::string& script)
 {
     auto promise = Threads::AsyncPromise<std::string>();
 
     if (Platform::isWindows())
     {
-        // WebView2's ExecuteScript reports JS exceptions as a "null" result
-        // with HRESULT S_OK — there's no native error path, unlike WKWebView's
-        // NSError-on-throw. Wrap the user script in a try/catch IIFE that
-        // prefixes its return value with "OK"/"ER" so we can route failures
-        // into promise.reject() the way macOS callers already expect.
         auto wrapped = std::string {"(function() { try { var __r = eval("}
                        + jsStringLiteral(script)
                        + "); return 'OK' + (typeof __r === 'string' ? __r :"

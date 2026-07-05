@@ -40,6 +40,8 @@ Frame::Frame(Device& device, void* drawable, void* msaaTexture, void* depthTextu
 {
 }
 
+// The layer presents with transaction, so commit, wait for the buffer to be
+// scheduled, then present the drawable as part of the current CATransaction.
 Frame::~Frame()
 {
     auto buffer = impl->commandBuffer.get();
@@ -48,8 +50,6 @@ Frame::~Frame()
     if (buffer == nil)
         return;
 
-    // The layer presents with transaction, so commit, wait for the buffer to be
-    // scheduled, then present the drawable as part of the current CATransaction.
     [buffer commit];
 
     if (target != nil)

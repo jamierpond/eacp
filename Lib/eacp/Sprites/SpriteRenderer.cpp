@@ -151,20 +151,22 @@ void SpriteRenderer::fillRect(const Graphics::Rect& rect,
              color);
 }
 
+// Top and bottom span the full width; the sides fit between them so corners
+// are not drawn twice (which would double-blend a translucent outline).
 void SpriteRenderer::drawRect(const Graphics::Rect& rect,
                               const Graphics::Color& color,
                               float thickness)
 {
     const auto t = thickness;
 
-    // Top and bottom span the full width; the sides fit between them so corners
-    // are not drawn twice (which would double-blend a translucent outline).
     fillRect({rect.x, rect.y, rect.w, t}, color);
     fillRect({rect.x, rect.y + rect.h - t, rect.w, t}, color);
     fillRect({rect.x, rect.y + t, t, rect.h - 2.0f * t}, color);
     fillRect({rect.x + rect.w - t, rect.y + t, t, rect.h - 2.0f * t}, color);
 }
 
+// The line is a quad: each endpoint is offset along the segment normal, scaled
+// to the half thickness, forming the quad's two long edges.
 void SpriteRenderer::drawLine(Graphics::Point a,
                               Graphics::Point b,
                               const Graphics::Color& color,
@@ -178,8 +180,6 @@ void SpriteRenderer::drawLine(Graphics::Point a,
 
     const auto half = thickness * 0.5f;
 
-    // The segment normal, scaled to the half thickness: offsets each endpoint to
-    // the two long edges of the quad.
     const auto nx = -delta.y / length * half;
     const auto ny = delta.x / length * half;
 

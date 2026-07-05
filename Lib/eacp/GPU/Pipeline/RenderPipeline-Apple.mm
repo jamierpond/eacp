@@ -51,6 +51,9 @@ static MTLVertexStepFunction toMetalStepFunction(StepRate rate)
     return MTLVertexStepFunctionPerVertex;
 }
 
+// Multi-slot when `buffers` is populated; single-slot fallback otherwise
+// (pre-instancing shape). Metal needs stride and step function per bound
+// slot; a slot without an entry defaults to PerVertex with stride 0.
 static MTLVertexDescriptor* makeVertexDescriptor(const VertexLayout& layout)
 {
     if (layout.attributes.empty())
@@ -66,9 +69,6 @@ static MTLVertexDescriptor* makeVertexDescriptor(const VertexLayout& layout)
         descriptor.attributes[i].bufferIndex = (NSUInteger) attribute.bufferIndex;
     }
 
-    // Multi-slot when `buffers` is populated; single-slot fallback otherwise
-    // (pre-instancing shape). Metal needs stride and step function per bound
-    // slot; a slot without an entry defaults to PerVertex with stride 0.
     if (! layout.buffers.empty())
     {
         for (auto slot = 0; slot < layout.buffers.size(); ++slot)
@@ -85,6 +85,39 @@ static MTLVertexDescriptor* makeVertexDescriptor(const VertexLayout& layout)
     }
 
     return descriptor;
+}
+
+// The default guards against a future BlendMode value this backend was never
+// taught to handle - it would otherwise silently produce a no-blend pipeline.
+// Loud in Debug, degrades to None in Release (both backends match this
+// behaviour).
+static void applyBlendMode(MTLRenderPipelineColorAttachmentDescriptor* attachment,
+                           BlendMode mode)
+{
+    switch (mode)
+    {
+        case BlendMode::None:
+            break;
+        case BlendMode::AlphaBlend:
+            attachment.blendingEnabled = YES;
+            attachment.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+            attachment.destinationRGBBlendFactor =
+                MTLBlendFactorOneMinusSourceAlpha;
+            attachment.sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
+            attachment.destinationAlphaBlendFactor =
+                MTLBlendFactorOneMinusSourceAlpha;
+            break;
+        case BlendMode::Additive:
+            attachment.blendingEnabled = YES;
+            attachment.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+            attachment.destinationRGBBlendFactor = MTLBlendFactorOne;
+            attachment.sourceAlphaBlendFactor = MTLBlendFactorOne;
+            attachment.destinationAlphaBlendFactor = MTLBlendFactorOne;
+            break;
+        default:
+            assert(false && "eacp: unhandled BlendMode in Metal backend");
+            break;
+    }
 }
 
 struct RenderPipeline::Native
@@ -105,8 +138,8 @@ struct RenderPipeline::Native
         auto vertexName = @(descriptor.library->vertexEntry().c_str());
         auto fragmentName = @(descriptor.library->fragmentEntry().c_str());
 
-        id<MTLFunction> vertexFunction = [library newFunctionWithName:vertexName];
-        id<MTLFunction> fragmentFunction = [library newFunctionWithName:fragmentName];
+        auto vertexFunction = [library newFunctionWithName:vertexName];
+        auto fragmentFunction = [library newFunctionWithName:fragmentName];
 
         auto pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
         pipelineDescriptor.vertexFunction = vertexFunction;
@@ -132,35 +165,7 @@ struct RenderPipeline::Native
 
         auto colorAttachment = pipelineDescriptor.colorAttachments[0];
         colorAttachment.pixelFormat = toMetalPixelFormat(descriptor.colorFormat);
-
-        switch (descriptor.blendMode)
-        {
-            case BlendMode::None:
-                break;
-            case BlendMode::AlphaBlend:
-                colorAttachment.blendingEnabled = YES;
-                colorAttachment.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-                colorAttachment.destinationRGBBlendFactor =
-                    MTLBlendFactorOneMinusSourceAlpha;
-                colorAttachment.sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
-                colorAttachment.destinationAlphaBlendFactor =
-                    MTLBlendFactorOneMinusSourceAlpha;
-                break;
-            case BlendMode::Additive:
-                colorAttachment.blendingEnabled = YES;
-                colorAttachment.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-                colorAttachment.destinationRGBBlendFactor = MTLBlendFactorOne;
-                colorAttachment.sourceAlphaBlendFactor = MTLBlendFactorOne;
-                colorAttachment.destinationAlphaBlendFactor = MTLBlendFactorOne;
-                break;
-            default:
-                // Guards against a future BlendMode value that this backend
-                // was never taught to handle - would otherwise silently
-                // produce a no-blend pipeline. Loud in Debug, degrades to
-                // None in Release (both backends match this behaviour).
-                assert(false && "eacp: unhandled BlendMode in Metal backend");
-                break;
-        }
+        applyBlendMode(colorAttachment, descriptor.blendMode);
 
         NSError* error = nil;
         state = [metalDevice newRenderPipelineStateWithDescriptor:pipelineDescriptor

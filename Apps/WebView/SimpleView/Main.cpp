@@ -18,7 +18,7 @@ struct PopupWindow final
         window.setContentView(*webView);
     }
 
-    std::function<void(PopupWindow*)> closeHandler;
+    std::function<void(PopupWindow*)> closeHandler = [](PopupWindow*) {};
     EA::OwningPointer<WebView> webView;
     bool closing = false;
     Window window;

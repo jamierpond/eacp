@@ -36,7 +36,7 @@ using WillResizeCallback = std::function<void(int& width, int& height)>;
 struct WindowEvents
 {
     // Fires when the window gains (true) or loses (false) key focus.
-    std::function<void(bool isKey)> onActivationChanged;
+    std::function<void(bool isKey)> onActivationChanged = [](bool) {};
 };
 
 struct WindowOptions
@@ -58,7 +58,7 @@ struct WindowOptions
 
     // When the user closes the window. If left empty, falls back to
     // Apps::quit when isPrimary is true, or a no-op otherwise.
-    Callback onQuit {};
+    Callback onQuit = [] {};
 
     // Set to false for secondary/popup windows so closing them doesn't
     // terminate the app when onQuit is unset.
@@ -66,12 +66,12 @@ struct WindowOptions
 
     // Called after the window has been resized. Sizes are in points and refer
     // to the content view, not the outer frame.
-    ResizeCallback onResize {};
+    ResizeCallback onResize = [](int, int) {};
 
     // Called while the user is dragging the resize corner. Receives the
     // proposed content-view size in points; may be mutated to clamp or
     // snap to constraints.
-    WillResizeCallback onWillResize {};
+    WillResizeCallback onWillResize = [](int&, int&) {};
 
     int width = 640;
     int height = 400;

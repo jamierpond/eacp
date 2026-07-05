@@ -32,6 +32,10 @@ namespace eacp::GPU
 {
 struct GPUView::Native
 {
+    // presentsWithTransaction presents the drawable inside the current
+    // CATransaction so new content lands atomically with the layer's new size
+    // during live resize, rather than the old drawable being stretched until
+    // the next async present.
     explicit Native(GPUView& viewToUse)
         : view(viewToUse)
     {
@@ -41,10 +45,6 @@ struct GPUView::Native
         metalLayer.get().device = metalDevice;
         metalLayer.get().pixelFormat = MTLPixelFormatBGRA8Unorm;
         metalLayer.get().framebufferOnly = YES;
-
-        // Present the drawable inside the current CATransaction so new content
-        // lands atomically with the layer's new size during live resize, rather
-        // than the old drawable being stretched until the next async present.
         metalLayer.get().presentsWithTransaction = YES;
 
         auto base = (__bridge CALayer*) view.getNativeLayer();
@@ -92,6 +92,7 @@ struct GPUView::Native
         msaaTexture = [metalDevice newTextureWithDescriptor:textureDescriptor];
     }
 
+    // The depth attachment must match the colour attachment's sample count.
     void updateDepthTexture(NSUInteger width, NSUInteger height)
     {
         if (! depthEnabled || width == 0 || height == 0)
@@ -108,7 +109,6 @@ struct GPUView::Native
                                         height:height
                                      mipmapped:NO];
 
-        // The depth attachment must match the colour attachment's sample count.
         if (sampleCount > 1)
         {
             textureDescriptor.textureType = MTLTextureType2DMultisample;
@@ -187,13 +187,12 @@ bool GPUView::isContinuous() const
     return impl->continuous;
 }
 
+// Draws at the new size synchronously within the layout/resize pass, instead
+// of waiting for the async display link a frame or more later.
 void GPUView::resized()
 {
     Graphics::View::resized();
     impl->updateSize();
-
-    // Draw at the new size now, synchronously within the layout/resize pass,
-    // instead of waiting for the async display link a frame or more later.
     renderNow();
 }
 
@@ -211,7 +210,7 @@ void GPUView::renderNow()
 
     @autoreleasepool
     {
-        id<CAMetalDrawable> drawable = [layer nextDrawable];
+        auto drawable = [layer nextDrawable];
 
         if (drawable == nil)
             return;

@@ -57,7 +57,7 @@ static void buildRect(SVGView& view, const SVGElement& element, float sx, float 
         ry = rx;
 
     Graphics::Path path;
-    Graphics::Rect rect {x, y, w, h};
+    auto rect = Graphics::Rect {x, y, w, h};
 
     if (rx > 0.f || ry > 0.f)
         path.addRoundedRect(rect, rx);

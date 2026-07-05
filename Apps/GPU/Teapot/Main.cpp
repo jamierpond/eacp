@@ -25,7 +25,7 @@ struct Vertex
 
 namespace
 {
-constexpr float pi = 3.14159265358979f;
+constexpr auto pi = 3.14159265358979f;
 
 float radians(float degrees)
 {
@@ -185,7 +185,7 @@ struct TeapotShader final : ShaderProgram
         auto worldNormal = normalize((modelView * float4(normal, 0.0f)).xyz());
         auto toLight = normalize(lightDir);
 
-        // Two-sided diffuse term: |N . L|, so inward-facing patches still light.
+        // Two-sided diffuse term: |N . L|, so inward-facing patches still light. NOLINT(eacp-no-body-comments)
         auto diffuse = abs(dot(worldNormal, toLight));
         auto shade = diffuse * 0.8f + 0.2f;
 
@@ -222,7 +222,6 @@ struct TeapotView final : GPUView
     {
         auto bounds = getLocalBounds();
 
-        // The CPU uploads only scalars now; the shader builds every matrix.
         shader.angle = spin;
         shader.aspect = bounds.h > 0.0f ? bounds.w / bounds.h : 1.0f;
         shader.lightDir = std::array {0.4f, 0.5f, 0.8f};
@@ -232,7 +231,7 @@ struct TeapotView final : GPUView
         pass.draw(shader);
     }
 
-    static constexpr float radiansPerSecond = 0.6f;
+    static constexpr auto radiansPerSecond = 0.6f;
 
     TeapotMesh mesh;
     TeapotShader shader;

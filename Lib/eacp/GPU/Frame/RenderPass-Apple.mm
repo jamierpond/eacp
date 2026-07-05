@@ -106,22 +106,22 @@ void RenderPass::setFragmentTexture(const Texture& texture, int slot)
     [activeEncoder setFragmentSamplerState:metalSampler atIndex:(NSUInteger) slot];
 }
 
+// Uniforms live at buffer(uniformBase + slot) so multi-slot vertex
+// layouts (e.g. instancing with slots 0..N) never collide with the
+// uniform bind. Matches ComputePass::uniformBase.
 void RenderPass::setVertexBytes(const void* data, std::size_t bytes, int slot)
 {
-    // Uniforms live at buffer(uniformBase + slot) so multi-slot vertex
-    // layouts (e.g. instancing with slots 0..N) never collide with the
-    // uniform bind. Matches ComputePass::uniformBase.
     if (auto activeEncoder = impl->encoder.get())
         [activeEncoder setVertexBytes:data
                                length:bytes
                               atIndex:(NSUInteger) (uniformBase + slot)];
 }
 
+// Same uniformBase mapping as the vertex stage, so one slot rule covers
+// both; the generated fragment functions declare the block at
+// buffer(uniformBase).
 void RenderPass::setFragmentBytes(const void* data, std::size_t bytes, int slot)
 {
-    // Same uniformBase mapping as the vertex stage, so one slot rule covers
-    // both; the generated fragment functions declare the block at
-    // buffer(uniformBase).
     if (auto activeEncoder = impl->encoder.get())
         [activeEncoder setFragmentBytes:data
                                  length:bytes

@@ -258,6 +258,8 @@ struct Uniform<OutputBuffer> : OutputBuffer
     const Buffer* value = nullptr;
 };
 
+// Matrix and uint values are never vertex attributes, so they fall back to
+// Float4.
 inline VertexFormat toVertexFormat(ValueType type)
 {
     switch (type)
@@ -271,7 +273,7 @@ inline VertexFormat toVertexFormat(ValueType type)
         case ValueType::Float4:
         case ValueType::Float4x4:
         case ValueType::UInt:
-            return VertexFormat::Float4; // matrix/uint are never vertex attributes
+            return VertexFormat::Float4;
     }
 
     return VertexFormat::Float;
@@ -567,7 +569,14 @@ public:
 
 protected:
     // Runs the uniform build walk, the user's define() (which pulls vertex inputs),
-    // then emits source + layouts. Called from the most-derived constructor.
+    // then emits source + layouts. When define() pulled any vertex input, the
+    // layout it assembled from the pulled fields' real offsets replaces the
+    // generated one. Called from the most-derived constructor.
+    //
+    // When instanceInput populated the per-instance slots, the per-vertex
+    // slot 0 is published too so every bound buffer carries a stride and
+    // step rate; single-buffer programs keep the pre-instancing shape
+    // (empty buffers + stride) untouched.
     void compile()
     {
         auto buildVisitor = ShaderBuildVisitor {builder};
@@ -575,14 +584,8 @@ protected:
         define();
         generated = builder.build();
 
-        // define() assembled the vertex layout from the pulled fields' real
-        // offsets; use it when any input was pulled.
         if (vertexLayoutData.attributes.size() > 0)
         {
-            // instanceInput populated the per-instance slots; publish the
-            // per-vertex slot 0 too so every bound buffer carries a stride and
-            // step rate. Single-buffer programs keep the pre-instancing shape
-            // (empty buffers + stride) untouched.
             if (usesInstancing)
                 vertexLayoutData.buffer(
                     0, vertexLayoutData.stride, StepRate::PerVertex);

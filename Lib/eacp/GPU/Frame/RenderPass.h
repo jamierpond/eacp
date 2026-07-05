@@ -167,7 +167,7 @@ public:
     // a high slot lets multi-slot vertex layouts (e.g. instancing with a
     // per-vertex slot + N per-instance slots) coexist with uniforms without
     // the two paths clobbering each other's buffer(N).
-    static constexpr int uniformBase = 16;
+    static constexpr auto uniformBase = 16;
 
 private:
     struct Native;

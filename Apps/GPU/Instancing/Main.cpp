@@ -24,35 +24,35 @@ namespace
 {
 // Per-panel width the window opens at (three panels side by side); the layout
 // re-flows to equal thirds on resize, so this is only the initial size.
-constexpr int windowW = 480;
-constexpr int windowH = 750;
+constexpr auto windowW = 480;
+constexpr auto windowH = 750;
 
 // The GPU render's Y range in NDC. Labels sit above and below this band; the
 // GPU view fills its panel and the labels overlay as a sibling paint surface,
 // so keeping the geometry within [gpuBotY, gpuTopY] keeps triangles clear of
 // the label text.
-constexpr float gpuTopY = +0.72f;
-constexpr float gpuBotY = -0.72f;
+constexpr auto gpuTopY = +0.72f;
+constexpr auto gpuBotY = -0.72f;
 
 // Non-instanced grid (panel 1).
-constexpr int nonInstCols = 3;
-constexpr int nonInstRows = 12;
-constexpr int nonInstCount = nonInstCols * nonInstRows; // 36
-constexpr float nonInstTriRadius = 0.055f;
+constexpr auto nonInstCols = 3;
+constexpr auto nonInstRows = 12;
+constexpr auto nonInstCount = nonInstCols * nonInstRows; // 36
+constexpr auto nonInstTriRadius = 0.055f;
 
 // Instanced grid (panels 2 and 3 share the same 40x25 layout).
-constexpr int gridCols = 40;
-constexpr int gridRows = 25;
-constexpr int instanceCount = gridCols * gridRows; // 1000
-constexpr float instTriRadius = 0.020f;
-constexpr float rowScanTriRadius = 0.028f;
+constexpr auto gridCols = 40;
+constexpr auto gridRows = 25;
+constexpr auto instanceCount = gridCols * gridRows; // 1000
+constexpr auto instTriRadius = 0.020f;
+constexpr auto rowScanTriRadius = 0.028f;
 
-constexpr float gridLeftX = -0.9f;
-constexpr float gridRightX = +0.9f;
+constexpr auto gridLeftX = -0.9f;
+constexpr auto gridRightX = +0.9f;
 
 // Row-scan cadence for panel 3: each row of 40 stays visible for rowSeconds,
 // so a full top-to-bottom scan takes ~gridRows * rowSeconds seconds.
-constexpr float rowScanRowSeconds = 0.2f;
+constexpr auto rowScanRowSeconds = 0.2f;
 
 // Slot 0 (both instanced pipelines): unit triangle corner + UV. Same 3 verts
 // drive every triangle; the non-instanced pipeline expands these into 3 verts
@@ -101,7 +101,7 @@ Graphics::Color hueColor(float hueTurns)
     auto h6 = wrap * 6.f;
     auto x = 1.f - std::fabs(std::fmod(h6, 2.f) - 1.f);
 
-    float r = 0.f, g = 0.f, b = 0.f;
+    auto r = 0.f, g = 0.f, b = 0.f;
 
     if (h6 < 1.f)
     {
@@ -309,10 +309,10 @@ struct InstancedProgram final : SpinProgram
     }
 };
 
+// Three panels side by side; the layout re-flows to equal thirds on resize.
 Graphics::WindowOptions windowOptions()
 {
     auto options = Graphics::WindowOptions {};
-    // Three panels side by side; the layout re-flows to equal thirds on resize.
     options.width = 3 * windowW;
     options.height = windowH;
     options.title = "eacp - Instancing";
@@ -402,10 +402,10 @@ struct RowScanView final : GPUView
 
     void update(Threads::FrameTime time) override { elapsed += (float) time.delta; }
 
+    // Row 0 sits at the bottom of the grid; scan visually top-to-bottom by
+    // inverting the row index.
     void render(Frame& frame) override
     {
-        // Row 0 sits at the bottom of the grid; scan visually top-to-bottom
-        // by inverting the row index.
         auto stepIndex = (int) (elapsed / rowScanRowSeconds);
         auto rowFromBottom = (gridRows - 1) - (stepIndex % gridRows);
         auto firstInstance = rowFromBottom * gridCols;
@@ -434,25 +434,23 @@ struct LabelView final : Graphics::View
     {
     }
 
+    // Each line is centred, but never starts left of a small margin, so a
+    // line wider than the panel stays readable from its start instead of
+    // being clipped off the left edge.
     void paint(Graphics::Context& g) override
     {
-        constexpr float halfCharTitle = 4.6f;
-        constexpr float halfCharBody = 3.3f;
-        constexpr float titleY = 28.f;
-        constexpr float bodyLine1Yoff = 44.f;
-        constexpr float bodyLine2Yoff = 22.f;
+        constexpr auto halfCharTitle = 4.6f;
+        constexpr auto halfCharBody = 3.3f;
+        constexpr auto titleY = 28.f;
+        constexpr auto bodyLine1Yoff = 44.f;
+        constexpr auto bodyLine2Yoff = 22.f;
 
         const auto bounds = getLocalBounds();
         const auto cx = bounds.w * 0.5f;
 
-        // Centre each line, but never start it left of a small margin, so a
-        // line wider than the panel stays readable from its start instead of
-        // being clipped off the left edge.
-        constexpr float leftMargin = 8.f;
+        constexpr auto leftMargin = 8.f;
         const auto startX = [&](const std::string& text, float halfChar)
-        {
-            return std::max(leftMargin, cx - (float) text.size() * halfChar);
-        };
+        { return std::max(leftMargin, cx - (float) text.size() * halfChar); };
 
         g.setColor(Graphics::Color::white());
 

@@ -5,6 +5,7 @@
 #include <eacp/Core/Threads/Async.h>
 #include <eacp/Graphics/Image/Image.h>
 #include <Miro/Miro.h>
+#include <type_traits>
 
 namespace eacp::Graphics
 {
@@ -204,12 +205,14 @@ public:
                             const SnapshotOptions& options = {});
 
     template <typename Fn>
-    auto withSnapshot(const std::string& name,
-                      Fn&& action,
-                      const SnapshotOptions& options = {})
+    std::invoke_result_t<Fn&> withSnapshot(const std::string& name,
+                                           Fn&& action,
+                                           const SnapshotOptions& options = {})
     {
         struct SnapshotOnExit
         {
+            // Swallows snapshot errors so they don't mask the
+            // original failure.
             ~SnapshotOnExit()
             {
                 try
@@ -218,7 +221,6 @@ public:
                 }
                 catch (...)
                 {
-                    // Don't mask the original failure.
                 }
             }
 
@@ -249,8 +251,10 @@ private:
     Threads::AsyncPromise<> firstNavigationPromise;
     Threads::Async<> firstNavigation;
     bool firstNavigationFired = false;
-    std::function<void(const std::string&)> previousFinishedHandler;
-    std::function<void(const std::string&)> previousFailedHandler;
+    std::function<void(const std::string&)> previousFinishedHandler =
+        [](const std::string&) {};
+    std::function<void(const std::string&)> previousFailedHandler =
+        [](const std::string&) {};
 };
 
 } // namespace eacp::WebView::Test

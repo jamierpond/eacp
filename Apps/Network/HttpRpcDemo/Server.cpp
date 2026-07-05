@@ -14,8 +14,7 @@ int main(int argc, char** argv)
     if (argc > 1)
         port = std::atoi(argv[1]);
 
-    // Lifetime contract: api declared first → destructed last (after
-    // the bridge's listeners and handlers have torn down).
+    // Lifetime contract: api declared first → destructed last, after the bridge's listeners and handlers have torn down. NOLINT(eacp-no-body-comments)
     auto api = Api::PingApi {};
     auto bridge = Miro::Bridge {};
     bridge.use(api);
@@ -23,7 +22,7 @@ int main(int argc, char** argv)
     auto httpServer = eacp::HTTP::Server {};
     auto rpc = eacp::HTTP::Rpc::Server {httpServer, bridge};
 
-    if (! httpServer.listen(port))
+    if (!httpServer.listen(port))
     {
         std::cerr << "Failed to bind RPC server on port " << port << "\n";
         return 1;

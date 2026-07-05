@@ -8,7 +8,7 @@ using namespace Graphics;
 // on Windows the colour shows in the notification area.
 static Image makeTrayIcon()
 {
-    constexpr int size = 36;
+    constexpr auto size = 36;
     auto image = Image(size, size);
 
     auto center = (size - 1) / 2.f;
@@ -66,14 +66,18 @@ struct PanelView final : View
 
 struct TrayApp
 {
+    // The window shows itself on construction; hide it immediately so
+    // the app starts as a bare tray icon. setVisible keeps the window
+    // (and its content) alive across toggles, so it reappears exactly
+    // where the user left it.
+    //
+    // On Windows a left-click on the tray icon toggles the panel (the
+    // menu stays on right-click). On macOS the menu owns the click, so
+    // onClick never fires there — use the menu item instead.
     TrayApp()
     {
         Apps::setDockIconVisible(false);
 
-        // The window shows itself on construction; hide it immediately so
-        // the app starts as a bare tray icon. setVisible keeps the window
-        // (and its content) alive across toggles, so it reappears exactly
-        // where the user left it.
         window.setContentView(panelView);
         window.setVisible(false);
 
@@ -82,9 +86,6 @@ struct TrayApp
 
         tray.setMenu(createTrayMenu());
 
-        // Windows: a left-click on the tray icon toggles the panel (the
-        // menu stays on right-click). On macOS the menu owns the click, so
-        // this never fires there — use the menu item instead.
         tray.setOnClick([this] { togglePanel(); });
     }
 

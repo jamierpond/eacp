@@ -29,10 +29,10 @@ void MacOSContext::drawText(const std::string& text,
     if (!ctFont)
         return;
 
-    CFRef<CFStringRef> cfString(
+    auto cfString = CFRef<CFStringRef>(
         CFStringCreateWithCString(nullptr, text.c_str(), kCFStringEncodingUTF8));
 
-    CFRef<CFMutableAttributedStringRef> attrString(
+    auto attrString = CFRef<CFMutableAttributedStringRef>(
         CFAttributedStringCreateMutable(nullptr, 0));
 
     CFAttributedStringReplaceString(attrString, CFRangeMake(0, 0), cfString);
@@ -49,7 +49,7 @@ void MacOSContext::drawText(const std::string& text,
                                    textColor);
 
 
-    CFRef<CTLineRef> line(CTLineCreateWithAttributedString(attrString));
+    auto line = CFRef<CTLineRef>(CTLineCreateWithAttributedString(attrString));
 
     CGContextSetTextMatrix(context, CGAffineTransformIdentity);
 
