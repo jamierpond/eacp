@@ -81,6 +81,8 @@ struct SvgFarm final : Graphics::View
 
 struct MainView final : Graphics::View
 {
+    // The vector view keeps the SVG's natural aspect inside the top panel,
+    // centred, so stretchToFit scales it uniformly instead of squishing it.
     void resized() override
     {
         auto bounds = getLocalBounds();
@@ -93,8 +95,6 @@ struct MainView final : Graphics::View
         if (vectorView == nullptr || vectorSize.x <= 0.f || vectorSize.y <= 0.f)
             return;
 
-        // Fit the SVG's natural aspect inside the top panel, centred, so
-        // stretchToFit scales it uniformly instead of squishing it.
         auto area =
             Graphics::Rect {bounds.x, bounds.y, bounds.w, vectorHeight}.inset(8.f);
         auto scale = std::min(area.w / vectorSize.x, area.h / vectorSize.y);

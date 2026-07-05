@@ -8,7 +8,7 @@
 using namespace eacp;
 using namespace Graphics;
 
-Random randomGen {};
+auto randomGen = Random {};
 
 size_t nextRandom(size_t min, size_t max)
 {
@@ -16,7 +16,7 @@ size_t nextRandom(size_t min, size_t max)
 }
 
 template <typename T>
-auto& getRandomElement(T& container)
+const T& getRandomElement(const EA::Vector<T>& container)
 {
     return container[nextRandom(0, container.size() - 1)];
 }
@@ -185,7 +185,6 @@ struct TaskCard final : View
     TextLayerView descLayer;
     Button deleteButton {"×", {0.5f, 0.2f, 0.2f}};
 };
-
 
 struct Column final : View
 {
@@ -443,15 +442,15 @@ struct TaskBoardView final : View
 
     void addSampleTasks()
     {
-        static const auto sampleTitles = EA::Vector<std::string> {
-            "Design system architecture",
-            "Implement user auth",
-            "Write unit tests",
-            "Review pull request",
-            "Fix memory leak",
-            "Update documentation",
-            "Optimize database",
-            "Deploy to staging"};
+        static const auto sampleTitles =
+            EA::Vector<std::string> {"Design system architecture",
+                                     "Implement user auth",
+                                     "Write unit tests",
+                                     "Review pull request",
+                                     "Fix memory leak",
+                                     "Update documentation",
+                                     "Optimize database",
+                                     "Deploy to staging"};
 
         static const auto sampleDescs = EA::Vector<std::string> {"High priority",
                                                                  "Needs review",
@@ -459,7 +458,7 @@ struct TaskBoardView final : View
                                                                  "Blocked",
                                                                  "Ready for QA"};
 
-        for (int i = 0; i < 3; ++i)
+        for (auto i = 0; i < 3; ++i)
         {
             auto& title = getRandomElement(sampleTitles);
             auto& desc = getRandomElement(sampleDescs);

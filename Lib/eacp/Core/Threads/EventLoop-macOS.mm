@@ -23,9 +23,9 @@ namespace eacp::Threads
 {
 namespace
 {
-bool s_inRootRunLoop = false;
-int s_nestedDepth = 0;
-bool s_quitRequested = false;
+auto s_inRootRunLoop = false;
+auto s_nestedDepth = 0;
+auto s_quitRequested = false;
 
 NSApplicationActivationPolicy activationPolicyFromBundle()
 {
@@ -123,13 +123,13 @@ bool EventLoop::runFor(std::chrono::milliseconds timeout)
     return true;
 }
 
+// [NSApp stop:] applies to the active [NSApp run]. If a nested runFor is on
+// top, its polling loop reads s_quitRequested directly — we only need to
+// wake it via the dummy event.
 void EventLoop::quit()
 {
     s_quitRequested = true;
 
-    // [NSApp stop:] applies to the active [NSApp run]. If a nested
-    // runFor is on top, its polling loop reads s_quitRequested
-    // directly — we only need to wake it via the dummy event.
     if (s_nestedDepth == 0 && s_inRootRunLoop)
         [getApp() stop:nil];
 

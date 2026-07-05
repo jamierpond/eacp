@@ -76,7 +76,7 @@ private:
 
     OwningPointer<T> instance;
     std::optional<AppDriver> driverImpl;
-    ReadyCheck readyCheck;
+    ReadyCheck readyCheck = [](eacp::WebView::Test::AppDriver&) {};
 };
 
 namespace Detail

@@ -11,10 +11,9 @@ namespace
 {
 using Graphics::Point;
 
-
 // Round joins / caps are discs of this many triangles. Modest is plenty at
 // stroke-width scale.
-constexpr int joinSegments = 12;
+constexpr auto joinSegments = 12;
 
 // Twice the signed area of triangle abc. Positive when abc winds
 // counter-clockwise (in a y-up sense), negative when clockwise.
@@ -72,6 +71,11 @@ Vector<Point> cleanPolygon(const Vector<Point>& input)
     return polygon;
 }
 
+// Ear-clipping triangulation. The polygon is normalised to counter-clockwise so
+// a convex (ear) corner is a positive cross product throughout. A simple polygon
+// of n vertices triangulates into n - 2 triangles, each found within one sweep,
+// so n sweeps is a safe ceiling against a stall; a sweep that clips no ear means
+// degenerate or self-intersecting input, and clipping stops rather than spin.
 void earClip(const Vector<Point>& source, Vector<Point>& out)
 {
     auto polygon = cleanPolygon(source);
@@ -79,8 +83,6 @@ void earClip(const Vector<Point>& source, Vector<Point>& out)
     if (polygon.size() < 3)
         return;
 
-    // Normalise to counter-clockwise so a convex (ear) corner is a positive cross
-    // product throughout.
     if (signedArea(polygon) < 0.0f)
         std::reverse(polygon.begin(), polygon.end());
 
@@ -89,9 +91,6 @@ void earClip(const Vector<Point>& source, Vector<Point>& out)
     for (auto i = 0; i < polygon.size(); ++i)
         remaining.add(i);
 
-    // A simple polygon of n vertices triangulates into n - 2 triangles, each
-    // found within one sweep, so n sweeps is a safe ceiling against a stall on
-    // degenerate input.
     auto sweepLimit = polygon.size();
 
     while (remaining.size() > 3 && sweepLimit-- > 0)
@@ -110,7 +109,7 @@ void earClip(const Vector<Point>& source, Vector<Point>& out)
             const auto& c = polygon[next];
 
             if (cross(a, b, c) <= 0.0f)
-                continue; // reflex or collinear: not an ear
+                continue;
 
             auto enclosesVertex = false;
 
@@ -141,7 +140,7 @@ void earClip(const Vector<Point>& source, Vector<Point>& out)
         }
 
         if (!clippedAnEar)
-            return; // degenerate / self-intersecting: stop rather than spin
+            return;
     }
 
     if (remaining.size() == 3)
@@ -197,6 +196,8 @@ void addDisc(Vector<Point>& out, const Point& center, float radius)
     }
 }
 
+// A quad per segment plus a disc at every vertex: a round join at interior
+// vertices, a round cap at the ends of an open sub-path.
 void strokeSubPath(const Vector<Point>& source,
                    bool closed,
                    float half,
@@ -213,8 +214,6 @@ void strokeSubPath(const Vector<Point>& source,
     for (auto i = 0; i < segments; ++i)
         addSegment(out, points[i], points[(i + 1) % count], half);
 
-    // A disc at every vertex: a round join at interior vertices, a round cap at
-    // the ends of an open sub-path.
     for (auto i = 0; i < count; ++i)
         addDisc(out, points[i], half);
 }

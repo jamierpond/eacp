@@ -24,7 +24,7 @@ struct DisplayLink::Native
         {
         }
 
-        Callback callback;
+        Callback callback = [] {};
         bool alive = true;
     };
 

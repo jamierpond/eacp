@@ -21,6 +21,8 @@ float opacityOf(const SVGElement& element)
     return opacity.empty() ? 1.f : Strings::parseFloatOr(opacity);
 }
 
+// Geometry is scaled by (sx, sy), so stroke widths must scale with it; Context
+// has a single line width, so non-uniform stretch averages out.
 void renderShape(Graphics::Context& context,
                  const SVGElement& element,
                  const InheritedStyle& style,
@@ -44,8 +46,6 @@ void renderShape(Graphics::Context& context,
     if (stroke.isNone)
         return;
 
-    // Geometry is scaled by (sx, sy), so stroke widths must scale with it;
-    // Context has a single line width, so non-uniform stretch averages out.
     auto strokeWidth = style.strokeWidth.empty()
                            ? 1.f
                            : Strings::parseFloatOr(style.strokeWidth, 1.f);

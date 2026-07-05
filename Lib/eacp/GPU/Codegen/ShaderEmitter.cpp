@@ -10,8 +10,9 @@
 
 // The single source-of-truth walker. MSL and HLSL differ only in the binding
 // syntax and the stage scaffolding captured by the helpers below; the expression
-// printer is fully shared because vector constructors, swizzles, operators and
-// the float2/3/4 type names spell identically in both languages.
+// printer is fully shared because vector constructors, swizzles, operators, the
+// float2/3/4 type names and the uint literal suffix spell identically in both
+// languages.
 
 namespace eacp::GPU
 {
@@ -111,36 +112,13 @@ struct ExprPrinter
                 return "uniforms.u" + std::to_string(expr.index);
 
             case ExprKind::Constant:
-                // The uint spelling is shared by MSL and HLSL, like floatN.
                 if (expr.type == ValueType::UInt)
                     return std::to_string(expr.index) + "u";
 
                 return floatLiteral(expr.value);
 
             case ExprKind::Construct:
-            {
-                auto text = std::string(typeName(expr.type)) + "(";
-
-                for (auto i = 0; i < expr.args.size(); ++i)
-                {
-                    if (i > 0)
-                        text += ", ";
-
-                    text += ref(expr.args[i]);
-                }
-
-                text += ")";
-
-                // float4x4(c0..c3) passes the four columns. MSL fills a matrix
-                // from columns, but HLSL fills it from rows, so the same call
-                // yields the transpose there; transpose() restores the
-                // column-major value, so the mul() paths stay identical across
-                // both backends.
-                if (backend == Backend::DirectX && expr.type == ValueType::Float4x4)
-                    return "transpose(" + text + ")";
-
-                return text;
-            }
+                return printConstruct(expr);
 
             case ExprKind::Swizzle:
                 return "(" + ref(expr.args[0]) + ")." + expr.text;
@@ -161,43 +139,19 @@ struct ExprPrinter
             }
 
             case ExprKind::Unary:
-                // The operand gets its own parentheses: negating a negative
-                // constant must print (-(-1.0)), never the pre-decrement
-                // (--1.0).
-                return "(" + std::string(1, expr.op) + "(" + ref(expr.args[0])
-                       + "))";
+                return printUnary(expr);
 
             case ExprKind::Binary:
                 return "(" + ref(expr.args[0]) + " " + std::string(1, expr.op) + " "
                        + ref(expr.args[1]) + ")";
 
             case ExprKind::Mul:
-            {
-                // Matrix * vector. MSL spells it with the * operator
-                // (column-major); HLSL multiplies a matrix and vector with
-                // mul().
-                auto matrix = ref(expr.args[0]);
-                auto vector = ref(expr.args[1]);
-
-                if (backend == Backend::Metal)
-                    return "(" + matrix + " * " + vector + ")";
-
-                return "mul(" + matrix + ", " + vector + ")";
-            }
+                return printMul(expr);
 
             case ExprKind::Sample:
-            {
-                // Texture sample at a float2 coordinate, through the sampler
-                // declared at the same index as the texture.
-                auto name = "texture" + std::to_string(expr.index);
-                auto sampler = "sampler" + std::to_string(expr.index);
-                auto method = backend == Backend::Metal ? ".sample(" : ".Sample(";
-
-                return name + method + sampler + ", " + ref(expr.args[0]) + ")";
-            }
+                return printSample(expr);
 
             case ExprKind::ThreadId:
-                // Both kernel scaffoldings declare the 1D work-item id as gid.
                 return "gid";
 
             case ExprKind::BufferRead:
@@ -206,6 +160,61 @@ struct ExprPrinter
         }
 
         return {};
+    }
+
+    // float4x4(c0..c3) passes the four columns. MSL fills a matrix from
+    // columns, but HLSL fills it from rows, so the same call yields the
+    // transpose there; transpose() restores the column-major value, so the
+    // mul() paths stay identical across both backends.
+    std::string printConstruct(const Expr& expr) const
+    {
+        auto text = std::string(typeName(expr.type)) + "(";
+
+        for (auto i = 0; i < expr.args.size(); ++i)
+        {
+            if (i > 0)
+                text += ", ";
+
+            text += ref(expr.args[i]);
+        }
+
+        text += ")";
+
+        if (backend == Backend::DirectX && expr.type == ValueType::Float4x4)
+            return "transpose(" + text + ")";
+
+        return text;
+    }
+
+    // The operand gets its own parentheses: negating a negative constant must
+    // print (-(-1.0)), never the pre-decrement (--1.0).
+    std::string printUnary(const Expr& expr) const
+    {
+        return "(" + std::string(1, expr.op) + "(" + ref(expr.args[0]) + "))";
+    }
+
+    // Matrix * vector. MSL spells it with the * operator (column-major); HLSL
+    // multiplies a matrix and vector with mul().
+    std::string printMul(const Expr& expr) const
+    {
+        auto matrix = ref(expr.args[0]);
+        auto vector = ref(expr.args[1]);
+
+        if (backend == Backend::Metal)
+            return "(" + matrix + " * " + vector + ")";
+
+        return "mul(" + matrix + ", " + vector + ")";
+    }
+
+    // Texture sample at a float2 coordinate, through the sampler declared at
+    // the same index as the texture.
+    std::string printSample(const Expr& expr) const
+    {
+        auto name = "texture" + std::to_string(expr.index);
+        auto sampler = "sampler" + std::to_string(expr.index);
+        auto method = backend == Backend::Metal ? ".sample(" : ".Sample(";
+
+        return name + method + sampler + ", " + ref(expr.args[0]) + ")";
     }
 };
 
@@ -401,10 +410,13 @@ std::string uniformBlock(Backend backend,
 
 // Compute kernel emission. The expression printer is the render one; only the
 // scaffolding differs: storage buffers and the uniform block are MSL kernel
-// parameters but HLSL globals, and the 1D work-item id arrives as a uint on
-// Metal and as SV_DispatchThreadID.x on D3D. The block always ends with an
-// implicit uint element count, and the kernel opens with the bounds guard the
-// rounded-up dispatch needs; ComputeProgram appends the matching CPU value.
+// parameters but HLSL globals (SRV t<slot> / UAV u<slot> with one shared slot
+// counter, matching the flat Metal indices ComputePass binds both backends
+// with), and the 1D work-item id - named gid by both scaffoldings - arrives as
+// a uint on Metal and as SV_DispatchThreadID.x on D3D. The block always ends
+// with an implicit uint element count, and the kernel opens with the bounds
+// guard the rounded-up dispatch needs; ComputeProgram appends the matching CPU
+// value.
 std::string emitCompute(const ShaderGraph& graph, Backend backend)
 {
     auto source = std::string {};
@@ -444,8 +456,6 @@ std::string emitCompute(const ShaderGraph& graph, Backend backend)
     }
     else
     {
-        // SRV t<slot> / UAV u<slot> with one shared slot counter, matching the
-        // flat Metal indices ComputePass binds both backends with.
         for (auto i = 0; i < buffers.size(); ++i)
         {
             auto slot = std::to_string(i);
@@ -491,6 +501,16 @@ std::string emitCompute(const ShaderGraph& graph, Backend backend)
     return source;
 }
 
+// Render emission. One uniform block aggregates every uniform<>() call; both
+// backends expose it as "uniforms.uN" (HLSL wraps the struct in a cbuffer) so
+// the expression printer stays backend-agnostic. HLSL textures and samplers
+// are globals, while Metal declares them as fragment function parameters;
+// texture and sampler share an index, matching RenderPass::setFragmentTexture.
+// On Metal each stage declares the uniform block as a function parameter, and
+// only when that stage's expressions read one; the HLSL cbuffer is a global
+// both functions already see. Slot 0 maps to buffer(1) in both stages (vertex
+// data owns buffer 0 on the vertex side; the fragment side keeps the same
+// index so one slot rule covers both).
 std::string emit(const ShaderGraph& graph, Backend backend)
 {
     if (graph.isCompute())
@@ -518,9 +538,6 @@ std::string emit(const ShaderGraph& graph, Backend backend)
 
     auto hasUniforms = !graph.uniforms().empty();
 
-    // One uniform block aggregates every uniform<>() call. Both backends expose
-    // it as "uniforms.uN" (HLSL wraps the struct in a cbuffer) so the expression
-    // printer stays backend-agnostic.
     if (hasUniforms)
     {
         auto names = Vector<std::string> {};
@@ -531,9 +548,6 @@ std::string emit(const ShaderGraph& graph, Backend backend)
         source += uniformBlock(backend, graph.uniforms(), names);
     }
 
-    // HLSL textures and samplers are globals; on Metal they are fragment
-    // function parameters added to the signature below. Texture and sampler
-    // share an index, matching RenderPass::setFragmentTexture.
     if (backend == Backend::DirectX)
     {
         for (auto i = 0; i < graph.textureCount(); ++i)
@@ -546,11 +560,6 @@ std::string emit(const ShaderGraph& graph, Backend backend)
             source += "\n";
     }
 
-    // On Metal each stage declares the uniform block as a function parameter,
-    // and only when that stage's expressions read one; the HLSL cbuffer is a
-    // global both functions already see. Slot 0 maps to buffer(1) in both
-    // stages (vertex data owns buffer 0 on the vertex side; the fragment side
-    // keeps the same index so one slot rule covers both).
     if (backend == Backend::Metal)
     {
         source += "vertex VertexOut vertexMain(VertexIn input [[stage_in]]";

@@ -34,7 +34,7 @@ public:
 private:
     static Callback timedTick(const FrameCallback& cb);
 
-    Callback callback;
+    Callback callback = [] {};
 
     struct Native;
     Pimpl<Native> impl;

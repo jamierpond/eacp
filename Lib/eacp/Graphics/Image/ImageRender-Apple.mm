@@ -9,6 +9,13 @@
 namespace eacp::Graphics
 {
 
+// CGContexts use a bottom-left origin; View::paint draws top-left.
+static void flipToTopLeftOrigin(CGContextRef context, int height)
+{
+    CGContextTranslateCTM(context, 0, height);
+    CGContextScaleCTM(context, 1, -1);
+}
+
 Image renderToImage(int width,
                     int height,
                     const std::function<void(Context&)>& draw)
@@ -34,9 +41,7 @@ Image renderToImage(int width,
     if (!cgContext)
         return {};
 
-    // Flip to the top-left origin View::paint draws in.
-    CGContextTranslateCTM(cgContext, 0, height);
-    CGContextScaleCTM(cgContext, 1, -1);
+    flipToTopLeftOrigin(cgContext, height);
 
     {
         auto context = MacOSContext(cgContext);

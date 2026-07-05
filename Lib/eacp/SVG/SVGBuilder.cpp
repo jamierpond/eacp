@@ -7,6 +7,8 @@
 namespace eacp::SVG
 {
 
+// Geometry is scaled by (sx, sy), so stroke widths must scale with it; a layer
+// has a single stroke width, so non-uniform stretch averages out.
 static void applyFillAndStroke(Graphics::ShapeLayer& layer,
                                const SVGElement& element,
                                const InheritedStyle& style,
@@ -24,8 +26,6 @@ static void applyFillAndStroke(Graphics::ShapeLayer& layer,
             layer.setStrokeColor(strokeResult.color);
     }
 
-    // Geometry is scaled by (sx, sy), so stroke widths must scale with it;
-    // a layer has a single stroke width, so non-uniform stretch averages out.
     if (!style.strokeWidth.empty())
         layer.setStrokeWidth(Strings::parseFloatOr(style.strokeWidth) * (sx + sy)
                              * 0.5f);

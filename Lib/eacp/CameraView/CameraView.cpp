@@ -4,11 +4,11 @@
 
 namespace eacp::Cameras
 {
+// The camera feed is already smooth video, so MSAA buys nothing; keep it at
+// one sample. Continuous mode redraws every vsync to show new frames as they
+// arrive, decoupled from the capture rate.
 CameraView::CameraView()
 {
-    // The camera feed is already smooth video, so MSAA buys nothing; keep it at
-    // one sample. Continuous mode redraws every vsync to show new frames as they
-    // arrive, decoupled from the capture rate.
     setSampleCount(1);
     setContinuous(true);
 }
@@ -42,6 +42,8 @@ void CameraView::setUploadMode(UploadMode mode)
     uploadMode = mode;
 }
 
+// Contain fits inside, so the wider dimension becomes the limit; Cover fills,
+// so the narrower one does and the other overflows.
 Graphics::Rect CameraView::computeImageArea(
     float viewWidth, float viewHeight, int textureWidth, int textureHeight, Fit fit)
 {
@@ -53,8 +55,6 @@ Graphics::Rect CameraView::computeImageArea(
     auto viewAspect = viewWidth / viewHeight;
     auto imageWider = imageAspect > viewAspect;
 
-    // Contain fits inside, so the wider dimension becomes the limit; Cover fills,
-    // so the narrower one does and the other overflows.
     auto widthLimited = fit == Fit::Contain ? imageWider : !imageWider;
 
     auto width = widthLimited ? viewWidth : viewHeight * imageAspect;
@@ -85,6 +85,8 @@ Graphics::Rect CameraView::imageAreaFor(int textureWidth, int textureHeight) con
     return computeImageArea(bounds.w, bounds.h, textureWidth, textureHeight, fit);
 }
 
+// The wrapped texture holds its own reference to the frame's surface, so the
+// pixel buffer is released as soon as the texture has been drawn.
 bool CameraView::renderZeroCopy(Graphics::Rect& imageArea)
 {
     auto* buffer = camera->acquireLatestPixelBuffer();
@@ -102,8 +104,6 @@ bool CameraView::renderZeroCopy(Graphics::Rect& imageArea)
         drew = true;
     }
 
-    // The wrapped texture holds its own reference to the frame's surface, so the
-    // buffer can be released now.
     Camera::releasePixelBuffer(buffer);
     return drew;
 }

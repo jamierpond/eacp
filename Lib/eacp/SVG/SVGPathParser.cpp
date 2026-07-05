@@ -233,7 +233,8 @@ void emitArcSegment(Graphics::Path& path,
 }
 
 // SVG spec appendix B.2.4: convert the endpoint parameterization to the
-// centre form, then emit one cubic per quarter turn.
+// centre form (uniformly scaling up radii too small to span the endpoints),
+// then emit one cubic per quarter turn.
 void emitArc(Graphics::Path& path,
              const Graphics::Point& start,
              const Graphics::Point& end,
@@ -264,7 +265,6 @@ void emitArc(Graphics::Path& path,
     auto x1 = cosPhi * dx + sinPhi * dy;
     auto y1 = -sinPhi * dx + cosPhi * dy;
 
-    // Radii too small to span the endpoints get scaled up uniformly.
     auto lambda = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry);
     if (lambda > 1.f)
     {

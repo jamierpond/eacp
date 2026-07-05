@@ -53,7 +53,9 @@ struct StreamingResource
 {
     std::string mimeType;
     RangeSize size = 0;
-    ResourceReader read;
+    ResourceReader read = [](unsigned long long,
+                             std::span<unsigned char>) -> unsigned long
+    { return {}; };
     int statusCode = 200;
 };
 
@@ -112,7 +114,8 @@ public:
         struct Embedded
         {
             bool enabled = false;
-            FileProvider provider;
+            FileProvider provider = [](std::string_view)
+            { return std::optional<std::span<const unsigned char>> {}; };
             std::string scheme = "app";
             std::string host = "local";
             std::string indexFile = "index.html";

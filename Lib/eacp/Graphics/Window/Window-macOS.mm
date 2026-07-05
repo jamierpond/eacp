@@ -17,20 +17,20 @@ void repositionTrafficLights(NSWindow* window, NSPoint inset)
     if (window.styleMask & NSWindowStyleMaskFullScreen)
         return;
 
-    NSButton* close = [window standardWindowButton:NSWindowCloseButton];
-    NSButton* miniaturize =
+    auto* close = [window standardWindowButton:NSWindowCloseButton];
+    auto* miniaturize =
         [window standardWindowButton:NSWindowMiniaturizeButton];
-    NSButton* zoom = [window standardWindowButton:NSWindowZoomButton];
+    auto* zoom = [window standardWindowButton:NSWindowZoomButton];
 
     if (close == nil || miniaturize == nil || zoom == nil)
         return;
 
     NSView* container = close.superview;
-    CGFloat containerHeight = NSHeight(container.frame);
-    CGFloat spacing = NSMinX(miniaturize.frame) - NSMinX(close.frame);
+    auto containerHeight = NSHeight(container.frame);
+    auto spacing = NSMinX(miniaturize.frame) - NSMinX(close.frame);
 
     NSButton* buttons[] = {close, miniaturize, zoom};
-    for (int i = 0; i < 3; ++i)
+    for (auto i = 0; i < 3; ++i)
     {
         NSRect frame = buttons[i].frame;
         frame.origin.x = inset.x + i * spacing;
@@ -181,6 +181,25 @@ NSWindowStyleMask getStyle(const WindowOptions& options)
     return res;
 }
 
+// NSWindowStyleMaskBorderless is 0 — "borderless" is the absence of
+// the Titled bit, so that's what selects the keyable subclass.
+Class windowClassForStyle(NSWindowStyleMask style)
+{
+    return (style & NSWindowStyleMaskTitled) != 0
+               ? [NSWindow class]
+               : [EacpKeyableBorderlessWindow class];
+}
+
+// Converts a top-left position measured from the primary display's
+// top-left (the Electron convention) to AppKit's frame-top-left point,
+// whose origin is the primary screen's bottom-left.
+NSPoint frameTopLeftFromScreenTopLeft(double x, double y)
+{
+    NSScreen* primary = NSScreen.screens.firstObject;
+    auto screenTop = primary != nil ? NSMaxY(primary.frame) : 0.0;
+    return NSMakePoint(x, screenTop - y);
+}
+
 struct Window::Native
 {
     Native(const WindowOptions& options, WindowEvents& eventsToUse)
@@ -188,12 +207,7 @@ struct Window::Native
     {
         auto style = getStyle(options);
         auto contentRect = NSMakeRect(0, 0, options.width, options.height);
-
-        // NSWindowStyleMaskBorderless is 0 — "borderless" is the absence of
-        // the Titled bit, so that's what selects the keyable subclass.
-        auto windowClass = (style & NSWindowStyleMaskTitled) != 0
-                               ? [NSWindow class]
-                               : [EacpKeyableBorderlessWindow class];
+        auto windowClass = windowClassForStyle(style);
 
         handle = [[windowClass alloc] initWithContentRect:contentRect
                                                 styleMask:style
@@ -206,11 +220,6 @@ struct Window::Native
         {
             keyStateChanged(isKey);
 
-            // Becoming key is the moment to hand keyboard focus to the content.
-            // AppKit would otherwise park first responder on the content view
-            // itself; for a WebView that is the empty container, leaving the
-            // page unfocused until clicked. Re-run on every activation so focus
-            // is restored after a sibling window (settings / keyboard) took it.
             if (isKey)
                 focusContentView();
         };
@@ -242,15 +251,7 @@ struct Window::Native
         }
 
         if (options.cornerRadius)
-        {
-            // An opaque window paints its background square into the
-            // corners. Make the window itself clear and let the rounded,
-            // clipped content view (see setContentView) define the visible
-            // shape — the shadow follows it automatically. This wins over
-            // backgroundColor by design; see WindowOptions.
-            [getWindow() setOpaque:NO];
-            [getWindow() setBackgroundColor:[NSColor clearColor]];
-        }
+            clearBackgroundForRoundedCorners();
 
         if (options.minWidth > 0 || options.minHeight > 0)
             [getWindow() setContentMinSize:NSMakeSize(options.minWidth,
@@ -267,16 +268,9 @@ struct Window::Native
 
         if (options.initialPosition)
         {
-            // initialPosition is top-left from the primary display's top-left
-            // (Electron convention); AppKit's origin is the bottom-left of
-            // the primary screen, so flip y against its height.
-            NSScreen* primary = NSScreen.screens.firstObject;
-            auto screenTop = primary != nil ? NSMaxY(primary.frame) : 0.0;
-            [getWindow()
-                setFrameTopLeftPoint:NSMakePoint(options.initialPosition->x,
-                                                 screenTop
-                                                     - options.initialPosition
-                                                           ->y)];
+            [getWindow() setFrameTopLeftPoint:frameTopLeftFromScreenTopLeft(
+                                                  options.initialPosition->x,
+                                                  options.initialPosition->y)];
         }
         else
         {
@@ -302,6 +296,27 @@ struct Window::Native
                             options.trafficLightPosition->y));
 
         applyApplicationIcon(options.applicationIcon());
+    }
+
+    // An opaque window paints its background square into the corners.
+    // Make the window itself clear and let the rounded, clipped content
+    // view (see setContentView) define the visible shape — the shadow
+    // follows it automatically. This wins over backgroundColor by design;
+    // see WindowOptions.
+    void clearBackgroundForRoundedCorners()
+    {
+        [getWindow() setOpaque:NO];
+        [getWindow() setBackgroundColor:[NSColor clearColor]];
+    }
+
+    // Pairs with the clear window background set in the constructor: the
+    // rounded, clipped content view is what defines the window's visible
+    // shape.
+    static void roundCorners(NSView* view, CGFloat radius)
+    {
+        view.wantsLayer = YES;
+        view.layer.cornerRadius = radius;
+        view.layer.masksToBounds = YES;
     }
 
     // macOS has no per-window icons; the icon is the app's Dock tile,
@@ -334,33 +349,27 @@ struct Window::Native
         [getWindow() setContentView:v];
         [v setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
-        // Content set after the window is already key (e.g. shown, then
-        // populated) misses windowDidBecomeKey, so focus the target now.
         if ([getWindow() isKeyWindow])
             focusContentView();
 
         if (opts.cornerRadius)
-        {
-            // Pairs with the clear window background set in the ctor: the
-            // rounded, clipped content view is what defines the window's
-            // visible shape.
-            v.wantsLayer = YES;
-            v.layer.cornerRadius = *opts.cornerRadius;
-            v.layer.masksToBounds = YES;
-        }
+            roundCorners(v, *opts.cornerRadius);
     }
 
+    // The contentView.hidden toggle is for WKWebView's benefit: WebKit
+    // gates a page's timers, rAF and painting on view visibility, and
+    // for ordered-out windows it relies on occlusion notifications that
+    // don't always re-fire on a plain orderFront of a non-key window.
+    // Explicitly hiding/unhiding the content view makes the transition
+    // unambiguous, so a re-shown page reliably wakes back up. The float
+    // level + Spaces behaviour are re-asserted on every show — cheap, and
+    // guards against anything having knocked them off while the window
+    // was ordered out.
     void setVisible(bool visible)
     {
         if (eacp::Apps::getAppEnvironment().headless)
             return;
 
-        // The contentView.hidden toggle is for WKWebView's benefit: WebKit
-        // gates a page's timers, rAF and painting on view visibility, and
-        // for ordered-out windows it relies on occlusion notifications that
-        // don't always re-fire on a plain orderFront of a non-key window.
-        // Explicitly hiding/unhiding the content view makes the transition
-        // unambiguous, so a re-shown page reliably wakes back up.
         if (!visible)
         {
             [getWindow() orderOut:nil];
@@ -370,9 +379,6 @@ struct Window::Native
 
         getWindow().contentView.hidden = NO;
 
-        // Re-assert the float level + Spaces behaviour on every show —
-        // cheap, and guards against anything having knocked them off while
-        // the window was ordered out.
         if (opts.alwaysOnTop)
             [getWindow() setLevel:NSFloatingWindowLevel];
 
@@ -396,13 +402,13 @@ struct Window::Native
         [getWindow() miniaturize:nil];
     }
 
+    // zoom: is itself a toggle — it restores the saved frame when the
+    // window is already zoomed, matching the Windows caption button.
     void toggleMaximize()
     {
         if (eacp::Apps::getAppEnvironment().headless)
             return;
 
-        // zoom: is itself a toggle — it restores the saved frame when the
-        // window is already zoomed, matching the Windows caption button.
         [getWindow() zoom:nil];
     }
 
@@ -421,6 +427,15 @@ struct Window::Native
             disengageMouseLock();
     }
 
+    // Hands keyboard focus to the content's focus target. AppKit would
+    // otherwise park first responder on the content view itself; for a
+    // WebView that is the empty container, leaving the page unfocused
+    // until clicked. Runs on every key activation, so focus is restored
+    // after a sibling window (settings / keyboard) took it, and when
+    // content is set on an already-key window, which misses
+    // windowDidBecomeKey. Focus already inside the target (e.g. a text
+    // field the user is editing) is left alone, so re-activating doesn't
+    // blur it.
     void focusContentView()
     {
         if (contentView == nullptr)
@@ -430,8 +445,6 @@ struct Window::Native
         if (target == nil)
             return;
 
-        // Leave focus alone when it already lives inside the target (e.g. a
-        // text field the user is editing), so re-activating doesn't blur it.
         id current = [getWindow() firstResponder];
         if ([current isKindOfClass:[NSView class]]
             && [(NSView*) current isDescendantOf:target])
@@ -475,14 +488,14 @@ struct Window::Native
         [NSCursor unhide];
     }
 
+    // AppKit screen coordinates have their origin at the primary
+    // screen's bottom-left; the CG warp wants top-left.
     void warpCursorToWindowCenter()
     {
         auto content =
             [getWindow() contentRectForFrameRect:[getWindow() frame]];
         auto center = NSMakePoint(NSMidX(content), NSMidY(content));
 
-        // AppKit screen coordinates have their origin at the primary
-        // screen's bottom-left; the CG warp wants top-left.
         auto primaryHeight = NSMaxY([[NSScreen screens] firstObject].frame);
         CGWarpMouseCursorPosition(
             CGPointMake(center.x, primaryHeight - center.y));

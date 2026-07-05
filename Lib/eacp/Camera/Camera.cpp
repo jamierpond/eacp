@@ -25,7 +25,6 @@ Graphics::Image bgraToImage(const std::uint8_t* data,
     const auto rowPixels = (std::size_t) width;
     const auto tightRowBytes = rowPixels * 4;
 
-    // Tightly-packed frames swap in a single pass; padded rows go one by one.
     if (bytesPerRow == tightRowBytes)
     {
         eacp::simd::swapRedBlue(data, rgba.data(), rowPixels * (std::size_t) height);
@@ -59,6 +58,7 @@ CameraFrame::CameraFrame(int width,
 {
 }
 
+// Only BGRA8 converts today; NV12 / other planar formats land in a later phase.
 Graphics::Image CameraFrame::toImage() const
 {
     if (pixels == nullptr || frameWidth <= 0 || frameHeight <= 0)
@@ -67,7 +67,6 @@ Graphics::Image CameraFrame::toImage() const
     if (pixelFormat == PixelFormat::BGRA8)
         return bgraToImage(pixels, frameWidth, frameHeight, rowBytes);
 
-    // NV12 / other planar formats: conversion lands in a later phase.
     return {};
 }
 } // namespace eacp::Cameras

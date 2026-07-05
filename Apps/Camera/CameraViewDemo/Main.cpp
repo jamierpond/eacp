@@ -45,8 +45,6 @@ struct DemoCameraView final : Cameras::CameraView
         auto center = bounds.center();
         auto radius = 0.25f * std::min(bounds.w, bounds.h);
 
-        // A box orbiting the centre: animated, proving the overlay composites
-        // over the live camera texture in one pass.
         auto bx = center.x + std::cos((float) elapsed) * radius;
         auto by = center.y + std::sin((float) elapsed) * radius;
         renderer.fillRect({bx - 12.0f, by - 12.0f, 24.0f, 24.0f},
@@ -90,17 +88,23 @@ struct CameraApp
         view.autoQuitSeconds =
             std::atof(getEnvValue("EACP_DEMO_AUTOQUIT_SECONDS").c_str());
 
-        // Force the CPU-upload display path (Windows uses it) for verification.
-        if (getEnvValue("EACP_DEMO_UPLOAD_MODE") == "copy")
-            view.setUploadMode(Cameras::CameraView::UploadMode::Copy);
+        forceCopyUploadModeIfRequested();
 
-        view.setMirrored(true); // front-camera-style preview
+        view.setMirrored(true);
         view.attach(camera);
         window.setContentView(view);
         beginCapture();
     }
 
     ~CameraApp() { camera.stop(); }
+
+    // Copy forces the CPU-upload display path (the one Windows uses) so it can
+    // be verified on any platform.
+    void forceCopyUploadModeIfRequested()
+    {
+        if (getEnvValue("EACP_DEMO_UPLOAD_MODE") == "copy")
+            view.setUploadMode(Cameras::CameraView::UploadMode::Copy);
+    }
 
     void startCamera()
     {
