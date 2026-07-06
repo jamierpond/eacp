@@ -75,6 +75,56 @@ function(eacp_set_gui_subsystem target)
     endif ()
 endfunction()
 
+# Gives a bundled app its at-rest icon — the one Finder, the Applications
+# folder and a not-yet-running Dock tile draw. Those are rendered by other
+# processes that never execute the binary, so a runtime
+# setApplicationIconImage cannot supply them: macOS reads
+# Contents/Resources/AppIcon.icns, named by CFBundleIconFile in Info.plist.
+# This generates that .icns at build time from a single PNG master
+# (1024x1024 with transparency recommended) via sips + iconutil.
+#
+# macOS-only for now. The Windows analogue is an ICON resource compiled into
+# the .exe from an .rc file — not yet wired; Windows apps keep the runtime
+# WindowOptions::applicationIcon path.
+function(eacp_set_app_icon target icon)
+    if (NOT APPLE OR IOS)
+        return()
+    endif ()
+
+    get_filename_component(icon "${icon}" ABSOLUTE)
+    set(iconset_dir "${CMAKE_CURRENT_BINARY_DIR}/${target}.iconset")
+    set(icns_file "${CMAKE_CURRENT_BINARY_DIR}/${target}-icon/AppIcon.icns")
+
+    # iconutil requires the exact icon_<N>x<N>[@2x].png names inside the
+    # .iconset; sips scales the master to each slot.
+    set(resize_commands)
+    foreach (size IN ITEMS 16 32 128 256 512)
+        math(EXPR retina "${size} * 2")
+        list(APPEND resize_commands
+                COMMAND sips -z ${size} ${size} "${icon}"
+                --out "${iconset_dir}/icon_${size}x${size}.png"
+                COMMAND sips -z ${retina} ${retina} "${icon}"
+                --out "${iconset_dir}/icon_${size}x${size}@2x.png")
+    endforeach ()
+
+    add_custom_command(OUTPUT "${icns_file}"
+            COMMAND ${CMAKE_COMMAND} -E rm -rf "${iconset_dir}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${iconset_dir}"
+            ${resize_commands}
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/${target}-icon"
+            COMMAND iconutil -c icns -o "${icns_file}" "${iconset_dir}"
+            DEPENDS "${icon}"
+            COMMENT "Generating ${target} AppIcon.icns"
+            VERBATIM)
+
+    target_sources(${target} PRIVATE "${icns_file}")
+    set_source_files_properties("${icns_file}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources
+            GENERATED TRUE)
+    set_target_properties(${target} PROPERTIES
+            MACOSX_BUNDLE_ICON_FILE AppIcon.icns)
+endfunction()
+
 function(add_ide_sources target)
     file(GLOB_RECURSE ALL_HEADERS
             "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
