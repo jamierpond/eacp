@@ -33,3 +33,4 @@ xcschememanagement.plist
 workspace.xml
 xcuserdata
 ExtraClangRules/plugin/build/
+ExtraClangRules/plugin/build
