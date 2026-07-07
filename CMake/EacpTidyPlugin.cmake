@@ -28,7 +28,8 @@ function(eacp_setup_tidy_plugin)
         endforeach ()
     endif ()
 
-    if (NOT EXISTS "${prefix}/bin/clang-tidy")
+    if (NOT prefix OR NOT EXISTS "${prefix}/bin/clang-tidy"
+        OR NOT EXISTS "${prefix}/lib/cmake/clang")
         message(STATUS
                 "ExtraClangRules: pinned LLVM not found — skipping the eacp "
                 "clang-tidy plugin. `brew install llvm@21` (or set "

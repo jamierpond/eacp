@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.31)
-project(EacpTidyChecks CXX)
+project(EacpTidyChecks C CXX)
 
 # Built against a pinned LLVM (see ../README.md): clang-tidy plugins have no
 # ABI stability guarantee, so this library must be loaded by the clang-tidy
