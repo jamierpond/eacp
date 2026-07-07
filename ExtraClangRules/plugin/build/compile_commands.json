@@ -1,8 +1,0 @@
-[
-{
-  "directory": "/Users/jamiepond/projects/eacp/ExtraClangRules/plugin/build",
-  "command": "/usr/bin/c++ -DEacpTidyChecks_EXPORTS -isystem /opt/homebrew/Cellar/llvm@21/21.1.8/include -O3 -DNDEBUG -std=gnu++20 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -fPIC -fno-rtti -o CMakeFiles/EacpTidyChecks.dir/EacpTidyChecks.cpp.o -c /Users/jamiepond/projects/eacp/ExtraClangRules/plugin/EacpTidyChecks.cpp",
-  "file": "/Users/jamiepond/projects/eacp/ExtraClangRules/plugin/EacpTidyChecks.cpp",
-  "output": "/Users/jamiepond/projects/eacp/ExtraClangRules/plugin/build/CMakeFiles/EacpTidyChecks.dir/EacpTidyChecks.cpp.o"
-}
-]

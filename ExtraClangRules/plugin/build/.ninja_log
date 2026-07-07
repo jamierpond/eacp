@@ -1,9 +1,0 @@
-# ninja log v7
-4	6884	1783400236401978919	CMakeFiles/EacpTidyChecks.dir/EacpTidyChecks.cpp.o	ce3400c0334cb27d
-6884	6956	1783400243281782041	libEacpTidyChecks.so	d3c80bc44bf85f85
-1	257	1783401665317364125	build.ninja	f471b24def6accbb
-1	257	1783401665315495943	/Users/jamiepond/projects/eacp/ExtraClangRules/plugin/build/cmake_install.cmake	f471b24def6accbb
-5	693	1783401665317364125	build.ninja	f471b24def6accbb
-5	693	1783401665317364125	/Users/jamiepond/projects/eacp/ExtraClangRules/plugin/build/cmake_install.cmake	f471b24def6accbb
-29	15500	1783401665396172349	CMakeFiles/EacpTidyChecks.dir/EacpTidyChecks.cpp.o	ce3400c0334cb27d
-15500	15591	1783401680867525231	libEacpTidyChecks.so	d3c80bc44bf85f85
