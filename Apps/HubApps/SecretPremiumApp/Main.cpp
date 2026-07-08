@@ -3,8 +3,6 @@
 #include "../Ui.h"
 
 #include "GatingClient.h"
-#include "RendezvousFile.h"
-
 #include <eacp/Graphics/Graphics.h>
 
 #include <cmath>
@@ -17,7 +15,6 @@ using namespace hub;
 namespace
 {
 const char* gExecutablePath = "";
-rpc::SingleInstance* gInstance = nullptr;
 } // namespace
 
 // The "dope-ass feature": a gradient panel with drifting, pulsing orbs and
@@ -260,29 +257,11 @@ struct SecretApp
 
     AppView view;
     Window window {appWindowOptions()};
-
-    Threads::Timer focusPoll {[this]
-                              {
-                                  if (gInstance != nullptr
-                                      && gInstance->focusRequested())
-                                      window.toFront();
-                              },
-                              5};
 };
 
 int main(int, char** argv)
 {
     gExecutablePath = argv[0];
-
-    // Single instance: if the app is already running, raise it and exit.
-    auto instance = rpc::SingleInstance {"secretapp"};
-    if (!instance.primary())
-    {
-        instance.requestFocus();
-        return 0;
-    }
-    gInstance = &instance;
-
     eacp::Apps::run<SecretApp>();
     return 0;
 }

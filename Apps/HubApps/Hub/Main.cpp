@@ -174,8 +174,9 @@ struct HubApp
     Window window {hubWindowOptions()};
 };
 
-int main(int, char**)
+int main(int, char** argv)
 {
+    gExecutablePath = argv[0];
     eacp::Apps::run<HubApp>();
     return 0;
 }
