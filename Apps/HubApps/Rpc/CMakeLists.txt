@@ -2,7 +2,7 @@
 # eacp-network-rpc brings the HTTP server, the Miro RPC server/client, and
 # Miro (the JSON / serialisation layer) transitively.
 add_library(HubRpc STATIC
-        RendezvousFile.cpp
+        Discovery.cpp
         GatingServer.cpp
         GatingClient.cpp)
 

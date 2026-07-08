@@ -3,7 +3,7 @@
 #include "../Ui.h"
 
 #include "GatingServer.h"
-#include "RendezvousFile.h"
+#include "Discovery.h"
 
 #include <eacp/Graphics/Graphics.h>
 

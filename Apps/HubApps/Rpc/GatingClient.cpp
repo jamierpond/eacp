@@ -1,6 +1,6 @@
 #include "GatingClient.h"
 
-#include "RendezvousFile.h"
+#include "Discovery.h"
 
 #include <eacp/Network/HTTPRpc/RpcClient.h>
 

@@ -27,6 +27,7 @@ public:
     {
         std::string appName = "app";
         std::string hubName = "hub"; // rendezvous name to discover
+
         int intervalHz = 5;          // ~200 ms
         std::function<void()> launchHub = [] {};
         std::function<void(const UnlockDecision&)> onDecision =
