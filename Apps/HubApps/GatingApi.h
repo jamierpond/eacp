@@ -1,60 +1,57 @@
 #pragma once
 
-// Shared, statically-typed protocol for the Hub <-> SecretPremiumApp demo.
+// Shared, statically-typed contract for the Hub <-> SecretPremiumApp demo.
 //
-// Both apps include this header. The Hub binds `GatingApi` to a
-// Miro::Bridge and serves it; the app drives the same command names
-// through a typed nng client (see Ipc/NngRpc.h). Miro handles all
-// JSON (de)serialisation from the reflected structs below — nng only
-// moves the bytes.
+// Transport is local HTTP (see Rpc/Peer.h): each side runs a Miro::Bridge
+// mounted on an eacp::HTTP server AND acts as a client to the other — a
+// two-way arrangement, so the Hub can push a decision to the app the same
+// way the app calls the Hub. Miro does all JSON (de)serialisation from the
+// reflected structs below; the transport just moves bytes.
+//
+// These API classes are transport-agnostic: they expose std::function
+// hooks (onAccessRequested / onDecisionChanged / onUpdate) that the app
+// wires to HTTP callbacks and UI updates. That keeps this header free of
+// any HTTP dependency and lets the same classes be driven in a unit test.
 
 #include <Miro/Miro.h>
 
+#include <algorithm>
 #include <functional>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace hub
 {
 
-// Fixed transport endpoints. nng's ipc:// transport is a real local IPC
-// channel — a Unix domain socket on macOS/Linux, a named pipe on Windows
-// — so there's no TCP port and no network stack involved. Both the
-// request/reply and the pub/sub channels ride it.
-inline constexpr auto rpcUrl = "ipc:///tmp/eacp-hub-rpc.ipc"; // req/rep
-inline constexpr auto eventUrl = "ipc:///tmp/eacp-hub-events.ipc"; // pub/sub
 inline constexpr auto secretPassword = "42";
 
 // Mirrors Foo.h's Decision. Miro reflects `enum class` automatically and
 // serialises each value as its enumerator name.
 enum class Decision
 {
-    Standby, // hub up, suite locked, nobody has asked yet
+    Standby,       // hub up, suite locked, nobody has asked yet
     LoginRequired, // an app asked to unlock; a password is expected
-    Unlocked, // password accepted — apps may reveal their features
-    MustUpdate, // version mismatch — update the hub / app suite
-    UnknownError, // damaged install — reinstall the hub / app suite
+    Unlocked,      // password accepted — apps may reveal their features
+    MustUpdate,    // version mismatch — update the hub / app suite
+    UnknownError,  // damaged install — reinstall the hub / app suite
 };
 
 inline std::string describe(Decision decision)
 {
     switch (decision)
     {
-        case Decision::Standby:
-            return "Suite locked";
-        case Decision::LoginRequired:
-            return "Enter the password at the Hub";
-        case Decision::Unlocked:
-            return "Premium suite unlocked";
-        case Decision::MustUpdate:
-            return "A required update is available";
+        case Decision::Standby: return "Suite locked";
+        case Decision::LoginRequired: return "Enter the password at the Hub";
+        case Decision::Unlocked: return "Premium suite unlocked";
+        case Decision::MustUpdate: return "A required update is available";
         case Decision::UnknownError:
             return "Installation damaged — reinstall the Hub";
     }
     return {};
 }
 
-// ---- Wire types (request / reply / event payloads) --------------------
+// ---- Wire types -------------------------------------------------------
 
 struct AppUnlockRequest
 {
@@ -79,24 +76,38 @@ struct UnlockDecision
     MIRO_REFLECT(decision, message)
 };
 
-// Payload of the `decisionChanged` pub/sub event — the async update an
-// app receives while a human is (maybe) typing a password at the Hub.
+// An app registering the base URL of its own peer so the Hub can call it
+// back when the decision changes (the two-way half of the protocol).
+struct SubscribeRequest
+{
+    std::string appName;
+    std::string callbackUrl;
+
+    MIRO_REFLECT(appName, callbackUrl)
+};
+
+struct Ack
+{
+    bool ok = true;
+
+    MIRO_REFLECT(ok)
+};
+
+// Payload the Hub pushes to each subscribed app when the decision changes.
 struct UnlockUpdate
 {
     Decision decision = Decision::Standby;
     std::string message;
-    std::string requestedByApp;
 
-    MIRO_REFLECT(decision, message, requestedByApp)
+    MIRO_REFLECT(decision, message)
 };
 
-// ---- The gated API the Hub serves over IPC ----------------------------
+// ---- Hub-side API -----------------------------------------------------
 //
-// One instance lives in the Hub. Its methods run on the nng server
-// thread (remote calls) and the mutable state is also read/written by
-// the Hub's interactive stdin thread, so everything funnels through a
-// mutex. `decisionChanged` is the only outgoing channel — publishing it
-// fans out to every subscribed app.
+// One instance lives in the Hub. Handlers run on the HTTP dispatcher; the
+// mutable state is also touched by the Hub UI, so everything funnels
+// through a mutex. The onDecisionChanged hook hands the Hub the update and
+// the current subscriber list to fan out over HTTP.
 class GatingApi
 {
 public:
@@ -105,13 +116,21 @@ public:
         reflector.command(&GatingApi::requestUnlock, "requestUnlock");
         reflector.command(&GatingApi::getDecision, "getDecision");
         reflector.command(&GatingApi::submitPassword, "submitPassword");
-        reflector.event(&GatingApi::decisionChanged, "decisionChanged");
+        reflector.command(&GatingApi::subscribe, "subscribe");
+        reflector.command(&GatingApi::focus, "focus");
     }
 
-    // An app asks whether it may run. Already unlocked -> say yes;
-    // otherwise flag LOGIN_REQUIRED so the Hub operator knows a password
-    // is expected, and report that back synchronously. The real unlock
-    // arrives later, asynchronously, via decisionChanged.
+    // Single-instance: a second launch calls this to raise the running
+    // window instead of opening its own.
+    Ack focus()
+    {
+        onFocus();
+        return {};
+    }
+
+    // An app asks whether it may run. Already unlocked -> yes; otherwise
+    // flag LOGIN_REQUIRED so the Hub operator sees a password is expected.
+    // The real unlock is delivered later via the callback.
     UnlockDecision requestUnlock(const AppUnlockRequest& request)
     {
         auto snapshot = UnlockDecision {};
@@ -125,8 +144,6 @@ public:
             snapshot = snapshotLocked();
         }
 
-        // Fires on the transport (server) thread; the Hub marshals it onto
-        // the UI thread. Non-null default so call sites never null-check.
         onAccessRequested(request.appName);
         return snapshot;
     }
@@ -137,22 +154,34 @@ public:
         return snapshotLocked();
     }
 
-    // Password entry — usable locally by the Hub operator or remotely by
-    // an app that already knows the secret. Flips the shared decision and
-    // broadcasts the result to all subscribers.
+    // An app registers a callback URL. Idempotent.
+    Ack subscribe(const SubscribeRequest& request)
+    {
+        auto lock = std::scoped_lock {stateMutex};
+        if (std::find(subscribers.begin(),
+                      subscribers.end(),
+                      request.callbackUrl)
+            == subscribers.end())
+            subscribers.push_back(request.callbackUrl);
+        return {};
+    }
+
+    // Password entry (from the Hub UI, or remotely). Flips the shared
+    // decision and hands the resulting update + subscriber list to the
+    // onDecisionChanged hook, which fans it out over HTTP.
     UnlockDecision submitPassword(const PasswordAttempt& attempt)
     {
         auto update = UnlockUpdate {};
+        auto targets = std::vector<std::string> {};
         {
             auto lock = std::scoped_lock {stateMutex};
             current = attempt.password == secretPassword ? Decision::Unlocked
                                                          : Decision::LoginRequired;
-            update = {.decision = current,
-                      .message = describe(current),
-                      .requestedByApp = requestedApp};
+            update = {.decision = current, .message = describe(current)};
+            targets = subscribers;
         }
 
-        decisionChanged.publish(update);
+        onDecisionChanged(update, targets);
         return {.decision = update.decision, .message = update.message};
     }
 
@@ -162,17 +191,14 @@ public:
         return current == Decision::Unlocked;
     }
 
-    std::string pendingApp() const
-    {
-        auto lock = std::scoped_lock {stateMutex};
-        return current == Decision::Unlocked ? std::string {} : requestedApp;
-    }
-
-    Miro::Event<UnlockUpdate> decisionChanged;
-
-    // Reactive hook: an app has asked to unlock. Assigned by the Hub UI.
+    // Hooks assigned by the Hub app (both default to no-ops).
     std::function<void(const std::string& appName)> onAccessRequested =
         [](const std::string&) {};
+    std::function<void(const UnlockUpdate&, const std::vector<std::string>&)>
+        onDecisionChanged = [](const UnlockUpdate&, const std::vector<std::string>&)
+    {
+    };
+    std::function<void()> onFocus = [] {};
 
 private:
     UnlockDecision snapshotLocked() const
@@ -183,6 +209,37 @@ private:
     mutable std::mutex stateMutex;
     Decision current = Decision::Standby;
     std::string requestedApp;
+    std::vector<std::string> subscribers;
+};
+
+// ---- App-side API -----------------------------------------------------
+//
+// One instance lives in each app. The Hub calls notifyDecision on it when
+// the decision changes; the app wires onUpdate to reveal its feature.
+class ClientApi
+{
+public:
+    void reflect(Miro::ApiReflector& reflector)
+    {
+        reflector.command(&ClientApi::notifyDecision, "notifyDecision");
+        reflector.command(&ClientApi::focus, "focus");
+    }
+
+    Ack notifyDecision(const UnlockUpdate& update)
+    {
+        onUpdate(update);
+        return {};
+    }
+
+    // Single-instance: raise the running window (see GatingApi::focus).
+    Ack focus()
+    {
+        onFocus();
+        return {};
+    }
+
+    std::function<void(const UnlockUpdate&)> onUpdate = [](const UnlockUpdate&) {};
+    std::function<void()> onFocus = [] {};
 };
 
 } // namespace hub

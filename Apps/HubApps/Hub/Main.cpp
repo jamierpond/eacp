@@ -1,14 +1,16 @@
+#include "../GatingApi.h"
 #include "../Launcher.h"
-#include "../Protocol.h"
 #include "../Ui.h"
 
-#include "NngRpc.h"
+#include "Peer.h"
 
 #include <eacp/Graphics/Graphics.h>
 
 #include <Miro/Miro.h>
 
 #include <string>
+#include <thread>
+#include <vector>
 
 using namespace eacp;
 using namespace eacp::Graphics;
@@ -16,13 +18,13 @@ using namespace hub;
 
 namespace
 {
-// argv[0] captured in main, read when the app struct is built on the loop.
 const char* gExecutablePath = "";
 } // namespace
 
-// The Hub window: a password gate that serves the GatingApi over nng and,
-// once unlocked, can launch the premium app. All UI runs on the main
-// thread; IPC handlers that touch the UI marshal via Threads::callAsync.
+// The Hub window: a password gate that serves the GatingApi over local
+// HTTP and, once unlocked, pushes the decision to every subscribed app and
+// can launch the premium app. All UI runs on the main thread; the HTTP
+// server's handlers hop here via Threads::callAsync.
 struct HubView final : View
 {
     HubView()
@@ -30,7 +32,8 @@ struct HubView final : View
         , unlockButton("Unlock")
         , launchButton("Launch Premium App")
     {
-        bridge.use(api);
+        peer.serve(api);
+        rpc::writeEndpoint("hub", peer.baseUrl());
 
         backgroundLayer->setFillColor(ui::background);
 
@@ -54,18 +57,19 @@ struct HubView final : View
         launchButton.setColor(ui::good);
         launchButton.onClick = [this] { launchPremiumApp(); };
 
-        // An app knocking over IPC fires on the server thread — hop to the
-        // UI thread before touching any views.
+        // Handlers run on the HTTP dispatcher — marshal to the UI thread.
         api.onAccessRequested = [this](const std::string& appName)
         { Threads::callAsync([this, appName] { onAccessRequested(appName); }); };
 
-        addChildren({backgroundLayer,
-                     titleLayer,
-                     subtitleLayer,
-                     statusLayer,
-                     passwordField,
-                     unlockButton});
+        api.onDecisionChanged =
+            [this](const UnlockUpdate& update, const std::vector<std::string>& subs)
+        { notifySubscribers(update, subs); };
+
+        addChildren({backgroundLayer, titleLayer, subtitleLayer, statusLayer,
+                     passwordField, unlockButton});
     }
+
+    ~HubView() override { rpc::removeEndpoint("hub"); }
 
     void tryUnlock()
     {
@@ -85,10 +89,34 @@ struct HubView final : View
         }
     }
 
+    // Fan out the decision to every subscribed app on a detached thread so
+    // the UI never blocks on the outbound HTTP calls.
+    void notifySubscribers(const UnlockUpdate& update,
+                           const std::vector<std::string>& subs)
+    {
+        auto worker = std::thread(
+            [this, update, subs]
+            {
+                for (const auto& url: subs)
+                {
+                    try
+                    {
+                        peer.call<Ack>(url, "notifyDecision", update);
+                    }
+                    catch (const std::exception&)
+                    {
+                        // Subscriber gone; skip it.
+                    }
+                }
+            });
+        worker.detach();
+    }
+
     void launchPremiumApp()
     {
-        auto exe = hub::siblingExecutable(
-            gExecutablePath, "SecretPremiumApp", "SecretPremiumApp");
+        auto exe = hub::siblingExecutable(gExecutablePath,
+                                          "SecretPremiumApp",
+                                          "SecretPremiumApp");
 
         if (hub::launchDetached(exe))
             statusLayer->setText("Launched the premium app.");
@@ -103,7 +131,8 @@ struct HubView final : View
         if (api.isUnlocked())
             return;
 
-        statusLayer->setText("'" + appName + "' wants access — enter the password.");
+        statusLayer->setText("'" + appName
+                             + "' wants access — enter the password.");
         statusLayer->setColor(ui::accent);
         passwordField.focus();
     }
@@ -138,9 +167,7 @@ struct HubView final : View
 
     // State / IPC declared first so they outlive the views that use them.
     GatingApi api;
-    Miro::Bridge bridge;
-    hub::ipc::RpcServer server {bridge, hub::rpcUrl};
-    hub::ipc::Publisher publisher {bridge, hub::eventUrl};
+    rpc::Peer peer;
 
     ShapeLayerView backgroundLayer;
     TextLayerView titleLayer;
@@ -168,6 +195,10 @@ struct HubApp
 {
     HubApp()
     {
+        // A second launch (handled in main) tells this instance to focus.
+        view.api.onFocus = [this]
+        { Threads::callAsync([this] { window.toFront(); }); };
+
         window.setContentView(view);
         window.toFront();
     }
@@ -179,6 +210,11 @@ struct HubApp
 int main(int, char** argv)
 {
     gExecutablePath = argv[0];
+
+    // Single instance: if a Hub is already running, raise it and exit.
+    if (hub::rpc::focusRunningInstance("hub"))
+        return 0;
+
     eacp::Apps::run<HubApp>();
     return 0;
 }
