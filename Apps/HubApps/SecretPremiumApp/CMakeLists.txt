@@ -1,0 +1,3 @@
+add_executable(SecretPremiumApp Main.cpp)
+target_link_libraries(SecretPremiumApp PRIVATE eacp-core HubIpc)
+set_default_target_setting(SecretPremiumApp)
