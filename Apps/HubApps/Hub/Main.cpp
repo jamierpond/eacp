@@ -2,15 +2,14 @@
 #include "../Launcher.h"
 #include "../Ui.h"
 
-#include "Peer.h"
+#include "GatingServer.h"
+#include "RendezvousFile.h"
 
 #include <eacp/Graphics/Graphics.h>
 
 #include <Miro/Miro.h>
 
 #include <string>
-#include <thread>
-#include <vector>
 
 using namespace eacp;
 using namespace eacp::Graphics;
@@ -19,12 +18,12 @@ using namespace hub;
 namespace
 {
 const char* gExecutablePath = "";
+rpc::SingleInstance* gInstance = nullptr;
 } // namespace
 
 // The Hub window: a password gate that serves the GatingApi over local
-// HTTP and, once unlocked, pushes the decision to every subscribed app and
-// can launch the premium app. All UI runs on the main thread; the HTTP
-// server's handlers hop here via Threads::callAsync.
+// HTTP. Apps poll it for the decision. All UI runs on the main thread; the
+// HTTP server's handlers hop here via Threads::callAsync.
 struct HubView final : View
 {
     HubView()
@@ -32,8 +31,8 @@ struct HubView final : View
         , unlockButton("Unlock")
         , launchButton("Launch Premium App")
     {
-        peer.serve(api);
-        rpc::writeEndpoint("hub", peer.baseUrl());
+        server.serve(api);
+        rpc::writeEndpoint("hub", server.baseUrl());
 
         backgroundLayer->setFillColor(ui::background);
 
@@ -57,13 +56,9 @@ struct HubView final : View
         launchButton.setColor(ui::good);
         launchButton.onClick = [this] { launchPremiumApp(); };
 
-        // Handlers run on the HTTP dispatcher — marshal to the UI thread.
+        // Handler runs on the HTTP dispatcher — marshal to the UI thread.
         api.onAccessRequested = [this](const std::string& appName)
         { Threads::callAsync([this, appName] { onAccessRequested(appName); }); };
-
-        api.onDecisionChanged =
-            [this](const UnlockUpdate& update, const std::vector<std::string>& subs)
-        { notifySubscribers(update, subs); };
 
         addChildren({backgroundLayer, titleLayer, subtitleLayer, statusLayer,
                      passwordField, unlockButton});
@@ -77,7 +72,7 @@ struct HubView final : View
 
         if (decision.decision == Decision::Unlocked)
         {
-            statusLayer->setText("Unlocked ✓  subscribers notified.");
+            statusLayer->setText("Unlocked ✓  polling apps will pick it up.");
             statusLayer->setColor(ui::good);
             showUnlockedUi();
         }
@@ -87,29 +82,6 @@ struct HubView final : View
             statusLayer->setColor(ui::bad);
             passwordField.setText("");
         }
-    }
-
-    // Fan out the decision to every subscribed app on a detached thread so
-    // the UI never blocks on the outbound HTTP calls.
-    void notifySubscribers(const UnlockUpdate& update,
-                           const std::vector<std::string>& subs)
-    {
-        auto worker = std::thread(
-            [this, update, subs]
-            {
-                for (const auto& url: subs)
-                {
-                    try
-                    {
-                        peer.call<Ack>(url, "notifyDecision", update);
-                    }
-                    catch (const std::exception&)
-                    {
-                        // Subscriber gone; skip it.
-                    }
-                }
-            });
-        worker.detach();
     }
 
     void launchPremiumApp()
@@ -165,9 +137,9 @@ struct HubView final : View
         launchButton.setBounds({38.f, 60.f, fieldWidth, 50.f});
     }
 
-    // State / IPC declared first so they outlive the views that use them.
+    // State / server declared first so they outlive the views that use them.
     GatingApi api;
-    rpc::Peer peer;
+    rpc::GatingServer server;
 
     ShapeLayerView backgroundLayer;
     TextLayerView titleLayer;
@@ -195,16 +167,21 @@ struct HubApp
 {
     HubApp()
     {
-        // A second launch (handled in main) tells this instance to focus.
-        view.api.onFocus = [this]
-        { Threads::callAsync([this] { window.toFront(); }); };
-
         window.setContentView(view);
         window.toFront();
     }
 
     HubView view;
     Window window {hubWindowOptions()};
+
+    // A second launch drops a focus flag; raise this window when it appears.
+    Threads::Timer focusPoll {[this]
+                              {
+                                  if (gInstance != nullptr
+                                      && gInstance->focusRequested())
+                                      window.toFront();
+                              },
+                              5};
 };
 
 int main(int, char** argv)
@@ -212,8 +189,13 @@ int main(int, char** argv)
     gExecutablePath = argv[0];
 
     // Single instance: if a Hub is already running, raise it and exit.
-    if (hub::rpc::focusRunningInstance("hub"))
+    auto instance = rpc::SingleInstance {"hub"};
+    if (!instance.primary())
+    {
+        instance.requestFocus();
         return 0;
+    }
+    gInstance = &instance;
 
     eacp::Apps::run<HubApp>();
     return 0;

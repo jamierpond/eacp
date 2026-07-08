@@ -2,26 +2,22 @@
 #include "../Launcher.h"
 #include "../Ui.h"
 
-#include "Peer.h"
+#include "GatingClient.h"
+#include "RendezvousFile.h"
 
 #include <eacp/Graphics/Graphics.h>
 
-#include <Miro/Miro.h>
-
-#include <atomic>
-#include <chrono>
 #include <cmath>
 #include <string>
-#include <thread>
 
 using namespace eacp;
 using namespace eacp::Graphics;
 using namespace hub;
-using namespace std::chrono_literals;
 
 namespace
 {
 const char* gExecutablePath = "";
+rpc::SingleInstance* gInstance = nullptr;
 } // namespace
 
 // The "dope-ass feature": a gradient panel with drifting, pulsing orbs and
@@ -141,10 +137,9 @@ struct FeatureView final : View
     Threads::DisplayLink link {[this](Threads::FrameTime frame) { update(frame); }};
 };
 
-// Root view: serves a ClientApi callback endpoint on its own peer, finds
-// the Hub via the rendezvous file (launching it if needed), subscribes,
-// and reveals the feature once the Hub reports Unlocked — either from the
-// requestUnlock reply or asynchronously via the notifyDecision callback.
+// Root view: a pure client. It drives a GatingClient that discovers the Hub
+// (launching it if needed) and polls the decision; when the poll reports
+// Unlocked, the feature is revealed. No server runs on this side.
 struct AppView final : View
 {
     AppView()
@@ -160,27 +155,7 @@ struct AppView final : View
 
         hintLayer->setColor(ui::faint);
 
-        // The Hub's notifyDecision lands here (on the app's HTTP dispatcher);
-        // marshal onto the UI thread to reveal.
-        clientApi.onUpdate = [this](const UnlockUpdate& update)
-        {
-            if (update.decision == Decision::Unlocked)
-                Threads::callAsync([this] { reveal(); });
-        };
-        peer.serve(clientApi);
-        rpc::writeEndpoint("secretapp", peer.baseUrl());
-
         addChildren({backgroundLayer, titleLayer, statusLayer, hintLayer});
-
-        worker = std::thread([this] { workerBody(); });
-    }
-
-    ~AppView() override
-    {
-        stopping = true;
-        if (worker.joinable())
-            worker.join();
-        rpc::removeEndpoint("secretapp");
     }
 
     void setStatus(const std::string& textToUse, const Color& color)
@@ -191,8 +166,9 @@ struct AppView final : View
 
     void reveal()
     {
-        if (revealed.exchange(true))
+        if (revealed)
             return;
+        revealed = true;
 
         removeSubview(titleLayer);
         removeSubview(statusLayer);
@@ -202,62 +178,15 @@ struct AppView final : View
         resized();
     }
 
-    void deliver(const UnlockDecision& decision)
+    // Runs on the UI thread (the client callback marshals here). Unlock is
+    // handled separately by onUnlock -> reveal.
+    void showWaiting(const UnlockDecision& decision)
     {
         if (decision.decision == Decision::Unlocked)
-        {
-            reveal();
-        }
-        else
-        {
-            setStatus("Locked — " + decision.message, ui::accent);
-            hintLayer->setText("Type 42 in the Hub window to unlock.");
-        }
-    }
+            return;
 
-    void workerBody()
-    {
-        auto request = AppUnlockRequest {.appName = "SecretPremiumApp"};
-        auto subscribeRequest = SubscribeRequest {.appName = "SecretPremiumApp",
-                                                  .callbackUrl = peer.baseUrl()};
-        auto launched = false;
-
-        for (auto attempt = 0; attempt < 40 && !stopping; ++attempt)
-        {
-            if (auto url = rpc::readEndpoint("hub"))
-            {
-                try
-                {
-                    // Subscribe first, so any unlock after this point reaches
-                    // us via the callback, then read the current decision.
-                    peer.call<Ack>(*url, "subscribe", subscribeRequest);
-                    post(peer.call<UnlockDecision>(*url, "requestUnlock", request));
-                    return;
-                }
-                catch (const std::exception&)
-                {
-                    // Endpoint stale or Hub still starting — fall through.
-                }
-            }
-
-            if (!launched)
-            {
-                Threads::callAsync(
-                    [this] { setStatus("Hub not running — launching it…", ui::accent); });
-                hub::launchDetached(
-                    hub::siblingExecutable(gExecutablePath, "Hub", "Hub"));
-                launched = true;
-            }
-
-            std::this_thread::sleep_for(250ms);
-        }
-
-        Threads::callAsync([this] { setStatus("Could not reach the Hub.", ui::bad); });
-    }
-
-    void post(const UnlockDecision& decision)
-    {
-        Threads::callAsync([this, decision] { deliver(decision); });
+        setStatus("Locked — " + decision.message, ui::accent);
+        hintLayer->setText("Type 42 in the Hub window to unlock.");
     }
 
     void resized() override
@@ -277,11 +206,25 @@ struct AppView final : View
         hintLayer->setPosition({40.f, bounds.h / 2.f - 34.f});
     }
 
-    // Peer / threads declared first so they outlive the views/handlers.
-    ClientApi clientApi;
-    rpc::Peer peer;
-    std::atomic<bool> revealed {false};
-    std::atomic<bool> stopping {false};
+    rpc::GatingClient::Options clientOptions()
+    {
+        auto options = rpc::GatingClient::Options {};
+        options.appName = "SecretPremiumApp";
+        options.launchHub = [this]
+        {
+            Threads::callAsync(
+                [this] { setStatus("Hub not running — launching it…", ui::accent); });
+            hub::launchDetached(
+                hub::siblingExecutable(gExecutablePath, "Hub", "Hub"));
+        };
+        options.onDecision = [this](const UnlockDecision& decision)
+        { Threads::callAsync([this, decision] { showWaiting(decision); }); };
+        options.onUnlock = [this]
+        { Threads::callAsync([this] { reveal(); }); };
+        return options;
+    }
+
+    bool revealed = false;
 
     ShapeLayerView backgroundLayer;
     TextLayerView titleLayer;
@@ -289,7 +232,9 @@ struct AppView final : View
     TextLayerView hintLayer;
     FeatureView feature;
 
-    std::thread worker;
+    // Declared last so it starts polling after the views exist and stops
+    // before they tear down.
+    rpc::GatingClient client {clientOptions()};
 };
 
 namespace
@@ -309,15 +254,20 @@ struct SecretApp
 {
     SecretApp()
     {
-        view.clientApi.onFocus = [this]
-        { Threads::callAsync([this] { window.toFront(); }); };
-
         window.setContentView(view);
         window.toFront();
     }
 
     AppView view;
     Window window {appWindowOptions()};
+
+    Threads::Timer focusPoll {[this]
+                              {
+                                  if (gInstance != nullptr
+                                      && gInstance->focusRequested())
+                                      window.toFront();
+                              },
+                              5};
 };
 
 int main(int, char** argv)
@@ -325,8 +275,13 @@ int main(int, char** argv)
     gExecutablePath = argv[0];
 
     // Single instance: if the app is already running, raise it and exit.
-    if (hub::rpc::focusRunningInstance("secretapp"))
+    auto instance = rpc::SingleInstance {"secretapp"};
+    if (!instance.primary())
+    {
+        instance.requestFocus();
         return 0;
+    }
+    gInstance = &instance;
 
     eacp::Apps::run<SecretApp>();
     return 0;
