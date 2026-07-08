@@ -27,7 +27,7 @@ struct TextLayer::Native : NativeLayer
         // autoreleased, and a layer that is later detached from its
         // superlayer (hidden view, removeSubview) would otherwise be freed
         // by the pool and over-released by ~Ptr.
-        layer = [ImmediateTextLayer layer]; // TEMP reverted
+        layer.reset([ImmediateTextLayer layer]);
         layer.get().anchorPoint = CGPointMake(0, 0);
         layer.get().wrapped = NO;
         layer.get().truncationMode = kCATruncationEnd;
