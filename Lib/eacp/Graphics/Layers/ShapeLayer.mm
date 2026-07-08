@@ -33,7 +33,10 @@ struct ShapeLayer::Native : public NativeLayer
 {
     Native()
     {
-        layer = [ImmediateShapeLayer layer];
+        // reset (not =) so the Ptr owns a retain — see TextLayer.mm. A
+        // detached/never-attached shape layer would otherwise be freed by
+        // the autorelease pool and over-released by ~Ptr.
+        layer.reset([ImmediateShapeLayer layer]);
         layer.get().fillColor = nil;
         layer.get().strokeColor = nil;
         layer.get().lineWidth = 1.0f;
@@ -68,7 +71,7 @@ struct ShapeLayer::Native : public NativeLayer
 
         if (!gradientLayer)
         {
-            gradientLayer = [ImmediateGradientLayer layer];
+            gradientLayer.reset([ImmediateGradientLayer layer]);
             gradientLayer.get().anchorPoint = CGPointMake(0, 0);
             [layer.get() addSublayer:gradientLayer.get()];
         }

@@ -23,7 +23,11 @@ struct TextLayer::Native : NativeLayer
 {
     Native()
     {
-        layer = [ImmediateTextLayer layer];
+        // reset (not =) so the Ptr *owns* a retain: [X layer] is +0
+        // autoreleased, and a layer that is later detached from its
+        // superlayer (hidden view, removeSubview) would otherwise be freed
+        // by the pool and over-released by ~Ptr.
+        layer = [ImmediateTextLayer layer]; // TEMP reverted
         layer.get().anchorPoint = CGPointMake(0, 0);
         layer.get().wrapped = NO;
         layer.get().truncationMode = kCATruncationEnd;
