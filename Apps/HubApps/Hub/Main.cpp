@@ -18,7 +18,6 @@ using namespace hub;
 namespace
 {
 const char* gExecutablePath = "";
-rpc::SingleInstance* gInstance = nullptr;
 } // namespace
 
 // The Hub window: a password gate that serves the GatingApi over local
