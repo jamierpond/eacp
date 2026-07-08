@@ -1,9 +1,12 @@
 #pragma once
 
-// A local-HTTP RPC server: an eacp::HTTP::Server with a Miro::Bridge mounted
-// at /rpc, bound to an OS-assigned free port by default (see boundPort()).
-// It also exposes a typed `call`, so a server can act as a client to other
-// peers — which lets it talk to itself in a unit test.
+// A local-HTTP RPC peer: an eacp::HTTP::Server with a Miro::Bridge mounted at
+// /rpc, bound to an OS-assigned free port by default (see boundPort()). It also
+// exposes a typed `call`, so a peer can act as a client to other peers — which
+// lets it talk to itself in a unit test.
+//
+// Serve any reflected Miro API with serve(); nothing here is tied to a specific
+// protocol.
 
 #include <eacp/Network/HTTPRpc/RpcClient.h>
 #include <eacp/Network/HTTPRpc/RpcServer.h>
@@ -13,20 +16,20 @@
 
 #include <string>
 
-namespace hub::rpc
+namespace eacp::Ipc
 {
 
-class GatingServer
+class Peer
 {
 public:
     // port 0 (default) => the OS picks a free ephemeral port.
-    explicit GatingServer(int port = 0);
-    ~GatingServer();
+    explicit Peer(int port = 0);
+    ~Peer();
 
-    GatingServer(const GatingServer&) = delete;
-    GatingServer& operator=(const GatingServer&) = delete;
+    Peer(const Peer&) = delete;
+    Peer& operator=(const Peer&) = delete;
 
-    // Bind an API's reflected commands onto this server's bridge.
+    // Bind an API's reflected commands onto this peer's bridge.
     template <typename Api>
     void serve(Api& api)
     {
@@ -38,8 +41,8 @@ public:
 
     Miro::Bridge& getBridge() { return bridge; }
 
-    // Client side — call any server (including ourselves). Constructs a
-    // transient typed client; safe from any thread.
+    // Client side — call any peer (including ourselves). Constructs a transient
+    // typed client; safe from any thread.
     template <typename Res, typename Req>
     Res call(const std::string& url,
              const std::string& command,
@@ -61,4 +64,4 @@ private:
     int port = -1;
 };
 
-} // namespace hub::rpc
+} // namespace eacp::Ipc

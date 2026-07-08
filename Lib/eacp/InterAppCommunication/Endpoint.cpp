@@ -1,10 +1,11 @@
-#include "Discovery.h"
+#include "Endpoint.h"
+
 #include "eacp/Core/Utils/Files.h"
 
 #include <filesystem>
 #include <fstream>
 
-namespace hub::rpc
+namespace eacp::Ipc
 {
 
 std::string endpointPath(const std::string& name)
@@ -43,4 +44,4 @@ std::optional<std::string> readEndpoint(const std::string& name)
     return url;
 }
 
-} // namespace hub::rpc
+} // namespace eacp::Ipc

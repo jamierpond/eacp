@@ -2,8 +2,8 @@
 #include "../Launcher.h"
 #include "../Ui.h"
 
-#include "GatingServer.h"
-#include "Discovery.h"
+#include <eacp/InterAppCommunication/Endpoint.h>
+#include <eacp/InterAppCommunication/Peer.h>
 
 #include <eacp/Graphics/Graphics.h>
 
@@ -31,7 +31,7 @@ struct HubView final : View
         , launchButton("Launch Premium App")
     {
         server.serve(api);
-        rpc::writeEndpoint("hub", server.baseUrl());
+        Ipc::writeEndpoint("hub", server.baseUrl());
 
         backgroundLayer->setFillColor(ui::background);
 
@@ -59,11 +59,15 @@ struct HubView final : View
         api.onAccessRequested = [this](const std::string& appName)
         { Threads::callAsync([this, appName] { onAccessRequested(appName); }); };
 
-        addChildren({backgroundLayer, titleLayer, subtitleLayer, statusLayer,
-                     passwordField, unlockButton});
+        addChildren({backgroundLayer,
+                     titleLayer,
+                     subtitleLayer,
+                     statusLayer,
+                     passwordField,
+                     unlockButton});
     }
 
-    ~HubView() override { rpc::removeEndpoint("hub"); }
+    ~HubView() override { Ipc::removeEndpoint("hub"); }
 
     void tryUnlock()
     {
@@ -85,9 +89,8 @@ struct HubView final : View
 
     void launchPremiumApp()
     {
-        auto exe = hub::siblingExecutable(gExecutablePath,
-                                          "SecretPremiumApp",
-                                          "SecretPremiumApp");
+        auto exe = hub::siblingExecutable(
+            gExecutablePath, "SecretPremiumApp", "SecretPremiumApp");
 
         if (hub::launchDetached(exe))
             statusLayer->setText("Launched the premium app.");
@@ -102,8 +105,7 @@ struct HubView final : View
         if (api.isUnlocked())
             return;
 
-        statusLayer->setText("'" + appName
-                             + "' wants access — enter the password.");
+        statusLayer->setText("'" + appName + "' wants access — enter the password.");
         statusLayer->setColor(ui::accent);
         passwordField.focus();
     }
@@ -138,7 +140,7 @@ struct HubView final : View
 
     // State / server declared first so they outlive the views that use them.
     GatingApi api;
-    rpc::GatingServer server;
+    Ipc::Peer server;
 
     ShapeLayerView backgroundLayer;
     TextLayerView titleLayer;

@@ -2,10 +2,12 @@
 #include "../Launcher.h"
 #include "../Ui.h"
 
-#include "GatingClient.h"
+#include <eacp/InterAppCommunication/PollingClient.h>
+
 #include <eacp/Graphics/Graphics.h>
 
 #include <cmath>
+#include <memory>
 #include <string>
 
 using namespace eacp;
@@ -134,8 +136,8 @@ struct FeatureView final : View
     Threads::DisplayLink link {[this](Threads::FrameTime frame) { update(frame); }};
 };
 
-// Root view: a pure client. It drives a GatingClient that discovers the Hub
-// (launching it if needed) and polls the decision; when the poll reports
+// Root view: a pure client. It drives an Ipc::PollingClient that discovers the
+// Hub (launching it if needed) and polls the decision; when the poll reports
 // Unlocked, the feature is revealed. No server runs on this side.
 struct AppView final : View
 {
@@ -203,21 +205,48 @@ struct AppView final : View
         hintLayer->setPosition({40.f, bounds.h / 2.f - 34.f});
     }
 
-    rpc::GatingClient::Options clientOptions()
+    using Poller = Ipc::PollingClient<UnlockDecision>;
+
+    Poller::Options clientOptions()
     {
-        auto options = rpc::GatingClient::Options {};
-        options.appName = "SecretPremiumApp";
-        options.launchHub = [this]
+        auto options = Poller::Options {};
+        options.endpointName = "hub";
+
+        // Announce once (so the Hub UI can show "app wants access"), then just
+        // poll the current decision. The one-shot flag lives with the poller.
+        auto announced = std::make_shared<bool>(false);
+        options.poll = [announced](Poller::RpcClient& client) -> UnlockDecision
+        {
+            if (*announced)
+                return client.invoke<UnlockDecision>("getDecision");
+
+            auto decision = client.invoke<UnlockDecision>(
+                "requestUnlock", AppUnlockRequest {.appName = "SecretPremiumApp"});
+            *announced = true;
+            return decision;
+        };
+
+        // Only surface a decision when it actually changes.
+        options.changed =
+            [](const UnlockDecision& previous, const UnlockDecision& latest)
+        { return previous.decision != latest.decision; };
+        options.onChange = [this](const UnlockDecision& decision)
+        { Threads::callAsync([this, decision] { showWaiting(decision); }); };
+
+        // Unlock is terminal: reveal the feature and stop polling.
+        options.finished = [](const UnlockDecision& decision)
+        { return decision.decision == Decision::Unlocked; };
+        options.onFinish = [this](const UnlockDecision&)
+        { Threads::callAsync([this] { reveal(); }); };
+
+        options.launch = [this]
         {
             Threads::callAsync(
-                [this] { setStatus("Hub not running — launching it…", ui::accent); });
+                [this]
+                { setStatus("Hub not running — launching it…", ui::accent); });
             hub::launchDetached(
                 hub::siblingExecutable(gExecutablePath, "Hub", "Hub"));
         };
-        options.onDecision = [this](const UnlockDecision& decision)
-        { Threads::callAsync([this, decision] { showWaiting(decision); }); };
-        options.onUnlock = [this]
-        { Threads::callAsync([this] { reveal(); }); };
         return options;
     }
 
@@ -231,7 +260,7 @@ struct AppView final : View
 
     // Declared last so it starts polling after the views exist and stops
     // before they tear down.
-    rpc::GatingClient client {clientOptions()};
+    Poller client {clientOptions()};
 };
 
 namespace

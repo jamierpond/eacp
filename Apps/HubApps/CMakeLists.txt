@@ -4,7 +4,6 @@ set(CMAKE_FOLDER Examples/HubApps)
 # eacp-network-rpc, linked by the Rpc library below.
 find_package(Miro REQUIRED)
 
-add_subdirectory(Rpc)
 add_subdirectory(Hub)
 add_subdirectory(SecretPremiumApp)
 

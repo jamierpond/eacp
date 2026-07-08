@@ -1,5 +1,5 @@
 add_executable(Hub Main.cpp)
-target_link_libraries(Hub PRIVATE eacp-graphics HubRpc)
+target_link_libraries(Hub PRIVATE eacp-graphics eacp-interapp)
 
 set(BUNDLE_ID "com.eacp.hubapp")
 

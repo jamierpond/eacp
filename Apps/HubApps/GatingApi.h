@@ -2,10 +2,11 @@
 
 // Shared, statically-typed contract for the Hub <-> SecretPremiumApp demo.
 //
-// The Hub is the only server: it mounts this GatingApi on an eacp::HTTP
-// server (see Rpc/Peer.h). Apps are pure clients — they poll getDecision
-// (see Rpc/GatingClient.h), so nothing runs a server on the client side.
-// Miro does all JSON (de)serialisation from the reflected structs below.
+// The Hub is the only server: it mounts this GatingApi on an eacp::Ipc::Peer
+// (eacp/InterAppCommunication/Peer.h). Apps are pure clients — they poll
+// getDecision via an Ipc::PollingClient (PollingClient.h), so nothing runs a
+// server on the client side. Miro does all JSON (de)serialisation from the
+// reflected structs below.
 
 #include "Miro/Reflection/ReflectMacro.h"
 #include <Miro/Miro.h>
@@ -23,21 +24,25 @@ inline constexpr auto secretPassword = "42";
 // serialises each value as its enumerator name.
 enum class Decision
 {
-    Standby,       // hub up, suite locked, nobody has asked yet
+    Standby, // hub up, suite locked, nobody has asked yet
     LoginRequired, // an app asked to unlock; a password is expected
-    Unlocked,      // password accepted — apps may reveal their features
-    MustUpdate,    // version mismatch — update the hub / app suite
-    UnknownError,  // damaged install — reinstall the hub / app suite
+    Unlocked, // password accepted — apps may reveal their features
+    MustUpdate, // version mismatch — update the hub / app suite
+    UnknownError, // damaged install — reinstall the hub / app suite
 };
 
 inline std::string describe(Decision decision)
 {
     switch (decision)
     {
-        case Decision::Standby: return "Suite locked";
-        case Decision::LoginRequired: return "Enter the password at the Hub";
-        case Decision::Unlocked: return "Premium suite unlocked";
-        case Decision::MustUpdate: return "A required update is available";
+        case Decision::Standby:
+            return "Suite locked";
+        case Decision::LoginRequired:
+            return "Enter the password at the Hub";
+        case Decision::Unlocked:
+            return "Premium suite unlocked";
+        case Decision::MustUpdate:
+            return "A required update is available";
         case Decision::UnknownError:
             return "Installation damaged — reinstall the Hub";
     }

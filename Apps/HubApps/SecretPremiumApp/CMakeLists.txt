@@ -1,5 +1,5 @@
 add_executable(SecretPremiumApp Main.cpp)
-target_link_libraries(SecretPremiumApp PRIVATE eacp-graphics HubRpc)
+target_link_libraries(SecretPremiumApp PRIVATE eacp-graphics eacp-interapp)
 
 set(BUNDLE_ID "com.eacp.secretpremiumapp")
 
