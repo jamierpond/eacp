@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <fstream>
 
-namespace hub::rpc
+namespace hub::rpc::RendezvousFile
 {
 
 std::string endpointPath(const std::string& name)

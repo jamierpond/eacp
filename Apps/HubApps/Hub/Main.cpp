@@ -172,30 +172,10 @@ struct HubApp
 
     HubView view;
     Window window {hubWindowOptions()};
-
-    // A second launch drops a focus flag; raise this window when it appears.
-    Threads::Timer focusPoll {[this]
-                              {
-                                  if (gInstance != nullptr
-                                      && gInstance->focusRequested())
-                                      window.toFront();
-                              },
-                              5};
 };
 
-int main(int, char** argv)
+int main(int, char**)
 {
-    gExecutablePath = argv[0];
-
-    // Single instance: if a Hub is already running, raise it and exit.
-    auto instance = rpc::SingleInstance {"hub"};
-    if (!instance.primary())
-    {
-        instance.requestFocus();
-        return 0;
-    }
-    gInstance = &instance;
-
     eacp::Apps::run<HubApp>();
     return 0;
 }

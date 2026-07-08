@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+namespace hub::rpc
 {
 
 // A server advertises its base URL under a name (e.g. "hub"). The path is a
