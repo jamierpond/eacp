@@ -10,16 +10,19 @@
 
 #include <Miro/Miro.h>
 
+#include <functional>
 #include <mutex>
 #include <string>
 
 namespace hub
 {
 
-// Fixed transport endpoints. TCP loopback keeps the demo identical on
-// macOS and Windows (nng ipc:// paths differ per-platform).
-inline constexpr auto rpcUrl = "tcp://127.0.0.1:8121"; // request/reply
-inline constexpr auto eventUrl = "tcp://127.0.0.1:8122"; // pub/sub
+// Fixed transport endpoints. nng's ipc:// transport is a real local IPC
+// channel — a Unix domain socket on macOS/Linux, a named pipe on Windows
+// — so there's no TCP port and no network stack involved. Both the
+// request/reply and the pub/sub channels ride it.
+inline constexpr auto rpcUrl = "ipc:///tmp/eacp-hub-rpc.ipc"; // req/rep
+inline constexpr auto eventUrl = "ipc:///tmp/eacp-hub-events.ipc"; // pub/sub
 inline constexpr auto secretPassword = "42";
 
 // Mirrors Foo.h's Decision. Miro reflects `enum class` automatically and
@@ -111,13 +114,21 @@ public:
     // arrives later, asynchronously, via decisionChanged.
     UnlockDecision requestUnlock(const AppUnlockRequest& request)
     {
-        auto lock = std::scoped_lock {stateMutex};
-        requestedApp = request.appName;
+        auto snapshot = UnlockDecision {};
+        {
+            auto lock = std::scoped_lock {stateMutex};
+            requestedApp = request.appName;
 
-        if (current != Decision::Unlocked)
-            current = Decision::LoginRequired;
+            if (current != Decision::Unlocked)
+                current = Decision::LoginRequired;
 
-        return snapshotLocked();
+            snapshot = snapshotLocked();
+        }
+
+        // Fires on the transport (server) thread; the Hub marshals it onto
+        // the UI thread. Non-null default so call sites never null-check.
+        onAccessRequested(request.appName);
+        return snapshot;
     }
 
     UnlockDecision getDecision() const
@@ -158,6 +169,10 @@ public:
     }
 
     Miro::Event<UnlockUpdate> decisionChanged;
+
+    // Reactive hook: an app has asked to unlock. Assigned by the Hub UI.
+    std::function<void(const std::string& appName)> onAccessRequested =
+        [](const std::string&) {};
 
 private:
     UnlockDecision snapshotLocked() const
