@@ -7,6 +7,7 @@
 // (see Rpc/GatingClient.h), so nothing runs a server on the client side.
 // Miro does all JSON (de)serialisation from the reflected structs below.
 
+#include "Miro/Reflection/ReflectMacro.h"
 #include <Miro/Miro.h>
 
 #include <functional>
@@ -75,12 +76,7 @@ struct UnlockDecision
 class GatingApi
 {
 public:
-    void reflect(Miro::ApiReflector& reflector)
-    {
-        reflector.command(&GatingApi::requestUnlock, "requestUnlock");
-        reflector.command(&GatingApi::getDecision, "getDecision");
-        reflector.command(&GatingApi::submitPassword, "submitPassword");
-    }
+    MIRO_REFLECT_API(requestUnlock, getDecision, submitPassword)
 
     // An app announces itself. Already unlocked -> yes; otherwise flag
     // LOGIN_REQUIRED so the Hub operator sees a password is expected. The
