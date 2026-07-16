@@ -1,3 +1,8 @@
+# An app whose version differs from the enclosing tree declares its own
+# project(): PROJECT_VERSION is scoped to the nearest project() call, so the
+# version stamp (eacp_set_gui_subsystem) picks this one up.
+project(Todo VERSION 2.5.0)
+
 add_executable(Todo Main.cpp)
 target_link_libraries(Todo PRIVATE eacp-graphics)
 
