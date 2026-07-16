@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <string_view>
 
 using namespace eacp;
 using namespace Graphics;
@@ -43,7 +44,7 @@ static Image makeTrayIcon()
 // mini-panel input: the point of the demo is that a WKWebView input inside a
 // non-activating panel is typeable over another app's full-screen Space
 // without the owning app ever activating.
-static const char* panelHtml = R"html(
+static constexpr std::string_view panelHtml = R"html(
 <!doctype html>
 <meta charset="utf-8">
 <style>
@@ -102,15 +103,13 @@ struct TrayApp
     {
         Apps::setDockIconVisible(true);
 
-        webView.loadHTML(panelHtml);
+        webView.loadHTML(std::string {panelHtml});
         webView.addScriptMessageHandler(
             "hello",
             [](const std::string& name)
-            {
-                LOG("hello ", name.empty() ? std::string("there") : name);
-            });
-        webView.addScriptMessageHandler(
-            "dismiss", [this](const std::string&) { hidePanel(); });
+            { LOG("hello ", name.empty() ? std::string("there") : name); });
+        webView.addScriptMessageHandler("dismiss",
+                                        [this](const std::string&) { hidePanel(); });
 
         window.setContentView(webView);
         window.setVisible(false);
@@ -138,8 +137,7 @@ struct TrayApp
         options.height = 172;
         options.isPrimary = false;
 
-        options.flags = {WindowFlags::Borderless,
-                         WindowFlags::NonactivatingPanel};
+        options.flags = {WindowFlags::Borderless, WindowFlags::NonactivatingPanel};
         options.cornerRadius = 16.f;
 
         options.alwaysOnTop = true;
