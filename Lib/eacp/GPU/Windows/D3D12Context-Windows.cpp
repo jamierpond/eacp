@@ -449,8 +449,8 @@ bool D3D12Context::ensureConstantCapacity(CommandContext& commands,
     // its first frame. The outgrown buffer is parked on the recording: draws
     // already recorded still read from it until the fence passes.
     constexpr std::size_t initialArenaBytes = 1 << 20;
-    const auto capacity = std::max(
-        {initialArenaBytes, commands.constantsCapacity * 2, bytes});
+    const auto capacity =
+        std::max({initialArenaBytes, commands.constantsCapacity * 2, bytes});
 
     auto buffer = makeUploadBuffer(nullptr, capacity);
 
