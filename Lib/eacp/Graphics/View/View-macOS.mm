@@ -105,6 +105,68 @@ void dispatchMouseEvent(id self, NSEvent* event, MouseEventType type)
         view->dispatchMouseEvent(e);
 }
 
+ScrollPhase scrollPhaseFromEvent(NSEvent* event)
+{
+    // Momentum is reported on its own phase mask; it is checked first because an
+    // event coasting after lift-off carries momentumPhase set and phase empty.
+    switch (event.momentumPhase)
+    {
+        case NSEventPhaseBegan:
+        case NSEventPhaseChanged:
+            return ScrollPhase::Momentum;
+        case NSEventPhaseEnded:
+        case NSEventPhaseCancelled:
+            return ScrollPhase::MomentumEnded;
+        default:
+            break;
+    }
+
+    switch (event.phase)
+    {
+        case NSEventPhaseBegan:
+        case NSEventPhaseMayBegin:
+            return ScrollPhase::Began;
+        case NSEventPhaseChanged:
+            return ScrollPhase::Changed;
+        case NSEventPhaseEnded:
+        case NSEventPhaseCancelled:
+            return ScrollPhase::Ended;
+        default:
+            break;
+    }
+
+    // A notched wheel reports no phase at all.
+    return ScrollPhase::None;
+}
+
+void scrollWheel(id self, SEL, NSEvent* event)
+{
+    auto* root = getRootView(self);
+    auto windowPos = [event locationInWindow];
+    auto localPos = [root convertPoint:windowPos fromView:nil];
+
+    auto e = MouseEvent();
+
+    e.pos = {(float) localPos.x, (float) localPos.y};
+    e.type = MouseEventType::Wheel;
+    e.button = MouseButton::Other;
+    e.modifiers = modifierKeysFromEvent(event);
+    e.timestamp = event.timestamp;
+    e.preciseScrolling = event.hasPreciseScrollingDeltas == YES;
+    e.scrollPhase = scrollPhaseFromEvent(event);
+
+    // scrollingDelta*, not delta*: the scrolling pair carries the precise
+    // per-point figure on a trackpad, where deltaY has already been quantised
+    // back into whole lines and the smoothness is gone.
+    e.delta = {(float) event.scrollingDeltaX, (float) event.scrollingDeltaY};
+    e.rawDelta = e.delta;
+
+    e.downPos = e.pos;
+
+    if (auto* view = getView(root))
+        view->dispatchMouseEvent(e);
+}
+
 void drawRect(id, SEL, NSRect)
 {
 }
@@ -148,6 +210,12 @@ void viewDidChangeBackingProperties(id self, SEL)
 
     auto* view = (NSView*) self;
     view.layer.contentsScale = view.window.backingScaleFactor;
+
+    // The base layer follows the new scale by itself, but anything the C++ side
+    // sized in device pixels (a CAMetalLayer's drawableSize, a glyph atlas) does
+    // not, so tell the view.
+    if (auto* eacpView = getView(self))
+        eacpView->backingScaleChanged();
 }
 
 void setFrame(id self, SEL, NSRect newFrame)
@@ -196,40 +264,6 @@ void mouseExited(id self, SEL, NSEvent* event)
     dispatchMouseEvent(self, event, MouseEventType::Exited);
 }
 
-void scrollWheel(id self, SEL, NSEvent* event)
-{
-    auto* root = getRootView(self);
-    auto windowPos = [event locationInWindow];
-    auto localPos = [root convertPoint:windowPos fromView:nil];
-
-    auto e = MouseEvent();
-    e.pos = {(float) localPos.x, (float) localPos.y};
-    e.type = MouseEventType::Wheel;
-    e.button = MouseButton::Other;
-    e.modifiers = modifierKeysFromEvent(event);
-    e.timestamp = event.timestamp;
-
-    // A notched mouse wheel reports whole lines; a trackpad or Magic Mouse
-    // reports pixel-precise deltas in points. Normalise both to line units so
-    // the Wheel delta means the same thing wherever a view consumes it — the
-    // sub-line remainder a consumer accumulates keeps precise scrolling smooth.
-    CGFloat dx = event.scrollingDeltaX;
-    CGFloat dy = event.scrollingDeltaY;
-
-    if (event.hasPreciseScrollingDeltas)
-    {
-        constexpr CGFloat pointsPerLine = 16.0;
-        dx /= pointsPerLine;
-        dy /= pointsPerLine;
-    }
-
-    e.delta = {(float) dx, (float) dy};
-    e.rawDelta = e.delta;
-
-    if (auto* view = getView(root))
-        view->dispatchMouseEvent(e);
-}
-
 void keyDown(id self, SEL, NSEvent* event)
 {
     if (auto* view = getView(self))
@@ -251,6 +285,38 @@ void flagsChanged(id self, SEL, NSEvent* event)
         view->modifiersChanged(modifierKeysFromEvent(event));
 }
 
+NSCursor* toNSCursor(MouseCursor cursor)
+{
+    switch (cursor)
+    {
+        case MouseCursor::IBeam:
+            return [NSCursor IBeamCursor];
+        case MouseCursor::PointingHand:
+            return [NSCursor pointingHandCursor];
+        case MouseCursor::ResizeLeftRight:
+            return [NSCursor resizeLeftRightCursor];
+        case MouseCursor::ResizeUpDown:
+            return [NSCursor resizeUpDownCursor];
+        case MouseCursor::Crosshair:
+            return [NSCursor crosshairCursor];
+        case MouseCursor::Default:
+            break;
+    }
+
+    return [NSCursor arrowCursor];
+}
+
+// AppKit asks this whenever the pointer enters the tracking area, and after
+// anything else has had a go at setting the cursor. Without it, a shape set
+// from a mouseMoved handler survives only until the pointer crosses a boundary
+// and AppKit resets it — which reads as the cursor flickering back at random
+// rather than as a missing method.
+void cursorUpdate(id self, SEL, id)
+{
+    if (auto* view = getView(self))
+        [toNSCursor(view->getMouseCursor()) set];
+}
+
 void updateTrackingAreas(id self, SEL)
 {
     ObjC::sendSuper<void>(self, [NSView class], @selector(updateTrackingAreas));
@@ -262,7 +328,8 @@ void updateTrackingAreas(id self, SEL)
 
     NSTrackingAreaOptions options =
         NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved
-        | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect;
+        | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
+        | NSTrackingCursorUpdate;
 
     NSTrackingArea* trackingArea =
         [[NSTrackingArea alloc] initWithRect:view.bounds
@@ -312,6 +379,7 @@ Class getNativeViewClass()
         builder->addMethod(@selector(keyDown:), keyDown);
         builder->addMethod(@selector(keyUp:), keyUp);
         builder->addMethod(@selector(flagsChanged:), flagsChanged);
+        builder->addMethod(@selector(cursorUpdate:), cursorUpdate);
         builder->addMethod(@selector(updateTrackingAreas),
                            updateTrackingAreas);
 
@@ -462,6 +530,24 @@ Threads::Async<Image> View::renderToImageAsync(float scale)
 Point View::getMousePosition() const
 {
     return impl->getMousePosition();
+}
+
+void View::setMouseCursor(MouseCursor cursor)
+{
+    if (currentCursor == cursor)
+        return;
+
+    currentCursor = cursor;
+
+    // Applied here as well as from cursorUpdate:, because the call that changes
+    // it almost always comes *from* a mouseMoved handler — the pointer is
+    // already inside, and inside is the only time the shape is visible. Waiting
+    // for the next cursorUpdate: would leave the old shape under a pointer that
+    // has already crossed onto the splitter.
+    auto* native = (NSView*) impl->nativeView.get();
+
+    if (native != nil && native.window != nil)
+        [toNSCursor(cursor) set];
 }
 
 void View::focus()
