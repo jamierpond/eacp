@@ -17,6 +17,10 @@
 # the Win32 calls it supports cannot be tested from a Mac, but they are a thin
 # shell around this, and the ordering agreement between the two walks is where
 # the real risk is.
+#
+# Hover/capture pointer lifetime (MouseTrackingLifetimeTests): a removed
+# subtree must stop receiving mouse events from the views that recorded its
+# members as hover/drag targets.
 set(graphics_test_sources
         ColorTests.cpp
         CursorTests.cpp
@@ -25,6 +29,7 @@ set(graphics_test_sources
         KeyCodeTests.cpp
         MenuCommandsTests.cpp
         MenuTests.cpp
+        MouseTrackingLifetimeTests.cpp
         RectTests.cpp
         RoundedRectTests.cpp
         ScrollWheelTests.cpp
