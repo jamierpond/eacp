@@ -6,6 +6,10 @@ nano_add_executable(FileTests
         SOURCES FileTests.cpp
         TARGETS eacp-core)
 
+nano_add_executable(FilesTests
+        SOURCES FilesTests.cpp
+        TARGETS eacp-core)
+
 nano_add_executable(FilePathTests
         SOURCES FilePathTests.cpp
         TARGETS eacp-core)
@@ -16,6 +20,11 @@ nano_add_executable(AppTests
 
 nano_add_executable(AppAffordanceTests
         SOURCES AppAffordanceTests.cpp
+        TARGETS eacp-core)
+
+# Touches the real system clipboard, and restores whatever was there.
+nano_add_executable(ClipboardTests
+        SOURCES ClipboardTests.cpp
         TARGETS eacp-core)
 
 if (APPLE AND NOT IOS)

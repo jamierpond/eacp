@@ -36,6 +36,51 @@ enum class MouseButton
     Other = 3
 };
 
+// The shape the pointer takes over a view.
+//
+// Deliberately a small set of the shapes every platform names the same way. An
+// app wanting something else is asking for a custom image, which is a different
+// feature with a different lifetime problem — and none of these needs it: the
+// point of a cursor shape is that it is a convention the person already knows.
+enum class MouseCursor
+{
+    // The arrow. What a view has until it says otherwise.
+    Default,
+
+    // Over text that can be selected.
+    IBeam,
+
+    // Over something clickable that is not a control — a link.
+    PointingHand,
+
+    // Over a vertical splitter, so a draggable divider reads as draggable
+    // before anyone tries dragging it. This is the one an IDE cannot do without.
+    ResizeLeftRight,
+
+    // Over a horizontal splitter.
+    ResizeUpDown,
+
+    Crosshair
+};
+
+// Where a wheel event sits in a scroll gesture. A notched wheel has no gesture
+// to speak of and always reports None; a trackpad runs Began -> Changed -> Ended
+// while the fingers are down, and the system then keeps sending Momentum events
+// as the motion coasts to a stop.
+//
+// Worth distinguishing because momentum is not intent: a view should stop an
+// in-flight animation when a gesture Begins, and may let a scroll rubber-band
+// past its limit during Momentum where a direct drag would clamp.
+enum class ScrollPhase
+{
+    None,
+    Began,
+    Changed,
+    Ended,
+    Momentum,
+    MomentumEnded
+};
+
 struct MouseEvent
 {
     Point pos;
@@ -66,6 +111,24 @@ struct MouseEvent
     int clickCount = 1;
     float pressure = 1.0f;
     double timestamp = 0.0;
+
+    // Wheel events only: what `delta` is measured in.
+    //
+    // A trackpad or a Magic Mouse reports a precise delta already in points, so
+    // it can be applied as-is and the content tracks the fingers exactly. A
+    // notched wheel instead reports *lines* — usually +/-1 per detent — and the
+    // view has to multiply by whatever a line means to it. There is no single
+    // right conversion for the framework to pick, because only the view knows
+    // its line height, so both forms are passed through and this flag says which
+    // arrived.
+    //
+    // Positive y means the content should move down, i.e. toward the start of
+    // the document. The platform has already applied the user's natural-scroll
+    // preference, so this is intent, not raw device motion — do not invert it.
+    bool preciseScrolling = false;
+
+    // Wheel events only. See ScrollPhase.
+    ScrollPhase scrollPhase = ScrollPhase::None;
 };
 
 struct ViewProperties
@@ -146,6 +209,12 @@ public:
     virtual void keyUp(const KeyEvent&) {}
     virtual void resized();
 
+    // The view moved to a display with a different backing scale (a window
+    // dragged between a Retina and a non-Retina screen), or that display's scale
+    // changed. Anything sized in device pixels rather than logical points is now
+    // wrong and must be rebuilt — a glyph atlas rasterized at 2x is blurry at 1x.
+    virtual void backingScaleChanged() {}
+
     Rect getBounds() const;
     Rect getLocalBounds() const;
 
@@ -171,6 +240,19 @@ public:
     View& setGrabsFocusOnMouseDown(bool value = true);
 
     Point getMousePosition() const;
+
+    // The pointer's shape while it is over this view.
+    //
+    // Settable at any time, including from inside a mouseMoved handler, and
+    // that is the case it is designed for rather than an afterthought: an app
+    // that draws its own widgets into one view — which is what any GPU-drawn UI
+    // is — has one view and many regions, so the shape has to follow the
+    // pointer. A cursor fixed per view would be useless to it.
+    //
+    // Setting the same shape twice is free, so a handler can call this on every
+    // move without checking first.
+    void setMouseCursor(MouseCursor cursor);
+    MouseCursor getMouseCursor() const { return currentCursor; }
 
     virtual View* hitTest(const Point& point);
 
@@ -218,6 +300,8 @@ private:
     View* mouseDownTarget = nullptr;
 
     ViewProperties properties;
+
+    MouseCursor currentCursor = MouseCursor::Default;
 
     struct Native;
     Pimpl<Native> impl;

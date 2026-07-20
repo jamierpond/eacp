@@ -216,6 +216,12 @@ struct Uniform<Texture2D> : Texture2D
     }
 
     const Texture* value = nullptr;
+
+    // How this texture is sampled. Set it before compile() runs - the build walk
+    // reads it to place the sampler - so a shader assigns it in its constructor
+    // ahead of the compile() call. See TextureSampling for why the shader owns
+    // this rather than the Texture.
+    TextureSampling sampling {};
 };
 
 // Storage-buffer members of a compute program, following the texture pattern:
@@ -281,7 +287,7 @@ public:
 
     void operator()(const char* name, Uniform<Texture2D>& member)
     {
-        onTexture(name, member, member.value);
+        onTexture(name, member, member.value, member.sampling);
     }
 
     void operator()(const char* name, Uniform<InputBuffer>& member)
@@ -302,7 +308,9 @@ protected:
 
     // Texture and storage-buffer members are not packed into the uniform block,
     // so only the walks that care (build, resource bind) override these.
-    virtual void onTexture(const char*, Texture2D&, const Texture*) {}
+    virtual void onTexture(const char*, Texture2D&, const Texture*, TextureSampling)
+    {
+    }
     virtual void onInputBuffer(const char*, InputBuffer&, const Buffer*) {}
     virtual void onOutputBuffer(const char*, OutputBuffer&, const Buffer*) {}
 };
@@ -325,9 +333,12 @@ public:
         handle = builder.addUniform(type);
     }
 
-    void onTexture(const char*, Texture2D& handle, const Texture*) override
+    void onTexture(const char*,
+                   Texture2D& handle,
+                   const Texture*,
+                   TextureSampling sampling) override
     {
-        handle = builder.texture();
+        handle = builder.texture(sampling);
     }
 
     void onInputBuffer(const char*, InputBuffer& handle, const Buffer*) override
@@ -359,10 +370,13 @@ public:
     {
     }
 
-    void onTexture(const char*, Texture2D& handle, const Texture* texture) override
+    void onTexture(const char*,
+                   Texture2D& handle,
+                   const Texture* texture,
+                   TextureSampling sampling) override
     {
         if (texture != nullptr)
-            pass.setFragmentTexture(*texture, handle.slot);
+            pass.setFragmentTexture(*texture, handle.slot, sampling);
     }
 
 private:
@@ -370,7 +384,11 @@ private:
 };
 
 // Upload walk: copy each uniform's current value into the block at its aligned
-// offset.
+// offset. The caller runs finish() once the walk (and any appended tail, like
+// the compute count) is done: MSL pads sizeof(Uniforms) up to the widest
+// member's alignment, and Metal's validation layer checks the bound length
+// against that padded size - a block that stops at the last member's end binds
+// short and aborts the first draw whenever the members end off that boundary.
 class ShaderUploadVisitor final : public ShaderVisitor
 {
 public:
@@ -384,7 +402,8 @@ public:
                    detail::ValueHandle&,
                    const void* data) override
     {
-        auto offset = alignUp(cursor, uniformAlignment(type));
+        auto alignment = uniformAlignment(type);
+        auto offset = alignUp(cursor, alignment);
         auto next = offset + uniformSlotStride(type);
 
         if (bytes.size() < next)
@@ -392,11 +411,17 @@ public:
 
         std::memcpy(bytes.data() + offset, data, (std::size_t) byteSize(type));
         cursor = next;
+
+        if (alignment > blockAlignment)
+            blockAlignment = alignment;
     }
+
+    void finish() { bytes.resize(alignUp(bytes.size(), blockAlignment)); }
 
 private:
     Vector<std::byte>& bytes;
     int cursor = 0;
+    int blockAlignment = 1;
 };
 
 // Base for struct-authored shaders. Derive, declare uniform members, list them
@@ -491,9 +516,17 @@ public:
     // Builds the shader library and render pipeline. sampleCount must match the
     // render target (GPUView::sampleCount()); set depth when the view has a depth
     // buffer (GPUView::setDepth(true)).
+    //
+    // blendMode defaults to None, which writes fragments straight through. A
+    // program drawing anything translucent — glyph coverage, a fade, a scrim —
+    // needs AlphaBlend, or its antialiased edges punch holes in what is behind
+    // them instead of blending with it. Without this, such a program had to
+    // build its pipeline by hand and give up draw(program) entirely, which is
+    // what Sprites::SpriteRenderer still does.
     void prepare(int sampleCount,
                  bool depth = false,
-                 PrimitiveTopology topology = PrimitiveTopology::Triangles)
+                 PrimitiveTopology topology = PrimitiveTopology::Triangles,
+                 BlendMode blendMode = BlendMode::None)
     {
         shaderLibrary.emplace(Device::shared(), generated.source);
 
@@ -503,6 +536,7 @@ public:
         descriptor.vertexLayout = generated.vertexLayout;
         descriptor.depth = depth;
         descriptor.topology = topology;
+        descriptor.blendMode = blendMode;
 
         pipelineState.emplace(Device::shared(), descriptor);
     }
@@ -742,6 +776,7 @@ private:
         uniformBytes.clear();
         auto uploadVisitor = ShaderUploadVisitor {uniformBytes};
         reflectMembers(uploadVisitor);
+        uploadVisitor.finish();
     }
 
     void uploadIndices(const void* data,
