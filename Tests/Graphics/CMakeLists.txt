@@ -25,6 +25,7 @@ set(graphics_test_sources
         KeyCodeTests.cpp
         MenuCommandsTests.cpp
         MenuTests.cpp
+        MouseTrackingLifetimeTests.cpp
         RectTests.cpp
         RoundedRectTests.cpp
         ScrollWheelTests.cpp
