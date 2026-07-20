@@ -196,6 +196,40 @@ void mouseExited(id self, SEL, NSEvent* event)
     dispatchMouseEvent(self, event, MouseEventType::Exited);
 }
 
+void scrollWheel(id self, SEL, NSEvent* event)
+{
+    auto* root = getRootView(self);
+    auto windowPos = [event locationInWindow];
+    auto localPos = [root convertPoint:windowPos fromView:nil];
+
+    auto e = MouseEvent();
+    e.pos = {(float) localPos.x, (float) localPos.y};
+    e.type = MouseEventType::Wheel;
+    e.button = MouseButton::Other;
+    e.modifiers = modifierKeysFromEvent(event);
+    e.timestamp = event.timestamp;
+
+    // A notched mouse wheel reports whole lines; a trackpad or Magic Mouse
+    // reports pixel-precise deltas in points. Normalise both to line units so
+    // the Wheel delta means the same thing wherever a view consumes it — the
+    // sub-line remainder a consumer accumulates keeps precise scrolling smooth.
+    CGFloat dx = event.scrollingDeltaX;
+    CGFloat dy = event.scrollingDeltaY;
+
+    if (event.hasPreciseScrollingDeltas)
+    {
+        constexpr CGFloat pointsPerLine = 16.0;
+        dx /= pointsPerLine;
+        dy /= pointsPerLine;
+    }
+
+    e.delta = {(float) dx, (float) dy};
+    e.rawDelta = e.delta;
+
+    if (auto* view = getView(root))
+        view->dispatchMouseEvent(e);
+}
+
 void keyDown(id self, SEL, NSEvent* event)
 {
     if (auto* view = getView(self))
@@ -206,6 +240,15 @@ void keyUp(id self, SEL, NSEvent* event)
 {
     if (auto* view = getView(self))
         view->keyUp(keyEventFrom(event, KeyEventType::Up));
+}
+
+void flagsChanged(id self, SEL, NSEvent* event)
+{
+    // A modifier changed with no character to show for it (press or release).
+    // AppKit delivers this to the first responder, same as keyDown:, so the
+    // focused view hears its chords being held and let go.
+    if (auto* view = getView(self))
+        view->modifiersChanged(modifierKeysFromEvent(event));
 }
 
 void updateTrackingAreas(id self, SEL)
@@ -258,6 +301,7 @@ Class getNativeViewClass()
         builder->addMethod(@selector(mouseMoved:), mouseMoved);
         builder->addMethod(@selector(mouseEntered:), mouseEntered);
         builder->addMethod(@selector(mouseExited:), mouseExited);
+        builder->addMethod(@selector(scrollWheel:), scrollWheel);
         builder->addMethod(@selector(rightMouseDown:), mouseDown);
         builder->addMethod(@selector(rightMouseUp:), mouseUp);
         builder->addMethod(@selector(rightMouseDragged:), mouseDragged);
@@ -267,6 +311,7 @@ Class getNativeViewClass()
 
         builder->addMethod(@selector(keyDown:), keyDown);
         builder->addMethod(@selector(keyUp:), keyUp);
+        builder->addMethod(@selector(flagsChanged:), flagsChanged);
         builder->addMethod(@selector(updateTrackingAreas),
                            updateTrackingAreas);
 

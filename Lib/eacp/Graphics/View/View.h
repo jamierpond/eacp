@@ -140,10 +140,19 @@ public:
     virtual void mouseExited(const MouseEvent&) {}
 
     // Scroll wheel. event.delta carries the wheel movement (y vertical,
-    // x horizontal) in WHEEL_DELTA units.
+    // x horizontal) in line units — one detent of a notched wheel is 1. A
+    // trackpad's pixel-precise scroll is normalised to the same unit, so its
+    // delta arrives fractional; accumulate a remainder to keep it smooth.
     virtual void mouseWheel(const MouseEvent&) {}
     virtual void keyDown(const KeyEvent&) {}
     virtual void keyUp(const KeyEvent&) {}
+
+    // A modifier key (Shift/Control/Alt/Command) went down or up on its own,
+    // producing no character. Delivered to the focused view so it can react to
+    // a chord being held or released — e.g. a Cmd-Tab-style switcher that
+    // commits when its trigger modifier is let go. Carries the full modifier
+    // state after the change.
+    virtual void modifiersChanged(const ModifierKeys&) {}
     virtual void resized();
 
     Rect getBounds() const;

@@ -718,7 +718,11 @@ std::optional<LRESULT> CompositionHostWindow::handleCommonMessage(UINT msg,
                 event.type = MouseEventType::Wheel;
                 event.modifiers = getModifiers();
 
-                auto wheelDelta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam));
+                // In wheel notches (a detent is WHEEL_DELTA), matching the line
+                // units the macOS backend reports, so a view's Wheel handler
+                // reads the same delta on both platforms.
+                auto wheelDelta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam))
+                                  / static_cast<float>(WHEEL_DELTA);
                 event.delta = (msg == WM_MOUSEWHEEL) ? Point {0.f, wheelDelta}
                                                      : Point {wheelDelta, 0.f};
                 dispatchMouseToContentView(event);
