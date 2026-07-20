@@ -122,6 +122,14 @@ struct WebView::Native
 
         config = [[WKWebViewConfiguration alloc] init];
 
+        // Never let WebKit suspend the content process: its suspend path
+        // release-asserts in ProcessThrottler::sendPrepareToSuspendIPC when a
+        // view goes inactive (sleep/wake + Low Power Mode make this frequent),
+        // taking the host app down with it.
+        if (@available(macOS 14.0, iOS 17.0, *))
+            config.get().preferences.inactiveSchedulingPolicy =
+                WKInactiveSchedulingPolicyNone;
+
         if (options.debugConsole)
         {
             [config.get().preferences setValue:@YES
