@@ -6,8 +6,27 @@ nano_add_executable(ImageOpsTests
         SOURCES ImageOpsTests.cpp
         TARGETS eacp-graphics)
 
+# Rect's y-axis contract. The splitters were y-up in a y-down framework, so
+# removeFromTop returned the bottom slice; nothing caught it because the result
+# is still a correctly sized rect that still draws.
+nano_add_executable(RectTests
+        SOURCES RectTests.cpp
+        TARGETS eacp-graphics)
+
 nano_add_executable(RoundedRectTests
         SOURCES RoundedRectTests.cpp
+        TARGETS eacp-graphics)
+
+# Color's constexpr contract: the static_asserts in here fail the build if a
+# definition moves back out of line.
+nano_add_executable(ColorTests
+        SOURCES ColorTests.cpp
+        TARGETS eacp-graphics)
+
+# Uniqueness and coverage of the KeyCode table, which is hand-transcribed
+# platform virtual key codes and therefore easy to typo.
+nano_add_executable(KeyCodeTests
+        SOURCES KeyCodeTests.cpp
         TARGETS eacp-graphics)
 
 nano_add_executable(WindowTests
@@ -25,6 +44,80 @@ nano_add_executable(RenderToImageTests
             RenderToImageTests.cpp
             TestMain.cpp
         TARGETS eacp-graphics)
+
+# Wheel-event delivery. The portable half covers the event shape and routing;
+# the macOS file additionally checks the backing NSView really implements
+# scrollWheel:, since inheriting NSResponder's no-op version drops every event
+# without failing anything else.
+# APPLE covers iOS, which has no AppKit and no pointing device to scroll with,
+# so the native half is macOS-only. The portable half still builds everywhere.
+set(scroll_wheel_sources ScrollWheelTests.cpp TestMain.cpp)
+
+if (APPLE AND NOT IOS)
+    list(APPEND scroll_wheel_sources ScrollWheelTests-macOS.mm)
+endif ()
+
+nano_add_executable(ScrollWheelTests
+        NO_MAIN
+        SOURCES
+            ${scroll_wheel_sources}
+        TARGETS eacp-graphics)
+
+if (APPLE AND NOT IOS)
+    set_target_properties(ScrollWheelTests PROPERTIES OBJCXX_STANDARD 20)
+    target_link_libraries(ScrollWheelTests PRIVATE "-framework AppKit")
+endif ()
+
+# The portable half of a command-id menu bar: ids, labels, accelerator text and
+# the id-to-action lookup. Runs everywhere on purpose — the Win32 calls it
+# supports cannot be tested from a Mac, but they are a thin shell around this,
+# and the ordering agreement between the two walks is where the real risk is.
+nano_add_executable(MenuCommandsTests
+        SOURCES MenuCommandsTests.cpp
+        TARGETS eacp-graphics)
+
+# Cursor shapes. The portable half covers the per-view state; the macOS file
+# additionally checks the backing view implements cursorUpdate: itself and that
+# its tracking area asks for cursor updates — miss either and the shape is
+# remembered perfectly and never drawn.
+set(cursor_sources CursorTests.cpp TestMain.cpp)
+
+if (APPLE AND NOT IOS)
+    list(APPEND cursor_sources CursorTests-macOS.mm)
+endif ()
+
+nano_add_executable(CursorTests
+        NO_MAIN
+        SOURCES
+            ${cursor_sources}
+        TARGETS eacp-graphics)
+
+if (APPLE AND NOT IOS)
+    set_target_properties(CursorTests PROPERTIES OBJCXX_STANDARD 20)
+    target_link_libraries(CursorTests PRIVATE "-framework AppKit")
+endif ()
+
+# Menu enablement. The portable half covers the model; the macOS file
+# additionally checks the forwarding target answers validateMenuItem:, since a
+# target that does not leaves every item enabled without failing anything else.
+# APPLE covers iOS, which has no menu bar at all, so the native half is
+# macOS-only. The portable half still builds everywhere.
+set(menu_sources MenuTests.cpp TestMain.cpp)
+
+if (APPLE AND NOT IOS)
+    list(APPEND menu_sources MenuTests-macOS.mm)
+endif ()
+
+nano_add_executable(MenuTests
+        NO_MAIN
+        SOURCES
+            ${menu_sources}
+        TARGETS eacp-graphics)
+
+if (APPLE AND NOT IOS)
+    set_target_properties(MenuTests PROPERTIES OBJCXX_STANDARD 20)
+    target_link_libraries(MenuTests PRIVATE "-framework AppKit")
+endif ()
 
 if(WIN32)
     nano_add_executable(CompositionPixelTests

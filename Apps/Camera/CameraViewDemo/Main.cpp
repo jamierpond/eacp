@@ -1,8 +1,11 @@
 #include <eacp/CameraView/CameraView.h>
+#include <eacp/Graphics/Menu/Menu.h>
 #include <algorithm>
 
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
+#include <string>
 
 using namespace eacp;
 
@@ -61,30 +64,17 @@ struct DemoCameraView final : Cameras::CameraView
             std::printf("render tick %d  (frames with camera image: %d)\n",
                         overlayTicks,
                         framesWithImage);
-
-        if (autoQuitSeconds > 0.0 && elapsed >= autoQuitSeconds)
-        {
-            std::printf("auto-quit after %.1fs: %d ticks, %d with image\n",
-                        elapsed,
-                        overlayTicks,
-                        framesWithImage);
-            Apps::quit();
-        }
     }
 
     double elapsed = 0.0;
     int overlayTicks = 0;
     int framesWithImage = 0;
-    double autoQuitSeconds = 0.0;
 };
 
 struct CameraApp
 {
     CameraApp()
     {
-        view.autoQuitSeconds =
-            std::atof(getEnvValue("EACP_DEMO_AUTOQUIT_SECONDS").c_str());
-
         // Force the CPU-upload display path (Windows uses it) for verification.
         if (getEnvValue("EACP_DEMO_UPLOAD_MODE") == "copy")
             view.setUploadMode(Cameras::CameraView::UploadMode::Copy);
@@ -92,17 +82,78 @@ struct CameraApp
         view.setMirrored(true); // front-camera-style preview
         view.attach(camera);
         window.setContentView(view);
+        installMenuBar();
         beginCapture();
+        armAutoQuit();
     }
 
     ~CameraApp() { camera.stop(); }
+
+    // The Camera menu: every device the system reports, checkable, with the
+    // mark following selectedDeviceId live (no rebuild on switch). Exercises
+    // MenuItem::withCheckableAction against real hardware.
+    void installMenuBar()
+    {
+        auto cameraMenu = Graphics::Menu {"Camera"};
+
+        cameraMenu.add(Graphics::MenuItem::withCheckableAction(
+            "System Default",
+            [this] { selectDevice({}); },
+            [this] { return !selectedDeviceId.has_value(); }));
+
+        cameraMenu.addSeparator();
+
+        for (const auto& device: Cameras::Camera::devices())
+            cameraMenu.add(Graphics::MenuItem::withCheckableAction(
+                device.name,
+                [this, id = device.id] { selectDevice(id); },
+                [this, id = device.id] { return selectedDeviceId == id; }));
+
+        auto bar = Graphics::MenuBar {};
+        bar.add(Graphics::standardApplicationMenu("eacp Camera"));
+        bar.add(std::move(cameraMenu));
+
+        Graphics::setApplicationMenuBar(bar, window);
+    }
+
+    void selectDevice(std::optional<std::string> deviceId)
+    {
+        if (selectedDeviceId == deviceId)
+            return;
+
+        selectedDeviceId = std::move(deviceId);
+        std::printf("switching camera to %s\n",
+                    selectedDeviceId ? selectedDeviceId->c_str()
+                                     : "system default");
+
+        // The view stays attached across the restart: it follows the Camera
+        // object, not the capture session.
+        if (camera.isRunning())
+        {
+            camera.stop();
+            startCamera();
+        }
+        else
+        {
+            beginCapture();
+        }
+    }
 
     void startCamera()
     {
         auto config = Cameras::CameraConfig {};
         config.width = 1280;
         config.height = 720;
+        config.deviceId = selectedDeviceId;
         camera.start(config);
+    }
+
+    // Without frames the default on-arrival mode never renders; fall back to
+    // the display link so the overlay still animates.
+    void showOverlayOnly()
+    {
+        std::printf("Camera access not granted; showing overlay only.\n");
+        view.setRenderMode(Cameras::CameraView::RenderMode::Continuous);
     }
 
     void beginCapture()
@@ -118,17 +169,47 @@ struct CameraApp
                     {
                         if (granted)
                             startCamera();
+                        else
+                            showOverlayOnly();
                     });
                 break;
             default:
-                std::printf("Camera access not granted; showing overlay only.\n");
+                showOverlayOnly();
                 break;
         }
+    }
+
+    // Timer-driven, not render-driven, so it fires even when no camera ever
+    // delivers a frame.
+    void armAutoQuit()
+    {
+        auto seconds = std::atof(getEnvValue("EACP_DEMO_AUTOQUIT_SECONDS").c_str());
+
+        if (seconds <= 0.0)
+            return;
+
+        quitDeadline.emplace(Time::MS {(std::int64_t) (seconds * 1000.0)});
+        quitTimer.emplace(
+            [this]
+            {
+                if (!quitDeadline->expired())
+                    return;
+
+                std::printf("auto-quit: %d ticks, %d with image\n",
+                            view.overlayTicks,
+                            view.framesWithImage);
+                Apps::quit();
+            },
+            100);
     }
 
     Cameras::Camera camera;
     DemoCameraView view;
     Graphics::Window window {makeOptions()};
+    // nullopt = system default. What the Camera menu's checkmarks read.
+    std::optional<std::string> selectedDeviceId;
+    std::optional<Threads::Timer> quitTimer;
+    std::optional<Time::Deadline> quitDeadline;
 };
 } // namespace
 

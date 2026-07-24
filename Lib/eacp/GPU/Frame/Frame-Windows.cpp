@@ -162,6 +162,28 @@ RenderPass Frame::beginPass(const RenderPassDescriptor& descriptor)
     list->SetDescriptorHeaps(2, heaps);
     list->SetGraphicsRootSignature(context.getRenderRootSignature());
 
+    // Resource Binding Tier 1 hardware requires *every* descriptor table the
+    // root signature declares to be populated before a draw, even the ones the
+    // shader never reads — an unset table drops the draw entirely rather than
+    // failing loudly. The signature is shared and declares maxTextureSlots of
+    // them, while a typical shader binds one, so the rest are seeded with the
+    // null descriptor here; setFragmentTexture overwrites the slots that carry
+    // a real texture.
+    //
+    // Tier 2+ hardware ignores unset tables, which is why this only ever showed
+    // up on an Arm laptop: no text drew, and nothing was logged without the
+    // D3D12 validation layer installed.
+    //
+    // Only the SRV tables need this. The root signature declares no sampler
+    // tables at all any more - samplers are static samplers baked into it, picked
+    // by the register the shader emitted its sampler at. See TextureSampling.
+    const auto nullTexture = context.getNullTextureDescriptor();
+
+    if (nullTexture.ptr != 0)
+        for (auto slot = 0; slot < maxTextureSlots; ++slot)
+            list->SetGraphicsRootDescriptorTable(renderTextureParam(slot),
+                                                 nullTexture);
+
     // The off-screen colour texture is created already in RENDER_TARGET; only a
     // swapchain back buffer starts in PRESENT and needs promoting here.
     if (!impl->useMsaa() && !impl->passBegun && !impl->offscreen)
@@ -205,7 +227,10 @@ RenderPass Frame::beginPass(const RenderPassDescriptor& descriptor)
         list->ClearDepthStencilView(
             impl->depth->view, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-    return RenderPass(new D3D12Encoder {impl->commands, {}});
+    // The pass carries the target's pixel size so it can clamp scissor rects.
+    return RenderPass(new D3D12Encoder {impl->commands, {}},
+                      static_cast<int>(impl->drawable->width),
+                      static_cast<int>(impl->drawable->height));
 }
 
 bool Frame::isValid() const

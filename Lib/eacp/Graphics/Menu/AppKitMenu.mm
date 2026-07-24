@@ -15,6 +15,8 @@ namespace
 struct MenuTargetState
 {
     MenuAction action;
+    MenuEnabled isEnabled;
+    MenuChecked isChecked;
 };
 
 MenuTargetState* getMenuTargetState(id self)
@@ -28,6 +30,28 @@ void menuTargetTrigger(id self, SEL, id)
 
     if (action)
         action();
+}
+
+// NSMenuValidation. An NSMenu autoenables its items by default, which means it
+// asks each item's target this question every time the menu is about to be
+// drawn — so the predicate is read from live state rather than sampled when the
+// bar was built, and an app never has to rebuild a menu to grey something out.
+//
+// The checkmark is refreshed here too, because this is the one hook AppKit
+// gives a target that fires just before every item is drawn — the same moment
+// the greying question is asked. The argument is the NSMenuItem being
+// validated, so a target shared with a plain NSButton (the tray icon) never
+// reaches the state line: buttons carry no isChecked.
+BOOL menuTargetValidate(id self, SEL, id item)
+{
+    auto* state = getMenuTargetState(self);
+
+    if (state->isChecked)
+        [(NSMenuItem*) item
+            setState:state->isChecked() ? NSControlStateValueOn
+                                        : NSControlStateValueOff];
+
+    return state->isEnabled ? state->isEnabled() : YES;
 }
 
 void menuTargetDealloc(id self, SEL)
@@ -44,6 +68,7 @@ Class getMenuTargetClass()
 
         builder->addIvar<void*>("state");
         builder->addMethod(@selector(trigger:), menuTargetTrigger);
+        builder->addMethod(@selector(validateMenuItem:), menuTargetValidate);
         builder->addMethod(@selector(dealloc), menuTargetDealloc);
 
         builder->registerClass();
@@ -105,7 +130,7 @@ NSMenuItem* buildAppKitMenuItem(const MenuItem& item, MenuTargets& targets)
         return nsItem;
     }
 
-    auto target = makeActionTarget(item.action);
+    auto target = makeActionTarget(item.action, item.isEnabled, item.isChecked);
     nsItem.target = target.get();
 
     targets.add(std::move(target));
@@ -123,11 +148,18 @@ NSMenu* buildAppKitMenu(const Menu& menu, MenuTargets& targets)
     return nsMenu;
 }
 
-ObjC::Ptr<NSObject> makeActionTarget(const MenuAction& action)
+ObjC::Ptr<NSObject> makeActionTarget(const MenuAction& action,
+                                     const MenuEnabled& isEnabled,
+                                     const MenuChecked& isChecked)
 {
     auto target = ObjC::Ptr<NSObject> {[[getMenuTargetClass() alloc] init]};
     ObjC::getIvar<void*>(target.get(), "state") = new MenuTargetState();
-    getMenuTargetState(target.get())->action = action;
+
+    auto* state = getMenuTargetState(target.get());
+    state->action = action;
+    state->isEnabled = isEnabled;
+    state->isChecked = isChecked;
+
     return target;
 }
 

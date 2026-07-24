@@ -1,28 +1,52 @@
 #include "CameraView.h"
 
 #include <eacp/GPU/GPU.h>
+#include <eacp/Graphics/Graphics.h>
 
 namespace eacp::Cameras
 {
+namespace
+{
+// A camera frame is fitted to the view by an arbitrary factor, so it has to be
+// filtered smoothly; SpriteRenderer's default Nearest would alias it badly.
+constexpr auto frameSampling = GPU::TextureSampling {GPU::TextureFilter::Linear,
+                                                     GPU::TextureAddressMode::Clamp};
+} // namespace
+
 CameraView::CameraView()
 {
     // The camera feed is already smooth video, so MSAA buys nothing; keep it at
-    // one sample. Continuous mode redraws every vsync to show new frames as they
-    // arrive, decoupled from the capture rate.
+    // one sample.
     setSampleCount(1);
-    setContinuous(true);
+
+    arrivalTick = Threads::DisplayLink::timedTick(
+        [this](Threads::FrameTime time)
+        {
+            update(time);
+            renderNow();
+        });
 }
 
-CameraView::~CameraView() = default;
+CameraView::~CameraView()
+{
+    *alive = false;
+
+    if (camera != nullptr)
+        camera->setFrameArrivedCallback({});
+}
 
 void CameraView::attach(Camera& cameraToUse)
 {
     camera = &cameraToUse;
+    applyRenderMode();
     repaint();
 }
 
 void CameraView::detach()
 {
+    if (camera != nullptr)
+        camera->setFrameArrivedCallback({});
+
     camera = nullptr;
     repaint();
 }
@@ -40,6 +64,39 @@ void CameraView::setMirrored(bool mirroredToUse)
 void CameraView::setUploadMode(UploadMode mode)
 {
     uploadMode = mode;
+}
+
+void CameraView::setRenderMode(RenderMode mode)
+{
+    renderMode = mode;
+    applyRenderMode();
+}
+
+void CameraView::applyRenderMode()
+{
+    setContinuous(renderMode == RenderMode::Continuous);
+
+    if (camera == nullptr)
+        return;
+
+    if (renderMode != RenderMode::OnFrameArrival)
+    {
+        camera->setFrameArrivedCallback({});
+        return;
+    }
+
+    // Fires on the capture thread; the render is marshalled to the main
+    // thread, where the alive token fences it against a torn-down view.
+    camera->setFrameArrivedCallback(
+        [this, guard = alive]
+        {
+            Threads::callAsync(
+                [this, guard]
+                {
+                    if (*guard)
+                        arrivalTick();
+                });
+        });
 }
 
 Graphics::Rect CameraView::computeImageArea(
@@ -98,7 +155,12 @@ bool CameraView::renderZeroCopy(Graphics::Rect& imageArea)
     if (texture.isValid())
     {
         imageArea = imageAreaFor(texture.width(), texture.height());
-        renderer->drawTexture(texture, imageArea, mirrored, false);
+        renderer->drawTexture(texture,
+                              imageArea,
+                              mirrored,
+                              false,
+                              Graphics::Color::white(),
+                              frameSampling);
         drew = true;
     }
 
@@ -133,7 +195,12 @@ bool CameraView::renderCpuUpload(Graphics::Rect& imageArea)
         return false;
 
     imageArea = imageAreaFor(scratch.width, scratch.height);
-    renderer->drawTexture(*uploadTexture, imageArea, mirrored, false);
+    renderer->drawTexture(*uploadTexture,
+                          imageArea,
+                          mirrored,
+                          false,
+                          Graphics::Color::white(),
+                          frameSampling);
     return true;
 }
 

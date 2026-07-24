@@ -8,6 +8,8 @@
 #include <eacp/Core/ObjC/CFRef.h>
 #include <eacp/Core/ObjC/ObjC.h>
 
+#include <cmath>
+
 namespace eacp::GPU
 {
 namespace
@@ -23,31 +25,6 @@ MTLPixelFormat toMetalFormat(TextureFormat format)
         default:
             return MTLPixelFormatRGBA8Unorm;
     }
-}
-
-MTLSamplerMinMagFilter toMetalFilter(TextureFilter filter)
-{
-    return filter == TextureFilter::Nearest ? MTLSamplerMinMagFilterNearest
-                                            : MTLSamplerMinMagFilterLinear;
-}
-
-MTLSamplerAddressMode toMetalAddressMode(TextureAddressMode mode)
-{
-    return mode == TextureAddressMode::Repeat ? MTLSamplerAddressModeRepeat
-                                              : MTLSamplerAddressModeClampToEdge;
-}
-
-ObjC::Ptr<NSObject<MTLSamplerState>> makeSampler(id<MTLDevice> metalDevice,
-                                                 TextureFilter filter,
-                                                 TextureAddressMode addressMode)
-{
-    auto samplerDescriptor = ObjC::makePtr<MTLSamplerDescriptor>();
-    samplerDescriptor.get().minFilter = toMetalFilter(filter);
-    samplerDescriptor.get().magFilter = toMetalFilter(filter);
-    samplerDescriptor.get().sAddressMode = toMetalAddressMode(addressMode);
-    samplerDescriptor.get().tAddressMode = toMetalAddressMode(addressMode);
-
-    return [metalDevice newSamplerStateWithDescriptor:samplerDescriptor.get()];
 }
 
 // Camera/video pixel buffers reach us as 32-bit BGRA (what the capture path
@@ -93,17 +70,12 @@ struct Texture::Native
         // generation; it handles the CPU-to-GPU synchronisation itself.
         if (texture.get() != nil && pixels != nullptr)
             update(pixels, 0);
-
-        sampler = makeSampler(metalDevice, descriptor.filter, descriptor.addressMode);
     }
 
     // Zero-copy wrap of a CVPixelBuffer: the texture cache maps the buffer's
     // IOSurface straight into an MTLTexture. cvTexture owns that mapping and
     // keeps it alive for the texture's lifetime.
-    Native(Device& device,
-           void* pixelBufferHandle,
-           TextureFilter filter,
-           TextureAddressMode addressMode)
+    Native(Device& device, void* pixelBufferHandle)
     {
         auto metalDevice = (__bridge id<MTLDevice>) device.nativeDevice();
         auto cache = (CVMetalTextureCacheRef) device.nativeTextureCache();
@@ -139,21 +111,41 @@ struct Texture::Native
         // The MTLTexture is owned by the CVMetalTexture mapping; retain it so
         // the Ptr's release on destruction stays balanced.
         texture.reset(CVMetalTextureGetTexture(mapped));
-        sampler = makeSampler(metalDevice, filter, addressMode);
     }
 
     void update(const void* pixels, std::size_t bytesPerRow)
     {
+        updateRegion(0, 0, width, height, pixels, bytesPerRow);
+    }
+
+    // Both update() overloads land here; the whole-texture one is just the full
+    // rect, so there is a single replaceRegion call to reason about.
+    void updateRegion(int x,
+                      int y,
+                      int regionWidth,
+                      int regionHeight,
+                      const void* pixels,
+                      std::size_t bytesPerRow)
+    {
         if (texture.get() == nil || pixels == nullptr || width <= 0 || height <= 0)
             return;
 
-        auto stride =
-            bytesPerRow != 0 ? bytesPerRow : (std::size_t) (width * pixelStride);
+        if (regionWidth <= 0 || regionHeight <= 0)
+            return;
 
-        [texture.get() replaceRegion:MTLRegionMake2D(0,
-                                                     0,
-                                                     (NSUInteger) width,
-                                                     (NSUInteger) height)
+        // Metal raises on a region that leaves the texture, so an out-of-bounds
+        // request is dropped rather than clamped — see the header for why
+        // clamping would be worse than doing nothing.
+        if (x < 0 || y < 0 || x + regionWidth > width || y + regionHeight > height)
+            return;
+
+        auto stride = bytesPerRow != 0 ? bytesPerRow
+                                       : (std::size_t) (regionWidth * pixelStride);
+
+        [texture.get() replaceRegion:MTLRegionMake2D((NSUInteger) x,
+                                                     (NSUInteger) y,
+                                                     (NSUInteger) regionWidth,
+                                                     (NSUInteger) regionHeight)
                          mipmapLevel:0
                            withBytes:pixels
                          bytesPerRow:(NSUInteger) stride];
@@ -166,7 +158,6 @@ struct Texture::Native
     // because those buffers are always 32-bit BGRA/RGBA.
     int pixelStride = 4;
     ObjC::Ptr<NSObject<MTLTexture>> texture;
-    ObjC::Ptr<NSObject<MTLSamplerState>> sampler;
     CFRef<CVMetalTextureRef> cvTexture;
 };
 
@@ -177,17 +168,28 @@ Texture::Texture(Device& device,
 {
 }
 
-Texture::Texture(Device& device,
-                 void* nativePixelBuffer,
-                 TextureFilter filter,
-                 TextureAddressMode addressMode)
-    : impl(device, nativePixelBuffer, filter, addressMode)
+Texture::Texture(Device& device, void* nativePixelBuffer)
+    : impl(device, nativePixelBuffer)
 {
 }
 
 void Texture::update(const void* pixels, std::size_t bytesPerRow)
 {
     impl->update(pixels, bytesPerRow);
+}
+
+void Texture::update(const Graphics::Rect& region,
+                     const void* pixels,
+                     std::size_t bytesPerRow)
+{
+    // Texels are whole; round rather than truncate so a rect built from
+    // accumulated float arithmetic lands on the texel it is nearest to.
+    impl->updateRegion((int) std::lround(region.x),
+                       (int) std::lround(region.y),
+                       (int) std::lround(region.w),
+                       (int) std::lround(region.h),
+                       pixels,
+                       bytesPerRow);
 }
 
 int Texture::width() const
@@ -202,17 +204,12 @@ int Texture::height() const
 
 bool Texture::isValid() const
 {
-    return impl->texture.get() != nil && impl->sampler.get() != nil;
+    return impl->texture.get() != nil;
 }
 
 void* Texture::nativeTexture() const
 {
     return (__bridge void*) impl->texture.get();
-}
-
-void* Texture::nativeSampler() const
-{
-    return (__bridge void*) impl->sampler.get();
 }
 
 void* Texture::nativeReadView() const

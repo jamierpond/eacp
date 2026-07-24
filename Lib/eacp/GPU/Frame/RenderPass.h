@@ -1,11 +1,11 @@
 #pragma once
 
 #include "../Buffer/Buffer.h"
+#include "../Texture/Texture.h"
 
 namespace eacp::GPU
 {
 class RenderPipeline;
-class Texture;
 
 // Records draw commands for a single render pass (MTLRenderCommandEncoder on
 // Metal). Ends the encoder automatically on destruction. Obtained from
@@ -13,19 +13,50 @@ class Texture;
 class RenderPass
 {
 public:
-    explicit RenderPass(void* encoder);
+    // targetWidth/targetHeight are the render target's size in *pixels*. The
+    // pass needs them to clamp scissor rects: both backends reject a scissor
+    // that leaves the render target (Metal API validation aborts), so a caller
+    // scrolling a region partly off-screen would otherwise have to clamp by
+    // hand at every call site.
+    explicit RenderPass(void* encoder, int targetWidth = 0, int targetHeight = 0);
     ~RenderPass();
 
     RenderPass(const RenderPass&) = delete;
     RenderPass& operator=(const RenderPass&) = delete;
 
+    // Restricts rasterization to rect, in render-target *pixels* with the origin
+    // at the top-left - the same orientation Metal's MTLScissorRect and D3D12's
+    // D3D12_RECT use, and the same y-down sense as Graphics::Rect. Callers
+    // working in logical points multiply by GPUView::backingScale() first.
+    //
+    // The rect is clamped to the render target, so a partly off-screen region
+    // clips correctly instead of aborting. An empty or fully off-screen rect
+    // discards every subsequent fragment, which is the useful behaviour for a
+    // scrolled-away pane.
+    //
+    // Scissor state persists for the rest of the pass; call clearScissorRect to
+    // go back to the full target. Nesting is the caller's job - the GPU has one
+    // scissor rect, so a widget tree intersects rects on the way down.
+    void setScissorRect(const Graphics::Rect& rect);
+
+    // Restores rasterization to the whole render target.
+    void clearScissorRect();
+
     void setPipeline(const RenderPipeline& pipeline);
     void setVertexBuffer(const Buffer& buffer, int index = 0);
 
-    // Binds a texture and its baked sampler to the fragment stage. slot maps to
-    // Metal texture(slot)/sampler(slot) and to D3D t<slot>/s<slot>; the
-    // generated shaders declare texture and sampler at the same index.
-    void setFragmentTexture(const Texture& texture, int slot = 0);
+    // Binds a texture to the fragment stage, sampled the way `sampling` says.
+    // slot maps to Metal texture(slot) and to D3D t<slot>.
+    //
+    // The sampling comes from the caller rather than the texture because on
+    // D3D12 it is baked into the shader (see TextureSampling), so it must be
+    // the same value the shader was compiled with or the two backends draw
+    // differently. Callers using the codegen layer get this for free —
+    // ShaderProgram::bindTextures passes each member's declared sampling — and
+    // only a hand-rolled bind has to supply it.
+    void setFragmentTexture(const Texture& texture,
+                            int slot = 0,
+                            TextureSampling sampling = {});
 
     // Uploads small per-draw constant data to the vertex stage without a buffer
     // object (Metal setVertexBytes; a transient constant buffer on D3D12). slot

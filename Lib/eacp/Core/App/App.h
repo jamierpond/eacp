@@ -59,6 +59,16 @@ void openExternalURL(const std::string& url);
 // runtime. No-op on Windows, Linux and iOS.
 void setDockIconVisible(bool visible);
 
+// macOS: called when the user reactivates the app (Dock icon click) while
+// it has no visible windows — applicationShouldHandleReopen:. A window
+// hidden via WindowOptions::hidesOnClose uses this to come back:
+// setReopenHandler([&] { window.setVisible(true); }). Unset, reopen falls
+// through to the system default. Never fires on other platforms.
+void setReopenHandler(const Callback& handler);
+
+// Internal: the handler above, invoked by the platform's app delegate.
+const Callback& getReopenHandler();
+
 // True when this process's executable carries a distribution code signature:
 // Developer ID or Apple-issued (App Store / system) on macOS, an embedded
 // Authenticode signature on Windows, no development provisioning profile on
@@ -80,6 +90,22 @@ struct FilePickerOptions
 // Must be called on the UI thread. Implemented on macOS and Windows; Linux
 // returns std::nullopt for now.
 std::optional<std::string> chooseFile(const FilePickerOptions& options = {});
+
+// The save panel's options: the same extension filter, plus the file name the
+// panel opens with (the user is free to change it).
+struct FileSaveOptions
+{
+    Vector<std::string> allowedExtensions;
+    std::string suggestedName;
+};
+
+// Shows the OS's native save panel, blocking until the user names a file or
+// cancels. Returns the chosen absolute path — which need NOT exist yet, and
+// whose overwrite the panel has already confirmed with the user — or
+// std::nullopt on cancel. Writing the file is the caller's job. Must be called
+// on the UI thread. Implemented on macOS and Windows; Linux returns
+// std::nullopt for now.
+std::optional<std::string> chooseSaveFile(const FileSaveOptions& options = {});
 
 // Shows the OS's native folder chooser, blocking until the user picks a
 // directory or cancels. Returns the chosen absolute path, or std::nullopt
