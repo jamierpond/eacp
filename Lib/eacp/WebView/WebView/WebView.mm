@@ -122,6 +122,13 @@ struct WebView::Native
 
         config = [[WKWebViewConfiguration alloc] init];
 
+        // Let muted <video autoplay> (e.g. hover-video backgrounds) start
+        // without a click; WKWebView otherwise gates all media behind a user
+        // gesture, which a mouse hover never satisfies. Audio still requires one.
+        [config.get()
+            setMediaTypesRequiringUserActionForPlayback:
+                WKAudiovisualMediaTypeAudio];
+
         if (options.debugConsole)
         {
             [config.get().preferences setValue:@YES
