@@ -2,6 +2,8 @@
 
 #include <WebResources.h>
 
+#include <iostream>
+
 using namespace eacp;
 using namespace Graphics;
 
@@ -19,6 +21,14 @@ struct MyApp
     {
         setApplicationMenuBar(buildDefaultWebViewMenuBar(), window);
         window.setContentView(webView);
+
+        // The page posts every check result here as it runs, so the demo
+        // reports itself to the terminal as well as to the window — which is
+        // what makes it usable as a regression check (and readable over ssh or
+        // anywhere the window isn't visible).
+        webView.addScriptMessageHandler("report",
+                                        [](const std::string& message)
+                                        { std::cout << message << std::endl; });
     }
 
     WebView webView {embeddedOptions("ServingHeavyContent")};
