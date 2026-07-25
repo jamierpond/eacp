@@ -683,18 +683,44 @@ void schemeHandlerStartTask(id self,
         return;
     }
 
-    auto* mime = eacp::Strings::toNSString(response->mimeType);
+    // Honour Range requests over the in-memory bytes: WKWebView's media loader
+    // sends byte-range requests for <video>/<audio> and fails ("An error
+    // occurred trying to load the resource") unless it gets a proper 206 with
+    // Content-Range. Reuse the shared range planner so non-media requests still
+    // get a plain 200 — now with an explicit Content-Length + Accept-Ranges.
+    auto rangeHeader = std::string {};
+
+    if (auto* value = [urlSchemeTask.request valueForHTTPHeaderField:@"Range"])
+        rangeHeader = [value UTF8String];
+
+    auto planResource = eacp::Graphics::StreamingResource {};
+    planResource.mimeType = response->mimeType;
+    planResource.size =
+        static_cast<eacp::Graphics::RangeSize>(response->data.size());
+    planResource.statusCode = response->statusCode;
+
+    auto plan = eacp::Graphics::planStreamingResponse(rangeHeader, planResource);
+
+    auto* headers = [NSMutableDictionary dictionary];
+    for (const auto& [name, value]: plan.headers)
+        headers[eacp::Strings::toNSString(name)] =
+            eacp::Strings::toNSString(value);
+
     auto* httpResponse = [[[NSHTTPURLResponse alloc]
         initWithURL:urlSchemeTask.request.URL
-         statusCode:response->statusCode
+         statusCode:plan.statusCode
         HTTPVersion:@"HTTP/1.1"
-       headerFields:@{@"Content-Type": mime}] autorelease];
-
+       headerFields:headers] autorelease];
     [urlSchemeTask didReceiveResponse:httpResponse];
 
-    auto* data = [NSData dataWithBytes:response->data.data()
-                                length:response->data.size()];
-    [urlSchemeTask didReceiveData:data];
+    if (plan.hasBody)
+    {
+        auto* data =
+            [NSData dataWithBytes:response->data.data() + plan.served.start
+                           length:plan.served.length];
+        [urlSchemeTask didReceiveData:data];
+    }
+
     [urlSchemeTask didFinish];
 }
 

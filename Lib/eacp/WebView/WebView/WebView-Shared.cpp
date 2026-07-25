@@ -65,6 +65,16 @@ std::string mimeForPath(std::string_view path)
     if (endsWith(".woff2"))
         return "font/woff2";
 
+    // Video
+    if (endsWith(".mp4"))
+        return "video/mp4";
+    if (endsWith(".webm"))
+        return "video/webm";
+    if (endsWith(".mov"))
+        return "video/quicktime";
+    if (endsWith(".ogv"))
+        return "video/ogg";
+
     // Audio
     if (endsWith(".mp3"))
         return "audio/mpeg";
@@ -74,7 +84,7 @@ std::string mimeForPath(std::string_view path)
         return "audio/aiff";
     if (endsWith(".flac"))
         return "audio/flac";
-    if (endsWith(".m4a") || endsWith(".mp4"))
+    if (endsWith(".m4a"))
         return "audio/mp4";
     if (endsWith(".aac"))
         return "audio/aac";
@@ -365,11 +375,11 @@ StreamingProvider
 
 namespace
 {
-ResourceProvider makeResourceProviderFromFiles(FileProvider provider,
-                                               std::string indexFile)
+StreamingProvider makeStreamingProviderFromFiles(FileProvider provider,
+                                                 std::string indexFile)
 {
     return [provider = std::move(provider), indexFile = std::move(indexFile)](
-               std::string_view url) -> std::optional<ResourceResponse>
+               std::string_view url) -> std::optional<StreamingResource>
     {
         auto path = pathFromURL(url, indexFile);
         auto bytes = provider ? provider(path) : std::nullopt;
@@ -377,17 +387,35 @@ ResourceProvider makeResourceProviderFromFiles(FileProvider provider,
         if (!bytes)
             return std::nullopt;
 
-        ResourceResponse response;
+        auto response = StreamingResource {};
         response.mimeType = mimeForPath(path);
-        response.data.assign(bytes->begin(), bytes->end());
+        response.size = static_cast<RangeSize>(bytes->size());
+        // The embedded view points at static program memory that outlives every
+        // request, so each range copies only the bytes asked for -- no
+        // whole-resource materialisation per read. Routing embedded resources
+        // through the streaming pump is also what makes <video>/<audio> work:
+        // the media loader issues byte-range reads that need real 206 responses.
+        response.read = [view = *bytes](RangeSize offset,
+                                        ByteSpan out) -> std::size_t
+        {
+            auto start = static_cast<std::size_t>(offset);
+
+            if (start >= view.size())
+                return 0;
+
+            auto count = std::min(out.size(), view.size() - start);
+            std::copy_n(view.data() + start, count, out.data());
+            return count;
+        };
         return response;
     };
 }
 
 void registerEmbeddedScheme(WebView::Options& options)
 {
-    options.schemes[options.embedded.scheme] = makeResourceProviderFromFiles(
-        options.embedded.provider, options.embedded.indexFile);
+    options.streamingSchemes[options.embedded.scheme] =
+        makeStreamingProviderFromFiles(options.embedded.provider,
+                                       options.embedded.indexFile);
 }
 
 bool shouldUseDevServer(const WebView::Options::Embedded& embedded)

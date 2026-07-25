@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>eacp — Serving Heavy Content</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0b0d10; color: #e6e8eb;
+    font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+    padding: 24px; max-width: 900px; margin: 0 auto;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.lede { color: #9aa2ad; margin: 0 0 20px; }
+  video { width: 100%; border-radius: 10px; background: #000; display: block; }
+  .banner {
+    margin: 16px 0; padding: 12px 16px; border-radius: 8px; font-weight: 700;
+    letter-spacing: .02em; background: #1a1d22; color: #9aa2ad;
+  }
+  .banner.pass { background: #0e2a1a; color: #4ade80; }
+  .banner.fail { background: #2a0e12; color: #f87171; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1c2026; vertical-align: top; }
+  th { color: #9aa2ad; font-weight: 600; }
+  td.st { width: 74px; font-weight: 700; }
+  td.st.pass { color: #4ade80; }
+  td.st.fail { color: #f87171; }
+  td.detail { color: #9aa2ad; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  code { color: #cbd5e1; background: #14171c; padding: 1px 5px; border-radius: 4px; }
+  .note { margin-top: 20px; color: #6b7280; font-size: 12.5px; }
+</style>
+</head>
+<body>
+  <h1>Serving Heavy Content</h1>
+  <p class="lede">
+    A ~10&nbsp;MB 1080p clip served straight out of the embedded resource bundle.
+    The video below plays it as <code>&lt;video&gt;</code>; the checks assert the
+    embedded scheme answers HTTP byte-range requests (200 / 206 / 416).
+  </p>
+
+  <video id="v" src="heavy.mp4" autoplay loop playsinline preload="auto"></video>
+
+  <div id="banner" class="banner">Running checks…</div>
+
+  <table>
+    <thead><tr><th>Check</th><th class="st">Result</th><th>Detail</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <p class="note">
+    Before this fix, the embedded scheme served resources through a
+    <em>whole-file-copy, no-range</em> provider, so WKWebView / WebView2 media
+    loaders range-thrashed (hundreds of requests, each re-materialising the file)
+    and <code>&lt;video&gt;</code> failed with “An error occurred trying to load
+    the resource.” Now embedded resources go through the streaming provider:
+    each range copies only the bytes asked for, straight from static memory.
+  </p>
+
+<script>
+const VIDEO = 'heavy.mp4';
+const rows = document.getElementById('rows');
+const banner = document.getElementById('banner');
+let allPass = true;
+
+function record(name, pass, detail) {
+  if (!pass) allPass = false;
+  const tr = document.createElement('tr');
+  tr.innerHTML =
+    '<td>' + name + '</td>' +
+    '<td class="st ' + (pass ? 'pass' : 'fail') + '">' + (pass ? 'PASS' : 'FAIL') + '</td>' +
+    '<td class="detail">' + detail + '</td>';
+  rows.appendChild(tr);
+}
+
+async function run() {
+  let total = 0;
+
+  // 1. Range probe (bytes=0-0) → 206 + Content-Range carries the total size.
+  try {
+    const r = await fetch(VIDEO, { headers: { Range: 'bytes=0-0' } });
+    const cr = r.headers.get('Content-Range') || '';
+    const m = /\/(\d+)\s*$/.exec(cr);
+    total = m ? Number(m[1]) : 0;
+    record('Range probe <code>bytes=0-0</code>',
+      r.status === 206 && total > 0,
+      'status ' + r.status + ' · Content-Range: ' + (cr || '(none)'));
+  } catch (e) { record('Range probe', false, String(e)); }
+
+  // 2. 1 MiB range → 206, exact length, matching Content-Range.
+  try {
+    const end = Math.min(1048575, total - 1);
+    const r = await fetch(VIDEO, { headers: { Range: 'bytes=0-' + end } });
+    const buf = await r.arrayBuffer();
+    const cr = r.headers.get('Content-Range') || '';
+    const ok = r.status === 206 && buf.byteLength === end + 1 &&
+               cr === 'bytes 0-' + end + '/' + total &&
+               (r.headers.get('Accept-Ranges') || '').includes('bytes');
+    record('Partial range <code>bytes=0-' + end + '</code>', ok,
+      'status ' + r.status + ' · ' + buf.byteLength + ' bytes · ' + (cr || '(no Content-Range)'));
+  } catch (e) { record('Partial range', false, String(e)); }
+
+  // 3. Suffix range (last 64 KiB) → 206, exact length.
+  try {
+    const len = Math.min(65536, total);
+    const r = await fetch(VIDEO, { headers: { Range: 'bytes=-' + len } });
+    const buf = await r.arrayBuffer();
+    record('Suffix range <code>bytes=-' + len + '</code>',
+      r.status === 206 && buf.byteLength === len,
+      'status ' + r.status + ' · ' + buf.byteLength + ' bytes · ' + (r.headers.get('Content-Range') || ''));
+  } catch (e) { record('Suffix range', false, String(e)); }
+
+  // 4. Unsatisfiable range (past EOF) → 416.
+  try {
+    const r = await fetch(VIDEO, { headers: { Range: 'bytes=' + (total + 1) + '-' } });
+    record('Unsatisfiable range → 416', r.status === 416,
+      'status ' + r.status + ' · Content-Range: ' + (r.headers.get('Content-Range') || '(none)'));
+  } catch (e) { record('Unsatisfiable range', false, String(e)); }
+
+  // 5. Full GET → 200, Content-Length matches the whole file.
+  try {
+    const t0 = performance.now();
+    const r = await fetch(VIDEO);
+    const buf = await r.arrayBuffer();
+    const ms = Math.round(performance.now() - t0);
+    const len = Number(r.headers.get('Content-Length') || 0);
+    record('Full GET → 200',
+      r.status === 200 && buf.byteLength === total && len === total,
+      'status ' + r.status + ' · ' + buf.byteLength + ' bytes in ' + ms + ' ms · Content-Type: ' +
+      (r.headers.get('Content-Type') || '(none)'));
+  } catch (e) { record('Full GET', false, String(e)); }
+
+  // 6. The real proof: the <video> element actually plays the embedded clip.
+  const v = document.getElementById('v');
+  const played = await new Promise((resolve) => {
+    if (v.readyState >= 3 && !v.paused) return resolve(true);
+    let done = false;
+    const ok = () => { if (!done) { done = true; resolve(true); } };
+    const fail = () => { if (!done) { done = true; resolve(false); } };
+    v.addEventListener('playing', ok, { once: true });
+    v.addEventListener('error', fail, { once: true });
+    v.muted = true;
+    v.play().catch(() => {});
+    setTimeout(() => resolve(!v.paused && v.readyState >= 2), 6000);
+  });
+  record('&lt;video&gt; plays the embedded clip', played,
+    played ? 'element is decoding + playing frames'
+           : 'video did not reach a playing state (error / stalled)');
+
+  banner.textContent = allPass ? 'ALL CHECKS PASSED — embedded heavy content streams correctly'
+                               : 'SOME CHECKS FAILED — see the table';
+  banner.className = 'banner ' + (allPass ? 'pass' : 'fail');
+}
+
+run();
+</script>
+</body>
+</html>
