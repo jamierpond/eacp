@@ -1,5 +1,6 @@
 #include "WebView.h"
 #include <algorithm>
+#include <limits>
 
 #include "DevServerProbe.h"
 #include "JsStringLiteral.h"
@@ -139,7 +140,14 @@ std::optional<RangeSize> parseRangeSize(std::string_view text)
         if (c < '0' || c > '9')
             return std::nullopt;
 
-        value = value * 10 + static_cast<RangeSize>(c - '0');
+        auto digit = static_cast<RangeSize>(c - '0');
+
+        // A value that would overflow is not a byte position we can serve;
+        // treat it as malformed rather than letting it wrap.
+        if (value > (std::numeric_limits<RangeSize>::max() - digit) / 10)
+            return std::nullopt;
+
+        value = value * 10 + digit;
     }
 
     return value;

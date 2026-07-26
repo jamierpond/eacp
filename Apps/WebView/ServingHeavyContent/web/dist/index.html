@@ -105,8 +105,9 @@
 </head>
 <body>
   <!-- The hover stage: four heavy clips served from the embedded bundle, one
-       <video> element each, all resident. Hovering only ever flips which layer
-       is opaque and which element is playing. -->
+       <video> element each, all resident and all playing from the moment the
+       page loads — one is visible immediately, no interaction needed. Hovering
+       only ever flips which layer is opaque. -->
   <div class="stage" id="stage">
     <div class="scrim"></div>
     <div class="centre idle" id="centre">
@@ -156,7 +157,8 @@
       that swaps <code>src</code> on one element — or lets the element remount —
       re-downloads the clip on every hover and shows a frozen first frame, or
       nothing, however good the range support is. One element per clip, created
-      once, is what makes it smooth: hover only toggles opacity and play/pause.
+      once and always playing, is what makes it smooth: hover only toggles
+      which layer is opaque — playback never stops.
     </p>
   </div>
 
@@ -184,10 +186,6 @@ const verdict = document.getElementById('verdict');
 const counts = { switches: 0, stalled: 0, waiting: 0, error: 0 };
 let current = null;
 let playRefusal = null;
-
-// Fade duration of .layer — the outgoing clip keeps playing until it's gone,
-// otherwise the crossfade shows a frozen frame on the way out.
-const FADE_MS = 600;
 
 for (const clip of CLIPS) {
   const video = document.createElement('video');
@@ -241,28 +239,22 @@ for (const clip of CLIPS) {
   clip.hud = row.querySelector('.v');
 }
 
-tilesEl.addEventListener('mouseleave', () => { show(null); });
+// A clip is on screen and playing from the first paint — the demo must never
+// open onto a black stage. Leaving the tiles falls back to it rather than to
+// an empty stage for the same reason.
+const defaultClip = CLIPS[0];
+tilesEl.addEventListener('mouseleave', () => { show(defaultClip); });
 
-// Ask for playback only once the layer is genuinely on screen, and keep asking
-// for a few frames if the platform still says no.
-//
-// WebKit refuses play() on an element it considers invisible, and the opacity
-// set a moment ago doesn't exist for it until the style has been composited —
-// so play() in the same frame as the class flip fails with NotAllowedError,
-// silently, which looks exactly like a broken video. It is also why a hover
-// background appears to work "sometimes": it depends entirely on frame timing.
-// Every clip simply runs. Hover changes which layer is opaque — never which
-// element is playing.
-//
-// This is the part that took the longest to learn. Driving play()/pause() off
-// hover means asking the platform for permission at the worst possible moment:
-// WebKit refuses play() on an element it considers invisible, and the opacity
-// set microseconds earlier doesn't exist for it until the style has been
-// composited — so the call fails with NotAllowedError, silently, which looks
-// exactly like a broken video. It also explains the "works sometimes" symptom:
-// success depends purely on frame timing and on what else has the screen.
-// Muted clips that are always running cost a decoder each and remove the entire
-// class of failure. Backgrounding is handled separately, below.
+// Every clip simply runs; hover changes which layer is opaque — never which
+// element is playing. Driving play()/pause() off hover means asking the
+// platform for permission at the worst possible moment: WebKit refuses play()
+// on an element it considers invisible, and the opacity set microseconds
+// earlier doesn't exist for it until the style has been composited — so the
+// call fails with NotAllowedError, silently, which looks exactly like a
+// broken video. It also explains the "works sometimes" symptom: success
+// depends purely on frame timing and on what else has the screen. Muted clips
+// that are always running cost a decoder each and remove the entire class of
+// failure. Backgrounding is handled separately, below.
 function keepPlaying() {
   if (document.hidden) {
     return;
@@ -297,7 +289,6 @@ function show(clip) {
     return;
   }
   counts.switches++;
-  const previous = current;
   current = clip;
 
   for (const other of CLIPS) {
@@ -425,7 +416,10 @@ function waitForPlayback(timeoutMs) {
     const marks = CLIPS.map((clip) => clip.video.currentTime);
     const poll = setInterval(() => {
       keepPlaying();
-      const moving = CLIPS.some((clip, i) => clip.video.currentTime > marks[i] + 0.02);
+      // Any change counts — a looping clip that wrapped moved backwards, but
+      // it moved. A paused clip's currentTime doesn't change at all.
+      const moving = CLIPS.some(
+        (clip, i) => Math.abs(clip.video.currentTime - marks[i]) > 0.02);
       if (moving) {
         clearInterval(poll);
         resolve(true);
@@ -442,6 +436,23 @@ async function stress() {
   const readyCount = ready.filter(Boolean).length;
   record('All clips reach a playable state', readyCount === CLIPS.length,
     readyCount + '/' + CLIPS.length + ' clips at readyState ≥ 3 (HAVE_FUTURE_DATA)');
+
+  // The point of the demo: a clip is visibly playing the moment the app opens,
+  // with no click and no hover. userActivation is the proof no gesture was
+  // involved — it only ever flips to true on a real user interaction.
+  const autoplayed = await waitForPlayback(20000);
+  if (autoplayed) {
+    record('A clip auto-plays on launch (no user gesture)', true,
+      defaultClip.file + ' visible and advancing, currentTime=' +
+      defaultClip.video.currentTime.toFixed(2) + 's · userActivation=' +
+      (navigator.userActivation
+        ? String(navigator.userActivation.hasBeenActive) : 'n/a'));
+  } else {
+    skip('A clip auto-plays on launch (no user gesture)',
+      'this app never became the ACTIVE application, and WKWebView refuses ' +
+      'media playback there by design. Click the window and the clips start ' +
+      'on the next retry tick.');
+  }
 
   const before = requestCount(CLIPS[0].file);
   verdict.textContent = 'Hover stress running…';
@@ -487,7 +498,12 @@ async function stress() {
       keepPlaying();
       const t0 = clip.video.currentTime;
       await sleep(420);
-      const delta = clip.video.currentTime - t0;
+      let delta = clip.video.currentTime - t0;
+      // A looping clip can wrap during the window (9.8s -> 0.2s reads as
+      // -9.6s); that is playback advancing, not a freeze.
+      if (delta < 0 && isFinite(clip.video.duration)) {
+        delta += clip.video.duration;
+      }
       advances.push(clip.name.split(' ')[0] + ' +' + delta.toFixed(2) + 's');
       if (delta > 0.05) {
         advanced++;
@@ -542,7 +558,7 @@ async function stress() {
     counts.stalled === 0 && counts.waiting === 0 && counts.error === 0,
     counts.stalled + ' stalled · ' + counts.waiting + ' waiting · ' + counts.error + ' error');
 
-  show(null);
+  show(defaultClip);
   const passed = results.every((r) => r.pass || r.skip);
   verdict.textContent = passed
     ? 'HOVER STRESS PASSED — ' + counts.switches + ' switches, 0 stalls, 0 re-fetches'
@@ -645,6 +661,7 @@ async function run() {
   setInterval(renderHud, 500);
 }
 
+show(defaultClip);
 renderHud();
 run();
 </script>

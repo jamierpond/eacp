@@ -14,11 +14,12 @@ Every check is also posted to the host and printed to **stdout**, so the demo
 can be read from a terminal instead of squinted at:
 
 ```
-[PASS] All clips reach a playable state — 4/4 clips at readyState ≥ 3
+[PASS] All clips reach a playable state — 4/4 clips at readyState ≥ 3 (HAVE_FUTURE_DATA)
+[PASS] A clip auto-plays on launch (no user gesture) — heavy.mp4 visible and advancing …
 [PASS] Fast sweep (24 switches @ 60 ms) with no stalls — 0 stall/waiting/error events
-[PASS] No re-fetch across 33 switches — requests for heavy.mp4: 1 before, 1 after
+[PASS] Every clip advances when shown — 4/4 clips advanced playback …
 ...
-ALL CHECKS PASSED — 34 hover switches, 0 stalls, 0 re-fetches
+ALL CHECKS PASSED — 42 hover switches, 0 stalls, 0 re-fetches
 ```
 
 It doubles as a **regression test / self-evident proof** for the embedded-media
@@ -85,6 +86,9 @@ open build/Apps/WebView/ServingHeavyContent/ServingHeavyContent.app
 
 On launch the page:
 
+- shows the first clip **immediately, auto-playing** — no click, no hover; the
+  stage is never black. All four clips run continuously; interaction only
+  changes which one is visible;
 - preloads all four clips, then runs a **hover stress pass** — a slow browse
   across every clip, then 24 switches at 60 ms — and reports switches, stalls,
   waits, errors and re-fetches;
@@ -93,8 +97,9 @@ On launch the page:
   range probe (`bytes=0-0` → 206), a 1 MiB partial (`206` + exact
   `Content-Range`), a suffix range (`bytes=-65536`), an unsatisfiable range
   (`416`), a full `GET` (`200`, `Content-Length` matches, `Content-Type:
-  video/mp4`), every clip reaching `readyState ≥ 3`, and every clip's
-  `currentTime` actually advancing.
+  video/mp4`), every clip reaching `readyState ≥ 3`, a clip auto-playing on
+  launch with no user gesture, and every clip's `currentTime` actually
+  advancing.
 
 Note the playback check reports **SKIP**, not FAIL, when the window never comes
 to the front — WebKit suspends media there by design, so there is nothing to

@@ -97,6 +97,16 @@ auto tMalformedFallsBackToFull = test("StreamingRange/malformedFull") = []
     check(resolveRangeHeader("items=0-10", 1000).kind == RangeRequest::Full);
 };
 
+auto tOverflowingRangeFallsBackToFull = test("StreamingRange/overflowFull") = []
+{
+    // Larger than 2^64: must be treated as malformed, not wrapped modulo 2^64
+    // into a small (and wrong) byte position.
+    check(resolveRangeHeader("bytes=99999999999999999999-", 1000).kind
+          == RangeRequest::Full);
+    check(resolveRangeHeader("bytes=-99999999999999999999", 1000).kind
+          == RangeRequest::Full);
+};
+
 auto tEmptyResourceUnsatisfiable = test("StreamingRange/emptyResource") = []
 { check(resolveRangeHeader("bytes=0-10", 0).kind == RangeRequest::Unsatisfiable); };
 
