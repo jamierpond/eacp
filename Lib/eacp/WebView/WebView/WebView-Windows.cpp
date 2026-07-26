@@ -20,8 +20,6 @@
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 
-
-
 namespace eacp::Graphics
 {
 
@@ -280,8 +278,8 @@ struct WebView::Native
         // Remove the render visual from the View's composition tree.
         if (webViewVisual)
         {
-            if (auto* container = static_cast<IDCompositionVisual2*>(
-                    owner.getNativeLayer()))
+            if (auto* container =
+                    static_cast<IDCompositionVisual2*>(owner.getNativeLayer()))
                 container->RemoveVisual(webViewVisual.Get());
 
             webViewVisual.Reset();
@@ -450,8 +448,7 @@ struct WebView::Native
                     applyBackground();
 
                     // Render into our composition visual.
-                    compositionController->put_RootVisualTarget(
-                        webViewVisual.Get());
+                    compositionController->put_RootVisualTarget(webViewVisual.Get());
 
                     applySettings();
                     setupEventHandlers();
@@ -498,6 +495,12 @@ struct WebView::Native
         // Treat the scheme as secure + with an authority component so URLs
         // like app://local/index.html parse the way React / fetch expect.
         auto envOptions = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+
+        // Media never needs a user gesture -- the same guarantee the macOS
+        // backend makes with WKAudiovisualMediaTypeNone. Without this, Chromium
+        // autoplay policy blocks unmuted playback until the user clicks.
+        envOptions->put_AdditionalBrowserArguments(
+            L"--autoplay-policy=no-user-gesture-required");
 
         auto registrations =
             Vector<Microsoft::WRL::ComPtr<ICoreWebView2CustomSchemeRegistration>> {};

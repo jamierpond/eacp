@@ -189,19 +189,16 @@ let playRefusal = null;
 
 for (const clip of CLIPS) {
   const video = document.createElement('video');
-  // The attributes matter, not just the properties: WebKit decides whether a
-  // clip is autoplay-eligible from the markup as the element is inserted, so an
-  // element that is only muted via the JS property is treated as sound-on media
-  // and gated behind a user gesture.
+  // eacp configures both backends (WKAudiovisualMediaTypeNone on macOS, the
+  // Chromium autoplay policy flag on WebView2) so media never needs a user
+  // gesture -- autoplay and programmatic play() just work, like a normal app.
+  // The attributes are still set as markup, not only JS properties, so the
+  // element is autoplay-eligible the moment it starts loading and behaves the
+  // same if this page is ever opened in a plain gesture-gated browser.
   video.setAttribute('muted', '');
   video.setAttribute('playsinline', '');
   video.setAttribute('loop', '');
   video.setAttribute('preload', 'auto');
-  // autoplay is the attribute-driven path, and it is not the same thing as
-  // calling play(). WebKit allows a muted clip to start on its own; a bare
-  // programmatic play() with no user activation on the page is refused outright
-  // with NotAllowedError. Set it before the src so the element is
-  // autoplay-eligible the moment it starts loading.
   video.setAttribute('autoplay', '');
   video.muted = true;
   video.loop = true;
@@ -246,21 +243,20 @@ const defaultClip = CLIPS[0];
 tilesEl.addEventListener('mouseleave', () => { show(defaultClip); });
 
 // Every clip simply runs; hover changes which layer is opaque — never which
-// element is playing. Driving play()/pause() off hover means asking the
-// platform for permission at the worst possible moment: WebKit refuses play()
-// on an element it considers invisible, and the opacity set microseconds
-// earlier doesn't exist for it until the style has been composited — so the
-// call fails with NotAllowedError, silently, which looks exactly like a
-// broken video. It also explains the "works sometimes" symptom: success
-// depends purely on frame timing and on what else has the screen. Muted clips
-// that are always running cost a decoder each and remove the entire class of
-// failure. Backgrounding is handled separately, below.
+// element is playing. eacp's webview needs no user gesture for playback, so
+// this loop is not there to win an autoplay-policy argument — it only resumes
+// clips the platform itself paused: WebKit suspends media in a backgrounded or
+// occluded window by design, and un-suspending takes a play() call once the
+// window is usable again.
+let playRescues = 0;
+
 function keepPlaying() {
   if (document.hidden) {
     return;
   }
   for (const clip of CLIPS) {
     if (clip.video.paused) {
+      playRescues++;
       clip.video.play().catch((error) => {
         playRefusal = (error && error.name ? error.name : 'unknown') + ': ' +
                       (error && error.message ? error.message : String(error));
@@ -269,20 +265,33 @@ function keepPlaying() {
   }
 }
 
+// NOT armed at load. The first check below samples the completely untouched
+// state — the webview configuration must start playback off the autoplay
+// attribute alone, with the page never calling play(). Only after that sample
+// does this arm, and then purely to resume clips the platform itself suspends
+// while the window is hidden or the app is in the background.
+//
 // A timer, not requestAnimationFrame: rAF is suspended while the window is
 // occluded or behind another app, so an rAF-driven retry never runs in exactly
 // the case that needs retrying.
-setInterval(keepPlaying, 250);
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    for (const clip of CLIPS) {
-      clip.video.pause();
-    }
-  } else {
-    keepPlaying();
+let resumeArmed = false;
+function armResume() {
+  if (resumeArmed) {
+    return;
   }
-});
-window.addEventListener('focus', keepPlaying);
+  resumeArmed = true;
+  setInterval(keepPlaying, 250);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      for (const clip of CLIPS) {
+        clip.video.pause();
+      }
+    } else {
+      keepPlaying();
+    }
+  });
+  window.addEventListener('focus', keepPlaying);
+}
 
 function show(clip) {
   if (clip === current) {
@@ -415,7 +424,9 @@ function waitForPlayback(timeoutMs) {
   return new Promise((resolve) => {
     const marks = CLIPS.map((clip) => clip.video.currentTime);
     const poll = setInterval(() => {
-      keepPlaying();
+      // Pure observation — no play() here. Whatever starts the clips must be
+      // the framework's own autoplay enforcement (or the resume loop, once it
+      // has been armed).
       // Any change counts — a looping clip that wrapped moved backwards, but
       // it moved. A paused clip's currentTime doesn't change at all.
       const moving = CLIPS.some(
@@ -437,22 +448,33 @@ async function stress() {
   record('All clips reach a playable state', readyCount === CLIPS.length,
     readyCount + '/' + CLIPS.length + ' clips at readyState ≥ 3 (HAVE_FUTURE_DATA)');
 
-  // The point of the demo: a clip is visibly playing the moment the app opens,
-  // with no click and no hover. userActivation is the proof no gesture was
-  // involved — it only ever flips to true on a real user interaction.
+  // The point of the demo: the webview ITSELF plays video. The page has not
+  // called play() and will not until this check is done — playback can only
+  // come from the autoplay attribute plus the framework's injected autoplay
+  // enforcement. No gesture, no page-side crutches.
   const autoplayed = await waitForPlayback(20000);
+  const activation = navigator.userActivation
+    ? String(navigator.userActivation.hasBeenActive) : 'n/a';
+  const playingNow = CLIPS.filter((clip) => !clip.video.paused).length;
   if (autoplayed) {
-    record('A clip auto-plays on launch (no user gesture)', true,
-      defaultClip.file + ' visible and advancing, currentTime=' +
+    record('Clips auto-play — no gesture, no page play() calls',
+      playRescues === 0,
+      playingNow + '/' + CLIPS.length + ' clips playing · page play() calls: ' +
+      playRescues + ' · ' + defaultClip.file + ' at ' +
       defaultClip.video.currentTime.toFixed(2) + 's · userActivation=' +
-      (navigator.userActivation
-        ? String(navigator.userActivation.hasBeenActive) : 'n/a'));
+      activation);
   } else {
-    skip('A clip auto-plays on launch (no user gesture)',
-      'this app never became the ACTIVE application, and WKWebView refuses ' +
-      'media playback there by design. Click the window and the clips start ' +
-      'on the next retry tick.');
+    skip('Clips auto-play — no gesture, no page play() calls',
+      'the window was never visible as frontmost-app content — WebKit ' +
+      'suspends and refuses media for an occluded window by design, so there ' +
+      'is nothing to measure. Bring the window forward and the clips start ' +
+      'with no click. (document.hasFocus() reports true regardless — it ' +
+      'describes the document, not the app.)');
   }
+
+  // From here the resume machinery may run — its only legitimate job is
+  // resuming clips the platform suspended while backgrounded.
+  armResume();
 
   const before = requestCount(CLIPS[0].file);
   verdict.textContent = 'Hover stress running…';

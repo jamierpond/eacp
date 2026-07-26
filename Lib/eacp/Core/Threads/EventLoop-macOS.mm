@@ -31,6 +31,24 @@ BOOL applicationShouldHandleReopen(id, SEL, NSApplication*, BOOL)
     return NO;
 }
 
+// Activate like a normal app on every launch path. Finder/`open` launches
+// activate on their own, but a shell or parent-process launch leaves the app
+// inactive: windows open behind everything and WebKit keeps media suspended
+// until the user clicks. Requested here rather than at loop entry because an
+// activation request made before launching finishes is dropped.
+void applicationDidFinishLaunching(id, SEL, NSNotification*)
+{
+    auto* application = [NSApplication sharedApplication];
+
+    if (application.activationPolicy != NSApplicationActivationPolicyRegular)
+        return;
+
+    if (@available(macOS 14.0, *))
+        [application activate];
+    else
+        [application activateIgnoringOtherApps:YES];
+}
+
 id createAppTerminationBridge()
 {
     static auto cls = []
@@ -43,6 +61,8 @@ id createAppTerminationBridge()
         builder->addMethod(
             @selector(applicationShouldHandleReopen:hasVisibleWindows:),
             applicationShouldHandleReopen);
+        builder->addMethod(@selector(applicationDidFinishLaunching:),
+                           applicationDidFinishLaunching);
         builder->registerClass();
         return builder->get();
     }();

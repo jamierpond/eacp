@@ -123,12 +123,48 @@ struct WebView::Native
 
         config = [[WKWebViewConfiguration alloc] init];
 
-        // Let muted <video autoplay> (e.g. hover-video backgrounds) start
-        // without a click; WKWebView otherwise gates all media behind a user
-        // gesture, which a mouse hover never satisfies. Audio still requires one.
+        // Media never needs a user gesture: <video autoplay>, programmatic
+        // play(), sound on or off -- it all just plays, like a normal app.
+        // WKWebView otherwise applies browser autoplay gating, which a desktop
+        // app's own UI (hover-video backgrounds, launch screens) never satisfies.
         [config.get()
-            setMediaTypesRequiringUserActionForPlayback:
-                WKAudiovisualMediaTypeAudio];
+            setMediaTypesRequiringUserActionForPlayback:WKAudiovisualMediaTypeNone];
+
+        // That setting alone is NOT enough for the autoplay attribute: WebKit
+        // decides eligibility once, at the instant the element can play, and an
+        // element it deems invisible right then (mid opacity fade-in, a freshly
+        // inserted layer, offscreen) silently loses its shot and stays paused
+        // forever -- with no public API to relax the visibility rule. Enforce
+        // the normal-app meaning of <video autoplay> ourselves: nudge play()
+        // until the element has played once. played.length guards it, so a
+        // video the user pauses afterwards is never fought. The Windows
+        // backend needs none of this -- Chromium honours the attribute once
+        // --autoplay-policy=no-user-gesture-required is set.
+        constexpr auto autoplayEnforcer = R"js(
+            (() => {
+              const kick = () => {
+                const media =
+                    document.querySelectorAll('video[autoplay], audio[autoplay]');
+                for (const el of media) {
+                  if (el.paused && !el.ended && el.played.length === 0
+                      && el.readyState >= 2)
+                    el.play().catch(() => {});
+                }
+              };
+              new MutationObserver(kick).observe(
+                  document.documentElement, { childList: true, subtree: true });
+              document.addEventListener('visibilitychange', kick);
+              window.addEventListener('focus', kick);
+              setInterval(kick, 250);
+              kick();
+            })();
+        )js";
+
+        auto* enforcerScript = [[[WKUserScript alloc]
+              initWithSource:Strings::toNSString(autoplayEnforcer)
+               injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+            forMainFrameOnly:YES] autorelease];
+        [config.get().userContentController addUserScript:enforcerScript];
 
         if (options.debugConsole)
         {

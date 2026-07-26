@@ -48,6 +48,11 @@ copies only the bytes requested, straight from the static embedded memory, and
 `planStreamingResponse` emits the correct `200 / 206 / 416` + headers. This
 example plays deliberately heavy clips to make that self-evident.
 
+eacp also guarantees **gesture-free playback** on both backends
+(`WKAudiovisualMediaTypeNone` on macOS, `--autoplay-policy=no-user-gesture-required`
+on WebView2): autoplay and programmatic `play()` never wait for a click, like a
+normal app. The launch check below asserts it.
+
 ## What it also demonstrates: the page side
 
 Correct range support is necessary and **not sufficient**. A hover-video
