@@ -463,6 +463,9 @@ async function stress() {
       playRescues + ' · ' + defaultClip.file + ' at ' +
       defaultClip.video.currentTime.toFixed(2) + 's · userActivation=' +
       activation);
+    // From here the resume machinery may run — its only legitimate job is
+    // resuming clips the platform suspended while backgrounded.
+    armResume();
   } else {
     skip('Clips auto-play — no gesture, no page play() calls',
       'the window was never visible as frontmost-app content — WebKit ' +
@@ -470,11 +473,26 @@ async function stress() {
       'is nothing to measure. Bring the window forward and the clips start ' +
       'with no click. (document.hasFocus() reports true regardless — it ' +
       'describes the document, not the app.)');
-  }
 
-  // From here the resume machinery may run — its only legitimate job is
-  // resuming clips the platform suspended while backgrounded.
-  armResume();
+    // Keep the measurement alive: the page still calls no play(), so when the
+    // window finally becomes visible, whatever starts the clips is the
+    // framework's injected enforcement alone — report that moment as the
+    // check's late verdict. Only then arm the page's resume machinery.
+    const sinceLaunch = performance.now();
+    const watch = setInterval(() => {
+      if (!CLIPS.some((clip) => clip.video.currentTime > 0.05)) {
+        return;
+      }
+      clearInterval(watch);
+      report('[LATE-PASS] Clips auto-play — started ' +
+        ((performance.now() - sinceLaunch) / 1000).toFixed(1) +
+        's later, the moment the window became visible — page play() calls: ' +
+        playRescues + ' · userActivation=' +
+        (navigator.userActivation
+          ? String(navigator.userActivation.hasBeenActive) : 'n/a'));
+      armResume();
+    }, 250);
+  }
 
   const before = requestCount(CLIPS[0].file);
   verdict.textContent = 'Hover stress running…';
