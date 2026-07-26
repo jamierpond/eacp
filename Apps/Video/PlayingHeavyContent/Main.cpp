@@ -82,6 +82,10 @@ struct HeavyContentView final : GPU::GPUView
         setSampleCount(1);
         setContinuous(true);
 
+        // Without this the view is invisible to hitTest, so hovering a tile
+        // never reaches mouseMoved.
+        setHandlesMouseEvents(true);
+
         openClips();
     }
 
