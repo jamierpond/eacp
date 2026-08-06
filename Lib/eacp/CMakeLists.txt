@@ -21,6 +21,10 @@ if ((APPLE OR WIN32) AND EACP_BUILD_GRAPHICS)
     # through the sprite and glyph batchers.
     add_subdirectory(UI)
 
+    # A declarative tier on top of it: render functions, hooks and flex layout
+    # that produce ordinary components for the tier below to draw.
+    add_subdirectory(React)
+
     # After UI, because a document now builds into either tier: native shape
     # layers, or a component tree drawn through the coverage rasterizer.
     add_subdirectory(SVG)

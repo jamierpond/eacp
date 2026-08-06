@@ -10,6 +10,10 @@ if ((APPLE OR WIN32) AND EACP_BUILD_GRAPHICS)
     add_subdirectory(GPU)
     add_subdirectory(UI)
 
+    # The same component tier described declaratively: render functions, hooks
+    # and flex layout instead of resized() and members.
+    add_subdirectory(ReactLike)
+
     # Video decode + playback through the GPU display stack. No WebView needed.
     if (NOT IOS)
         add_subdirectory(Video)

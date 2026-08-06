@@ -21,6 +21,11 @@ if ((APPLE OR WIN32) AND EACP_BUILD_GRAPHICS AND NOT IOS)
     add_subdirectory(GPUWidgets)
     add_subdirectory(UI)
 
+    # The declarative tier above it: class-string parsing, flex layout and
+    # reconciliation. No window and no GPU -- layout writes bounds and measures
+    # through the glyph atlas, and neither needs a drawable.
+    add_subdirectory(React)
+
     # The parse layer and the geometry it builds. Above UI in the list because
     # SVGComponent is a UI::Component, and none of these needs a window.
     add_subdirectory(SVG)
