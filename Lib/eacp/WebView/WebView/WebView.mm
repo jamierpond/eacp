@@ -13,6 +13,7 @@
 #include <eacp/Graphics/Primitives/GraphicUtils.h>
 #if !TARGET_OS_IPHONE
 #include <eacp/Graphics/Graphics/Keyboard-MacOS.h>
+#include <eacp/Graphics/View/View-MacOS.h>
 #endif
 #include <atomic>
 
@@ -22,6 +23,45 @@ std::string safeString(const char* str, const char* fallback = "")
 {
     return str != nullptr ? str : fallback;
 }
+
+// Clang folds away an @available whose floor the build's deployment target
+// already clears, leaving the guarded call to run unconditionally. A consuming
+// app that never sets CMAKE_OSX_DEPLOYMENT_TARGET inherits the build SDK's
+// version and so loses these guards entirely — on macOS 11 the calls below then
+// reach a WKWebView that never had them. Asking the object what it implements
+// is the one question no deployment target can constant-fold, so both guards
+// stand: @available keeps the SDK-versioned property access legal to compile,
+// respondsToSelector: decides whether it actually happens.
+void setWebViewInspectable(WKWebView* webView, bool inspectable)
+{
+    if (@available(macOS 13.3, iOS 16.4, *))
+    {
+        if ([webView respondsToSelector:@selector(setInspectable:)])
+            webView.inspectable = inspectable;
+    }
+}
+
+bool isWebViewInspectable(WKWebView* webView)
+{
+    if (@available(macOS 13.3, iOS 16.4, *))
+    {
+        if ([webView respondsToSelector:@selector(isInspectable)])
+            return webView.inspectable;
+    }
+
+    return false;
+}
+
+#if !TARGET_OS_IPHONE
+void setWebViewUnderPageBackground(WKWebView* webView, NSColor* color)
+{
+    if (@available(macOS 12.0, *))
+    {
+        if ([webView respondsToSelector:@selector(setUnderPageBackgroundColor:)])
+            webView.underPageBackgroundColor = color;
+    }
+}
+#endif
 } // namespace
 
 #if EACP_WEBVIEW_PRIVATE_MEDIA_CAPTURE_SPI
@@ -159,7 +199,8 @@ struct WebView::Native
         webView = detail::createWebView(
             config.get(),
             detail::WebKitOptions {
-              .acceptFirstMouse = options.acceptFirstMouse
+              .acceptFirstMouse = options.acceptFirstMouse,
+              .defaultContextMenu = options.defaultContextMenu
             }
         );
         if (options.transparentBackground)
@@ -172,8 +213,7 @@ struct WebView::Native
             [webView.get() setValue:@NO forKey:@"drawsBackground"];
             webView.get().wantsLayer = YES;
             webView.get().layer.backgroundColor = NSColor.clearColor.CGColor;
-            if (@available(macOS 12.0, *))
-                webView.get().underPageBackgroundColor = NSColor.clearColor;
+            setWebViewUnderPageBackground(webView.get(), NSColor.clearColor);
 #endif
         }
         detail::setFileDragStartedCallback(
@@ -191,10 +231,7 @@ struct WebView::Native
         observingTitle = true;
 
         if (options.debugConsole)
-        {
-            if (@available(macOS 13.3, iOS 16.4, *))
-                webView.get().inspectable = YES;
-        }
+            setWebViewInspectable(webView.get(), true);
     }
 
     Native(WebView& ownerToUse, WebView::PopupInit init)
@@ -219,10 +256,7 @@ struct WebView::Native
         observingTitle = true;
 
         if (init.inspectable)
-        {
-            if (@available(macOS 13.3, iOS 16.4, *))
-                webView.get().inspectable = YES;
-        }
+            setWebViewInspectable(webView.get(), true);
     }
     ~Native()
     {
@@ -260,12 +294,25 @@ struct WebView::Native
         webView.get().frame = toCGRect(bounds);
     }
 
+    // What survives an NSEvent's round trip through an out-of-process host:
+    // the timestamp AppKit stamped on it at creation. See the echo guard in
+    // installKeyEventSupport.
+    struct KeyIdentity
+    {
+        double timestamp = -1.0;
+        uint16_t keyCode = 0;
+
+        bool operator==(const KeyIdentity&) const = default;
+    };
+
     ObjC::Ptr<WKWebView> webView;
     ObjC::Ptr<NSObject> delegate;
     ObjC::Ptr<WKWebViewConfiguration> config;
     Vector<ObjC::Ptr<NSObject>> schemeHandlers;
     MessageHandlerMap messageHandlers;
     WebView& owner;
+    KeyIdentity lastUnhandledDown;
+    KeyIdentity lastUnhandledUp;
     double zoomLevel = 1.0;
     bool observingTitle = false;
 };
@@ -372,9 +419,7 @@ WKWebView* webViewDelegateCreateWebView(id self,
 {
     auto url = safeString([navigationAction.request.URL.absoluteString UTF8String]);
 
-    auto inspectable = NO;
-    if (@available(macOS 13.3, iOS 16.4, *))
-        inspectable = webView.inspectable;
+    auto inspectable = isWebViewInspectable(webView);
 
     auto native = getWebViewDelegateState(self)->nativeWeak.lock();
     if (! native)
@@ -420,10 +465,13 @@ void webViewDelegateRequestMediaCapture(
 
 #if EACP_WEBVIEW_PRIVATE_MEDIA_CAPTURE_SPI
 // macOS 11 fallback. WebKit on macOS 12+ prefers the public selector above;
-// macOS 11 has no public selector and calls this one instead. The availability
-// guard makes the preference explicit: if some future WebKit ever dispatched
-// both, the public path still wins and we'd no-op here. handler() is always
-// invoked so the request never hangs.
+// macOS 11 has no public selector and calls this one instead. It grants
+// unconditionally rather than deferring to the public path on 12+, because the
+// @available that used to express that preference folds to a constant under a
+// deployment target of 12 or newer — which would have turned the deferral into
+// a blanket denial on exactly the macOS 11 systems this exists to serve. Both
+// paths now answer the same way, so whichever WebKit dispatches, the decision
+// matches and the request never hangs.
 void webViewDelegateRequestUserMediaSPI(id,
                                         SEL,
                                         WKWebView*,
@@ -432,11 +480,6 @@ void webViewDelegateRequestUserMediaSPI(id,
                                         NSURL*,
                                         void (^handler)(BOOL authorized))
 {
-    if (@available(macOS 12.0, *))
-    {
-        handler(NO);
-        return;
-    }
     handler(YES);
 }
 #endif
@@ -1006,7 +1049,18 @@ void WebView::takeSnapshot(SnapshotCallback callback)
 void WebView::addScriptMessageHandler(
     const std::string& name, std::function<void(const std::string& message)> handler)
 {
+    // -[WKUserContentController addScriptMessageHandler:name:] RAISES on a name
+    // it already holds, and the controller outlives every page this WebView
+    // loads — so a caller attaching a channel per page (or per editor-open) hits
+    // it on the second attach. The map mirrors the controller's registrations
+    // exactly (see ~Native), and one delegate serves every name, so a name we
+    // already know is already routed: only the handler needs replacing.
+    const auto alreadyRouted = impl->messageHandlers.contains(name);
+
     impl->messageHandlers[name] = std::move(handler);
+
+    if (alreadyRouted)
+        return;
 
     auto* controller = impl->config.get().userContentController;
     auto* nsName = [NSString stringWithUTF8String:name.c_str()];
@@ -1101,11 +1155,46 @@ void WebView::installKeyEventSupport()
         {
             auto type = isDown ? KeyEventType::Down : KeyEventType::Up;
 
+            // A host that runs the editor out of process (Logic hosts AUs in
+            // AUHostingServiceXPC) dispatches a key we handed to its responder
+            // chain straight back into this view. It returns re-encoded across
+            // the boundary — a different NSEvent, isARepeat NO — so nothing
+            // marks it as ours except the timestamp AppKit stamped on the
+            // original. Report it and it goes back out, and one keypress
+            // becomes an unbounded round trip that freezes the host.
+            auto identity = Native::KeyIdentity {event.timestamp, event.keyCode};
+            auto& lastUnhandled =
+                isDown ? impl->lastUnhandledDown : impl->lastUnhandledUp;
+
+            if (identity == lastUnhandled)
+                return;
+
+            lastUnhandled = identity;
+
             if (onUnhandledKeyEvent && onUnhandledKeyEvent(keyEventFrom(event, type)))
                 return;
 
             auto* webView = impl->webView.get();
-            NSResponder* next = webView.superview.nextResponder;
+
+            // Past EVERY framework view above the page, not just the one
+            // hosting it. An EacpNativeView's keyDown: feeds the C++ View and
+            // never calls super (see isFrameworkNativeView), so handing the
+            // event to the first one up ends the chain in a view tree that has
+            // nowhere to put it — silently, which is exactly how a plugin
+            // editor swallows a DAW's spacebar.
+            //
+            // Where the page IS the content view — an eacp Window, and every
+            // case this shipped against — nothing framework-owned sits above
+            // it and the walk is the single hop it always was. It only does
+            // more in a composition: the plugin editor's overlay lives in a
+            // container view above a GPU view, and the responder that has to
+            // hear the key is the embedder's, two levels up.
+            NSView* outermost = webView.superview;
+            while (outermost.superview != nil
+                   && isFrameworkNativeView(outermost.superview))
+                outermost = outermost.superview;
+
+            NSResponder* next = outermost.nextResponder;
             if (next == nil)
                 return;
 
