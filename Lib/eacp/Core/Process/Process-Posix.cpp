@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -279,6 +280,18 @@ private:
             ::close(out[1]);
             return false;
         }
+
+        // Close-on-exec on every end, so a child spawned *by another thread*
+        // while these are open does not inherit them.
+        //
+        // Without it a long-lived child ends up holding the write end of
+        // somebody else's pipe, and that reader never sees EOF: the command
+        // finished minutes ago and its output never arrives, which looks like a
+        // hang in code that has nothing to do with processes. The three ends
+        // this child actually needs are dup2'd onto its stdio by the file
+        // actions below, and a dup2'd descriptor does not carry the flag.
+        for (auto fd: {in[0], in[1], out[0], out[1], err[0], err[1]})
+            ::fcntl(fd, F_SETFD, FD_CLOEXEC);
 
         return true;
     }
