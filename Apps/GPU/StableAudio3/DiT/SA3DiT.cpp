@@ -12,6 +12,7 @@
 #include <eacp/ML/Kernels/SwiGLU.h>
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 namespace eacp::SA3DiT
@@ -124,17 +125,8 @@ Tensor selfAttentionOutput(ComputePass& pass,
     auto qr = applyRoPE(pass, qn, rotaryInvFreq, config.numHeads, config.headDim, device);
     auto kr = applyRoPE(pass, kn, rotaryInvFreq, config.numHeads, config.headDim, device);
 
-    auto mainAttn = attention(pass,
-                              qr,
-                              kr,
-                              v,
-                              config.numHeads,
-                              config.headDim,
-                              nullptr,
-                              nullptr,
-                              nullptr,
-                              config.qkNormEpsilon,
-                              device);
+    auto mainAttn =
+        attention(pass, qr, kr, v, config.numHeads, config.headDim, {}, device);
 
     if (!config.differential)
         return mainAttn;
@@ -158,71 +150,93 @@ Tensor selfAttentionOutput(ComputePass& pass,
     auto qDiffR = applyRoPE(pass, qDiffN, rotaryInvFreq, config.numHeads, config.headDim, device);
     auto kDiffR = applyRoPE(pass, kDiffN, rotaryInvFreq, config.numHeads, config.headDim, device);
 
-    auto diffAttn = attention(pass,
-                              qDiffR,
-                              kDiffR,
-                              v,
-                              config.numHeads,
-                              config.headDim,
-                              nullptr,
-                              nullptr,
-                              nullptr,
-                              config.qkNormEpsilon,
-                              device);
+    auto diffAttn = attention(
+        pass, qDiffR, kDiffR, v, config.numHeads, config.headDim, {}, device);
 
     return subtractTensors(pass, mainAttn, diffAttn, device);
 }
 
+PromptKeys promptKeysFor(ComputePass& pass,
+                         const DiTConfig& config,
+                         const LayerWeights& layer,
+                         const Tensor& projectedContext,
+                         Device& device)
+{
+    auto embedDimC = config.embedDim;
+    auto keysAndValues =
+        linear(pass, projectedContext, layer.crossAttnKVWeight, nullptr, device);
+
+    auto normedKeys = [&](int slice)
+    {
+        auto keys =
+            sliceColumns(pass, keysAndValues, slice * embedDimC, embedDimC, device);
+        return rmsNormPerHead(pass,
+                              keys,
+                              layer.crossAttnKNormGamma,
+                              config.headDim,
+                              config.qkNormEpsilon,
+                              device);
+    };
+
+    if (!config.differential)
+        return PromptKeys {
+            .keys = normedKeys(0),
+            .diffKeys = std::nullopt,
+            .values =
+                sliceColumns(pass, keysAndValues, 1 * embedDimC, embedDimC, device),
+        };
+
+    return PromptKeys {
+        .keys = normedKeys(0),
+        .diffKeys = normedKeys(1),
+        .values =
+            sliceColumns(pass, keysAndValues, 2 * embedDimC, embedDimC, device),
+    };
+}
+
+Tensor projectContext(ComputePass& pass,
+                      const Weights& weights,
+                      const Tensor& crossAttnContext,
+                      Device& device)
+{
+    auto projected =
+        linear(pass, crossAttnContext, weights.toCondEmbed0Weight, nullptr, device);
+    projected = applyActivation(pass, projected, ActivationKind::SiLU, device);
+    return linear(pass, projected, weights.toCondEmbed2Weight, nullptr, device);
+}
+
 Tensor crossAttentionOutput(ComputePass& pass,
-                           const DiTConfig& config,
-                           const LayerWeights& layer,
-                           const Tensor& xn2,
-                           const Tensor& crossAttnContext,
-                           Device& device)
+                            const DiTConfig& config,
+                            const LayerWeights& layer,
+                            const Tensor& xn2,
+                            const PromptKeys& prompt,
+                            Device& device)
 {
     auto embedDimC = config.embedDim;
 
     if (!config.differential)
     {
         auto q2 = linear(pass, xn2, layer.crossAttnQWeight, nullptr, device);
-        auto kv2 = linear(pass, crossAttnContext, layer.crossAttnKVWeight, nullptr, device);
-        auto k2 = sliceColumns(pass, kv2, 0 * embedDimC, embedDimC, device);
-        auto v2 = sliceColumns(pass, kv2, 1 * embedDimC, embedDimC, device);
-
         auto q2n = rmsNormPerHead(pass,
                                   q2,
                                   layer.crossAttnQNormGamma,
                                   config.headDim,
                                   config.qkNormEpsilon,
                                   device);
-        auto k2n = rmsNormPerHead(pass,
-                                  k2,
-                                  layer.crossAttnKNormGamma,
-                                  config.headDim,
-                                  config.qkNormEpsilon,
-                                  device);
 
         return attention(pass,
                          q2n,
-                         k2n,
-                         v2,
+                         prompt.keys,
+                         prompt.values,
                          config.numHeads,
                          config.headDim,
-                         nullptr,
-                         nullptr,
-                         nullptr,
-                         config.qkNormEpsilon,
+                         {},
                          device);
     }
 
     auto q2Full = linear(pass, xn2, layer.crossAttnQWeight, nullptr, device);
     auto q2 = sliceColumns(pass, q2Full, 0 * embedDimC, embedDimC, device);
     auto q2Diff = sliceColumns(pass, q2Full, 1 * embedDimC, embedDimC, device);
-
-    auto kv2Full = linear(pass, crossAttnContext, layer.crossAttnKVWeight, nullptr, device);
-    auto k2 = sliceColumns(pass, kv2Full, 0 * embedDimC, embedDimC, device);
-    auto k2Diff = sliceColumns(pass, kv2Full, 1 * embedDimC, embedDimC, device);
-    auto v2 = sliceColumns(pass, kv2Full, 2 * embedDimC, embedDimC, device);
 
     auto q2n = rmsNormPerHead(pass,
                               q2,
@@ -236,41 +250,23 @@ Tensor crossAttentionOutput(ComputePass& pass,
                                   config.headDim,
                                   config.qkNormEpsilon,
                                   device);
-    auto k2n = rmsNormPerHead(pass,
-                              k2,
-                              layer.crossAttnKNormGamma,
-                              config.headDim,
-                              config.qkNormEpsilon,
-                              device);
-    auto k2DiffN = rmsNormPerHead(pass,
-                                  k2Diff,
-                                  layer.crossAttnKNormGamma,
-                                  config.headDim,
-                                  config.qkNormEpsilon,
-                                  device);
 
     auto mainCross = attention(pass,
-                              q2n,
-                              k2n,
-                              v2,
-                              config.numHeads,
-                              config.headDim,
-                              nullptr,
-                              nullptr,
-                              nullptr,
-                              config.qkNormEpsilon,
-                              device);
+                               q2n,
+                               prompt.keys,
+                               prompt.values,
+                               config.numHeads,
+                               config.headDim,
+                               {},
+                               device);
     auto diffCross = attention(pass,
-                              q2DiffN,
-                              k2DiffN,
-                              v2,
-                              config.numHeads,
-                              config.headDim,
-                              nullptr,
-                              nullptr,
-                              nullptr,
-                              config.qkNormEpsilon,
-                              device);
+                               q2DiffN,
+                               *prompt.diffKeys,
+                               prompt.values,
+                               config.numHeads,
+                               config.headDim,
+                               {},
+                               device);
 
     return subtractTensors(pass, mainCross, diffCross, device);
 }
@@ -286,17 +282,47 @@ Tensor transformerBlock(ComputePass& pass,
                         bool applyLocalConditioning,
                         Device& device)
 {
+    auto prompt = promptKeysFor(pass, config, layer, crossAttnContext, device);
+
+    return transformerBlock(pass,
+                            config,
+                            layer,
+                            x,
+                            rotaryInvFreq,
+                            globalCondBase,
+                            prompt,
+                            applyLocalConditioning,
+                            device);
+}
+
+Tensor transformerBlock(ComputePass& pass,
+                        const DiTConfig& config,
+                        const LayerWeights& layer,
+                        const Tensor& x,
+                        const Tensor& rotaryInvFreq,
+                        const Tensor& globalCondBase,
+                        const PromptKeys& prompt,
+                        bool applyLocalConditioning,
+                        Device& device)
+{
     auto embedDimC = config.embedDim;
     auto seqLen = x.rows();
 
     auto modulation = addTensors(pass, globalCondBase, layer.toScaleShiftGate, device);
 
-    auto scaleSelf = sliceColumns(pass, modulation, 0 * embedDimC, embedDimC, device);
-    auto shiftSelf = sliceColumns(pass, modulation, 1 * embedDimC, embedDimC, device);
-    auto gateSelf = sliceColumns(pass, modulation, 2 * embedDimC, embedDimC, device);
-    auto scaleFf = sliceColumns(pass, modulation, 3 * embedDimC, embedDimC, device);
-    auto shiftFf = sliceColumns(pass, modulation, 4 * embedDimC, embedDimC, device);
-    auto gateFf = sliceColumns(pass, modulation, 5 * embedDimC, embedDimC, device);
+    // The modulation is one row of six: each part is read where it lies.
+    auto modulationPart = [&](int part)
+    {
+        auto bytes = (std::int64_t) embedDimC * (std::int64_t) sizeof(float);
+        return BufferRange {&modulation.buffer(), part * bytes, bytes};
+    };
+
+    auto scaleSelf = modulationPart(0);
+    auto shiftSelf = modulationPart(1);
+    auto gateSelf = modulationPart(2);
+    auto scaleFf = modulationPart(3);
+    auto shiftFf = modulationPart(4);
+    auto gateFf = modulationPart(5);
 
     auto xn = rmsNorm(pass, x, layer.preNormGamma, config.rmsNormEpsilon, device);
     auto xm = adaLNModulate(pass, xn, scaleSelf, shiftSelf, device);
@@ -309,8 +335,7 @@ Tensor transformerBlock(ComputePass& pass,
     auto x1 = addTensors(pass, x, gatedSelf, device);
 
     auto xn2 = rmsNorm(pass, x1, layer.crossAttendNormGamma, config.rmsNormEpsilon, device);
-    auto crossOut =
-        crossAttentionOutput(pass, config, layer, xn2, crossAttnContext, device);
+    auto crossOut = crossAttentionOutput(pass, config, layer, xn2, prompt, device);
     auto crossFlat = reshapeFlat(std::move(crossOut), {seqLen, embedDimC});
     auto crossProj = linear(pass, crossFlat, layer.crossAttnOutWeight, nullptr, device);
 
@@ -329,13 +354,45 @@ Tensor transformerBlock(ComputePass& pass,
     return addTensors(pass, x3, gatedFf, device);
 }
 
+Prompt preparePrompt(ComputePass& pass,
+                     const Weights& weights,
+                     const Tensor& crossAttnContext,
+                     Device& device)
+{
+    auto projected = projectContext(pass, weights, crossAttnContext, device);
+    auto prompt = Prompt {};
+    prompt.layers.reserve(weights.layers.size());
+
+    for (const auto& layer: weights.layers)
+        prompt.layers.push_back(
+            promptKeysFor(pass, weights.config, layer, projected, device));
+
+    return prompt;
+}
+
+Prompt preparePrompt(const Weights& weights,
+                     const Tensor& crossAttnContext,
+                     Device& device)
+{
+    auto prompt = std::optional<Prompt> {};
+    auto commands = device.makeCommandBuffer();
+
+    {
+        auto pass = commands.beginCompute();
+        prompt = preparePrompt(pass, weights, crossAttnContext, device);
+    }
+
+    commands.commit();
+    return std::move(*prompt);
+}
+
 Tensor forward(ComputePass& pass,
-              const Weights& weights,
-              const Tensor& latent,
-              float timestep,
-              float secondsTotal,
-              const Tensor& crossAttnContext,
-              Device& device)
+               const Weights& weights,
+               const Tensor& latent,
+               float timestep,
+               float secondsTotal,
+               const Prompt& prompt,
+               Device& device)
 {
     auto& config = weights.config;
     auto latentLength = latent.rows();
@@ -349,18 +406,14 @@ Tensor forward(ComputePass& pass,
 
     auto globalCondBase = globalConditioning(pass, weights, timestep, secondsTotal, device);
 
-    auto projectedContext = linear(pass, crossAttnContext, weights.toCondEmbed0Weight, nullptr, device);
-    projectedContext = applyActivation(pass, projectedContext, ActivationKind::SiLU, device);
-    projectedContext = linear(pass, projectedContext, weights.toCondEmbed2Weight, nullptr, device);
-
-    for (auto& layer: weights.layers)
+    for (auto layer = std::size_t {0}; layer < weights.layers.size(); ++layer)
         seq = transformerBlock(pass,
                                config,
-                               layer,
+                               weights.layers[layer],
                                seq,
                                weights.rotaryInvFreq,
                                globalCondBase,
-                               projectedContext,
+                               prompt.layers[layer],
                                false,
                                device);
 
@@ -370,5 +423,17 @@ Tensor forward(ComputePass& pass,
     post = addTensors(pass, post, projOut, device);
 
     return post;
+}
+
+Tensor forward(ComputePass& pass,
+               const Weights& weights,
+               const Tensor& latent,
+               float timestep,
+               float secondsTotal,
+               const Tensor& crossAttnContext,
+               Device& device)
+{
+    auto prompt = preparePrompt(pass, weights, crossAttnContext, device);
+    return forward(pass, weights, latent, timestep, secondsTotal, prompt, device);
 }
 }

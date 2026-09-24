@@ -26,6 +26,32 @@ private:
     void define() override;
 };
 
+// RMSNormKernel for runs of exactly 64 - a head of attention - four to a
+// group. RMSNormKernel gives a 64-wide run a group of 256 threads, three
+// quarters of which hold nothing; this gives each run two SIMD groups and folds
+// them itself. Each run's sum is the same two SIMD-group sums added once that
+// the wide fold made, so the result is bit for bit RMSNormKernel's.
+class RMSNormHeadKernel final : public GPU::ComputeProgram
+{
+public:
+    RMSNormHeadKernel();
+
+    static constexpr int headWidth = 64;
+
+    void dispatch(GPU::ComputePass& pass, int runs);
+
+    GPU::Uniform<GPU::InputBuffer> input;
+    GPU::Uniform<GPU::InputBuffer> gamma;
+    GPU::Uniform<GPU::OutputBuffer> output;
+    GPU::Uniform<GPU::UInt> runCount;
+    GPU::Uniform<GPU::Float> epsilon;
+
+    EACP_SHADER(input, gamma, output, runCount, epsilon)
+
+private:
+    void define() override;
+};
+
 class LayerNormKernel final : public GPU::ComputeProgram
 {
 public:

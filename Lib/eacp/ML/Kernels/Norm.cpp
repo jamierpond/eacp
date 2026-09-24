@@ -50,6 +50,52 @@ void RMSNormKernel::define()
         });
 }
 
+namespace
+{
+constexpr auto headsPerGroup = normGroupWidth / RMSNormHeadKernel::headWidth;
+}
+
+RMSNormHeadKernel::RMSNormHeadKernel()
+    : ComputeProgram({normGroupWidth, 1, 1})
+{
+    compile();
+}
+
+void RMSNormHeadKernel::dispatch(ComputePass& pass, int runs)
+{
+    runCount = (std::uint32_t) runs;
+    pass.dispatch(*this, normGroupWidth, (runs + headsPerGroup - 1) / headsPerGroup);
+}
+
+void RMSNormHeadKernel::define()
+{
+    auto lane = threadPosition().x;
+    auto slot = lane / (unsigned) headWidth;
+    auto element = lane % (unsigned) headWidth;
+    auto run = threadPosition().y * (unsigned) headsPerGroup + slot;
+    auto inside = run < runCount;
+    auto index = min(run, runCount - 1u) * (unsigned) headWidth + element;
+
+    auto value = input[index];
+    auto square = select(inside, value * value, 0.f);
+
+    // Two SIMD groups to a run: each folds its half, and the two halves are
+    // added in the one add the wide fold makes of them.
+    auto halves = shared<Float>((unsigned) normGroupWidth / (unsigned) simdWidth);
+    auto half = simdSum(square);
+
+    ifThen(lane % (unsigned) simdWidth == 0u,
+           [&] { write(halves, lane / (unsigned) simdWidth, half); });
+
+    barrier();
+
+    auto sum = halves[slot * 2u] + halves[slot * 2u + 1u];
+    auto meanSquare = sum / toFloat(unsignedInteger((unsigned) headWidth));
+    auto scale = rsqrt(meanSquare + epsilon);
+
+    ifThen(inside, [&] { write(output, index, value * scale * gamma[element]); });
+}
+
 LayerNormKernel::LayerNormKernel()
     : ComputeProgram({normGroupWidth, 1, 1})
 {
@@ -269,6 +315,18 @@ Tensor rmsNormPerHead(ComputePass& pass,
                       Device& device)
 {
     auto result = Tensor::uninitializedF32(input.shape(), device);
+
+    if (headDim == RMSNormHeadKernel::headWidth)
+    {
+        auto& kernel = sharedKernel<RMSNormHeadKernel>(device);
+        kernel.input = input.buffer();
+        kernel.gamma = gamma.buffer();
+        kernel.output = result.buffer();
+        kernel.epsilon = epsilon;
+        kernel.dispatch(pass, input.count() / headDim);
+
+        return result;
+    }
 
     auto& kernel = sharedKernel<RMSNormKernel>(device);
     kernel.input = input.buffer();
