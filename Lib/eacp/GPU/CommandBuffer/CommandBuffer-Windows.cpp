@@ -4,6 +4,7 @@
 
 #include "../Device/Device.h"
 #include "../Timing/CommandTimer.h"
+#include "../Windows/D3D12Cost-Windows.h"
 #include "../Windows/D3D12Types.h"
 
 #include <cstring>
@@ -63,6 +64,30 @@ struct CommandBuffer::Native
             context.setOpenRecording(nullptr);
     }
 
+    // An encoder over this recording, its start timestamp written when it has a
+    // label and there is a query heap to write it to.
+    D3D12ComputeEncoder* openEncoder(std::string_view label)
+    {
+        auto* list = commands->list.get();
+        auto* encoder = new D3D12ComputeEncoder {commands};
+
+        const auto pass = timer.beginPass(label, *device, list);
+
+        if (pass >= 0)
+        {
+            if (auto* heap = static_cast<ID3D12QueryHeap*>(timer.nativeSamples()))
+            {
+                list->EndQuery(
+                    heap, D3D12_QUERY_TYPE_TIMESTAMP, static_cast<UINT>(pass * 2));
+
+                encoder->queryHeap = heap;
+                encoder->endQuery = pass * 2 + 1;
+            }
+        }
+
+        return encoder;
+    }
+
     bool canSubmit() const { return commands != nullptr && !committed; }
 
     // Everything a submission needs recorded on it, in the order it needs it.
@@ -92,35 +117,33 @@ CommandBuffer::CommandBuffer(Device& device)
 {
 }
 
-ComputePass CommandBuffer::beginCompute(std::string_view label, DispatchOrder order)
+ComputePass CommandBuffer::beginCompute(std::string_view label,
+                                        DispatchOrder order,
+                                        TimingScope scope)
 {
+    impl->device->assertOwningThread();
+
     if (impl->commands == nullptr || impl->committed)
         return ComputePass(nullptr, order);
-
-    auto* list = impl->commands->list.get();
 
     // The root signature and heaps are fixed for every compute pipeline, so
     // binding them here frees the pass from caring about setPipeline/set*
     // ordering.
-    bindComputeRootState(impl->context, list);
+    bindComputeRootState(impl->context, impl->commands->list.get());
 
-    auto* encoder = new D3D12ComputeEncoder {impl->commands};
+    if (scope == TimingScope::Pass)
+        return ComputePass(impl->openEncoder(label), order);
 
-    const auto pass = impl->timer.beginPass(label, *impl->device, list);
+    // A timestamp can go anywhere in a D3D12 list, so a timed dispatch is a
+    // pair of them around it on the one list.
+    auto* native = impl.get();
 
-    if (pass >= 0)
-    {
-        if (auto* heap = static_cast<ID3D12QueryHeap*>(impl->timer.nativeSamples()))
-        {
-            list->EndQuery(
-                heap, D3D12_QUERY_TYPE_TIMESTAMP, static_cast<UINT>(pass * 2));
-
-            encoder->queryHeap = heap;
-            encoder->endQuery = pass * 2 + 1;
-        }
-    }
-
-    return ComputePass(encoder, order);
+    return ComputePass(
+        impl->openEncoder({}),
+        order,
+        [native](std::string_view dispatchLabel)
+        { return (void*) native->openEncoder(dispatchLabel); },
+        std::string {label});
 }
 
 void CommandBuffer::fill(const BufferRange& range, std::uint8_t value)
@@ -169,6 +192,8 @@ void CommandBuffer::fill(const BufferRange& range, std::uint8_t value)
 
 void CommandBuffer::submit()
 {
+    impl->device->assertOwningThread();
+
     if (impl->canSubmit())
         impl->endAndSubmit();
 }
@@ -188,6 +213,10 @@ void CommandBuffer::commit()
 
 Threads::Async<void> CommandBuffer::commitAsync()
 {
+    // The submission is the part that belongs to this thread; the completion
+    // handler below hops to the message thread on its own and asserts nothing.
+    impl->device->assertOwningThread();
+
     auto promise = Threads::AsyncPromise<void> {};
 
     if (!impl->canSubmit())
@@ -210,8 +239,15 @@ Threads::Async<void> CommandBuffer::commitAsync()
 
 void CommandBuffer::wait()
 {
+    impl->device->assertOwningThread();
+
     if (impl->committed)
+    {
+        static auto blocked = D3D12CostCounter {"waits"};
+        auto cost = ScopedD3D12Cost {blocked};
+
         impl->context.waitFor(impl->completionValue);
+    }
 }
 
 bool CommandBuffer::isComplete() const
@@ -224,7 +260,10 @@ bool CommandBuffer::isComplete() const
 // submitted in between. That costs a pipelined loop here what it saves on
 // Metal, and is the price of a default-heap buffer having no CPU mapping to
 // memcpy out of.
-void CommandBuffer::read(const Buffer& buffer, void* dst, int bytes, int offset)
+void CommandBuffer::read(const Buffer& buffer,
+                         void* dst,
+                         std::int64_t bytes,
+                         std::int64_t offset)
 {
     wait();
     buffer.read(dst, bytes, offset);

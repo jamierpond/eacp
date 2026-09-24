@@ -3,9 +3,14 @@
 #include "../Device/Device.h"
 #include "../Frame/ComputePass.h"
 #include "../Pipeline/ComputePipeline.h"
+#include "../Pipeline/ComputePipelineCache.h"
+#include "KernelName.h"
 #include "ShaderProgram.h"
 
 #include <eacp/Core/Utils/Logging.h>
+
+#include <stdexcept>
+#include <string>
 
 // A compute kernel authored as a struct, the compute sibling of ShaderProgram.
 // Uniforms are named, typed members set by name; storage buffers are members
@@ -48,97 +53,150 @@ namespace eacp::GPU
 // compute pass at the slot its handle was declared with. One walk rather than
 // one per resource kind - the members are visited in declaration order either
 // way, and the slots are already carried by the handles.
+//
+// A member nothing was assigned to is recorded rather than skipped, so the
+// dispatch can refuse it: a kernel that runs with a slot left over from
+// whatever the pass bound last reads memory nobody meant it to. A member
+// assigned a buffer that never got storage is still skipped, as the pass's own
+// bind would skip it.
+//
+// With releasing on, every member is cleared once it is bound, so the pointer
+// it held into a buffer the caller is about to free does not outlive the
+// dispatch. That is what makes a shared kernel safe: see sharedKernel.
 class ComputeBindVisitor final : public ShaderVisitor
 {
 public:
-    explicit ComputeBindVisitor(ComputePass& passToUse)
+    ComputeBindVisitor(ComputePass& passToUse, bool releaseAfterBinding)
         : pass(passToUse)
+        , releasing(releaseAfterBinding)
     {
     }
+
+    // The first member the walk found with nothing assigned, or null.
+    const char* unassigned() const { return firstUnassigned; }
 
     void
         onUniform(const char*, ValueType, detail::ValueHandle&, const void*) override
     {
     }
 
-    void onInputBuffer(const char*,
+    void onInputBuffer(const char* name,
                        InputBuffer& handle,
                        const BufferRange& range) override
     {
-        if (range.isValid())
+        if (isAssigned(name, range.buffer) && range.isValid())
             pass.setInputBuffer(range, handle.slot);
+
+        release(handle);
     }
 
-    void onOutputBuffer(const char*,
+    void onOutputBuffer(const char* name,
                         OutputBuffer& handle,
                         const BufferRange& range) override
     {
-        if (range.isValid())
+        if (isAssigned(name, range.buffer) && range.isValid())
             pass.setOutputBuffer(range, handle.slot);
+
+        release(handle);
     }
 
     // The integer buffers bind through the same two calls the float ones do:
     // what the elements are is settled by the kernel's declaration, not by how
     // the pass hands the buffer over.
-    void onUIntInputBuffer(const char*,
+    void onUIntInputBuffer(const char* name,
                            UIntInputBuffer& handle,
                            const BufferRange& range) override
     {
-        if (range.isValid())
+        if (isAssigned(name, range.buffer) && range.isValid())
             pass.setInputBuffer(range, handle.slot);
+
+        release(handle);
     }
 
-    void onUIntOutputBuffer(const char*,
+    void onUIntOutputBuffer(const char* name,
                             UIntOutputBuffer& handle,
                             const BufferRange& range) override
     {
-        if (range.isValid())
+        if (isAssigned(name, range.buffer) && range.isValid())
             pass.setOutputBuffer(range, handle.slot);
+
+        release(handle);
     }
 
     // An atomic buffer binds exactly as an output does - a Metal device buffer,
     // a D3D UAV - since what makes it atomic is the type the kernel declares it
     // through and not how the pass hands it over.
-    void onAtomicBuffer(const char*,
+    void onAtomicBuffer(const char* name,
                         AtomicBuffer& handle,
                         const BufferRange& range) override
     {
-        if (range.isValid())
+        if (isAssigned(name, range.buffer) && range.isValid())
             pass.setOutputBuffer(range, handle.slot);
+
+        release(handle);
     }
 
-    void onTexture(const char*,
+    void onTexture(const char* name,
                    Texture2D& handle,
                    const Texture* texture,
                    TextureSampling sampling) override
     {
-        if (texture != nullptr)
+        if (isAssigned(name, texture))
             pass.setInputTexture(*texture, handle.slot, sampling);
+
+        release(handle);
     }
 
     // The same call the 2D one takes, for the reason the render bind visitor
     // gives: a cube is one texture on one slot of one index space on both
     // backends, and its dimensionality was settled when it was created and when
     // the kernel was compiled.
-    void onCubeTexture(const char*,
+    void onCubeTexture(const char* name,
                        TextureCube& handle,
                        const Texture* texture,
                        TextureSampling sampling) override
     {
-        if (texture != nullptr)
+        if (isAssigned(name, texture))
             pass.setInputTexture(*texture, handle.slot, sampling);
+
+        release(handle);
     }
 
-    void onWritableTexture(const char*,
+    void onWritableTexture(const char* name,
                            WritableTexture2D& handle,
                            const Texture* texture) override
     {
-        if (texture != nullptr)
+        if (isAssigned(name, texture))
             pass.setOutputTexture(*texture, handle.slot);
+
+        release(handle);
     }
 
 private:
+    bool isAssigned(const char* name, const void* resource)
+    {
+        if (resource != nullptr)
+            return true;
+
+        if (firstUnassigned == nullptr)
+            firstUnassigned = name;
+
+        return false;
+    }
+
+    // Every handle the walk is given is the base of the Uniform member that
+    // holds its binding - ShaderVisitor's operator() hands the member itself
+    // over - so the member is reached back through it.
+    template <typename Handle>
+    void release(Handle& handle)
+    {
+        if (releasing)
+            static_cast<Uniform<Handle>&>(handle).value = {};
+    }
+
     ComputePass& pass;
+    bool releasing = false;
+    const char* firstUnassigned = nullptr;
 };
 
 // Base for struct-authored compute kernels. Derive, declare uniform and buffer
@@ -166,6 +224,11 @@ public:
 
     const ShaderSource& source() const { return generated.source; }
 
+    // What a per-dispatch timing calls this kernel: its type's name without
+    // namespaces, "LinearF32". Override it to tell apart the variants one type
+    // builds.
+    virtual std::string name() const { return readableTypeName(typeid(*this)); }
+
     // The graph the body was recorded into, so either backend's text can be
     // emitted from the kernel that ships rather than from a copy of its body.
     const ShaderGraph& graph() const { return builder.graph(); }
@@ -174,12 +237,27 @@ public:
     // on the Device whose passes will dispatch it. A pipeline belongs to the
     // device that compiled it, so a kernel a worker Device dispatches is
     // compiled on that Device rather than on the process-wide one.
+    //
+    // Only the first kernel with a given source compiles it: every later one,
+    // this program's type or another that emitted the same text, shares that
+    // library and pipeline (compileComputeCached). Safe to call from a thread
+    // other than the Device's, as compiling a kernel always has been.
     void prepare(Device& device)
     {
         reportThreadgroupMemoryOverBudget(device);
 
-        shaderLibrary.emplace(device, generated.source);
-        pipelineState.emplace(device, *shaderLibrary);
+        // Refused here rather than handed to the backend. A packed fragment
+        // this device has no instruction for is a kernel built against the
+        // wrong answer to a question it was supposed to ask first, and what
+        // the shader compiler would say about it names a type, not the query.
+        if (!fitsPackedSimdMatrix(device))
+        {
+            reportUnsupportedPackedSimdMatrix(device);
+            buildRefusedPipeline(device);
+            return;
+        }
+
+        compiled = compileComputeCached(device, generated.source);
 
         reportSimdWidthMismatch();
     }
@@ -204,7 +282,43 @@ public:
         return budget <= 0 || threadgroupMemoryBytes() <= budget;
     }
 
-    const ComputePipeline& pipeline() const { return *pipelineState; }
+    // Whether this kernel's packed fragments are ones this device can **build**
+    // - a different question from whether it has instructions for them, and the
+    // two are worth keeping apart.
+    //
+    // Device::supportsHalfSimdMatrix and supportsBFloat16SimdMatrix answer
+    // "natively, in one instruction". They are what a kernel author picks a
+    // tiling around, and they are false on D3D12 and Vulkan. This answers "at
+    // all", and on those two backends it is true whatever they said: a packed
+    // load lowers there to the same two-floats-per-lane emulation every other
+    // fragment operation lowers to, each lane widening the pair it holds. Only
+    // Metal has a shader that would literally not compile - the packed fragment
+    // is a type the dialect either has or does not - so only Metal refuses.
+    //
+    // A kernel that loads no packed fragment builds anywhere.
+    bool fitsPackedSimdMatrix(const Device& device) const
+    {
+        if (source().backend != ShaderBackend::Metal)
+            return true;
+
+        auto needsHalf = graph().usesPackedSimdMatrix(SimdMatrixElement::Half);
+        auto needsBFloat16 =
+            graph().usesPackedSimdMatrix(SimdMatrixElement::BFloat16);
+
+        return (!needsHalf || device.supportsHalfSimdMatrix())
+               && (!needsBFloat16 || device.supportsBFloat16SimdMatrix());
+    }
+
+    const ComputePipeline& pipeline() const { return compiled->pipeline; }
+
+    // Whether prepare() left something dispatchable. False before prepare(), of
+    // a refused build, and of a shader that would not compile - all three being
+    // states in which a dispatch of this program does nothing, so a caller that
+    // would rather know than find out asks here.
+    bool isValid() const
+    {
+        return compiled != nullptr && compiled->pipeline.isValid();
+    }
 
     // Re-packs the current uniform values, appends the element count the
     // generated bounds guard reads, and returns the block, ready for
@@ -268,13 +382,29 @@ public:
 
     int uniformByteSize() const { return uniformBytes.size(); }
 
-    // Binds every assigned buffer and texture member to the pass at its
-    // declared slot. ComputePass::dispatch(program, ...) calls this.
+    // Binds every buffer and texture member to the pass at its declared slot.
+    // ComputePass::dispatch(program, ...) calls this. A member nothing was
+    // assigned to throws std::logic_error naming the kernel and the member, so
+    // the dispatch never runs against a slot the kernel did not fill.
     void bindResources(ComputePass& pass)
     {
-        auto bindVisitor = ComputeBindVisitor {pass};
+        auto bindVisitor = ComputeBindVisitor {pass, releasesBindings};
         reflectMembers(bindVisitor);
+
+        if (bindVisitor.unassigned() != nullptr)
+            throwUnassigned(bindVisitor.unassigned());
     }
+
+    // Makes every dispatch clear the kernel's buffer and texture members once
+    // it has bound them, so each dispatch binds only what was assigned for it
+    // and a member left unassigned throws instead of reaching for a buffer an
+    // earlier caller has since freed. sharedKernel turns this on for the
+    // instances it hands out; a kernel its owner dispatches again and again
+    // with the same buffers leaves it off. Uniform values are copied into the
+    // dispatch and are kept either way.
+    void releaseBindingsAfterEachDispatch() { releasesBindings = true; }
+
+    bool releasesBindingsAfterEachDispatch() const { return releasesBindings; }
 
 protected:
     // Runs the member build walk (adopting uniform and buffer slots), the
@@ -384,6 +514,26 @@ protected:
         return builder.simdMatrix(buffer, offset, rowStride);
     }
 
+    // The packed siblings: an 8x8 patch of fp16 or bf16 read straight out of a
+    // device buffer, the offset and the row stride counting in those
+    // sixteen-bit elements. What a kernel saves by taking one is the tile it
+    // would otherwise widen a weight into and the two barriers around it. See
+    // ShaderBuilder for the rules, and fitsPackedSimdMatrix for the question to
+    // put to the device before recording one.
+    SimdMatrix simdMatrixHalf(const InputBuffer& buffer,
+                              const UInt& offset,
+                              const UInt& rowStride)
+    {
+        return builder.simdMatrixHalf(buffer, offset, rowStride);
+    }
+
+    SimdMatrix simdMatrixBFloat16(const InputBuffer& buffer,
+                                  const UInt& offset,
+                                  const UInt& rowStride)
+    {
+        return builder.simdMatrixBFloat16(buffer, offset, rowStride);
+    }
+
     void multiplyAccumulate(const SimdMatrix& accumulator,
                             const SimdMatrix& left,
                             const SimdMatrix& right)
@@ -475,6 +625,25 @@ protected:
         builder.write(buffer, index, value);
     }
 
+    // The same records laid down as one store rather than as N - the write
+    // mirror of read2/read3/read4, down to the index counting records and the
+    // four-byte alignment a packed vector pointer asks of the binding. See
+    // ShaderBuilder::write4 for why this is a name of its own.
+    void write2(const OutputBuffer& buffer, const UInt& index, const Float2& value)
+    {
+        builder.write2(buffer, index, value);
+    }
+
+    void write3(const OutputBuffer& buffer, const UInt& index, const Float3& value)
+    {
+        builder.write3(buffer, index, value);
+    }
+
+    void write4(const OutputBuffer& buffer, const UInt& index, const Float4& value)
+    {
+        builder.write4(buffer, index, value);
+    }
+
     // Two values narrowed to fp16 and packed into the one float slot that
     // holds them, which InputBuffer::readHalf2 reads back at the same index.
     void writeHalf2(const OutputBuffer& buffer,
@@ -506,6 +675,61 @@ protected:
                       const UInt4& value)
     {
         builder.writeUInt8x4(buffer, index, value);
+    }
+
+    // The wide packed stores, one per wide read and at the read's own index:
+    // eight or sixteen values packed into the two or four words that hold them
+    // and laid down in one store. The byte ones take integer vectors for the
+    // reason writeInt8x4 does, named after the read's own .low / .high and
+    // .a .b .c .d.
+    void writeHalf4(const OutputBuffer& buffer,
+                    const UInt& index,
+                    const Float4& value)
+    {
+        builder.writeHalf4(buffer, index, value);
+    }
+
+    void writeBFloat16x4(const OutputBuffer& buffer,
+                         const UInt& index,
+                         const Float4& value)
+    {
+        builder.writeBFloat16x4(buffer, index, value);
+    }
+
+    void writeInt8x8(const OutputBuffer& buffer,
+                     const UInt& index,
+                     const Int4& low,
+                     const Int4& high)
+    {
+        builder.writeInt8x8(buffer, index, low, high);
+    }
+
+    void writeUInt8x8(const OutputBuffer& buffer,
+                      const UInt& index,
+                      const UInt4& low,
+                      const UInt4& high)
+    {
+        builder.writeUInt8x8(buffer, index, low, high);
+    }
+
+    void writeInt8x16(const OutputBuffer& buffer,
+                      const UInt& index,
+                      const Int4& a,
+                      const Int4& b,
+                      const Int4& c,
+                      const Int4& d)
+    {
+        builder.writeInt8x16(buffer, index, a, b, c, d);
+    }
+
+    void writeUInt8x16(const OutputBuffer& buffer,
+                       const UInt& index,
+                       const UInt4& a,
+                       const UInt4& b,
+                       const UInt4& c,
+                       const UInt4& d)
+    {
+        builder.writeUInt8x16(buffer, index, a, b, c, d);
     }
 
     // One element of a threadgroup-shared array, published to the rest of the
@@ -573,6 +797,26 @@ protected:
         builder.write(buffer, index, value);
     }
 
+    // The same records laid down as one store, on the terms the float wide
+    // stores set and at the index UIntInputBuffer::read2/3/4 counts in.
+    void
+        write2(const UIntOutputBuffer& buffer, const UInt& index, const UInt2& value)
+    {
+        builder.write2(buffer, index, value);
+    }
+
+    void
+        write3(const UIntOutputBuffer& buffer, const UInt& index, const UInt3& value)
+    {
+        builder.write3(buffer, index, value);
+    }
+
+    void
+        write4(const UIntOutputBuffer& buffer, const UInt& index, const UInt4& value)
+    {
+        builder.write4(buffer, index, value);
+    }
+
     // An atomic buffer's element, set rather than added to - what a kernel
     // computing a dispatch size writes.
     void write(const AtomicBuffer& buffer, const UInt& index, const UInt& value)
@@ -628,7 +872,7 @@ private:
         if (!graph().usesSimdReduction() && !graph().usesSimdGroups())
             return;
 
-        auto width = pipelineState->threadExecutionWidth();
+        auto width = compiled->pipeline.threadExecutionWidth();
 
         if (width <= 0 || width == ComputeProgram::simdWidth)
             return;
@@ -640,6 +884,42 @@ private:
             ". simdSum/simdMax/simdMin and SimdMatrix need the two to agree; "
             "use the whole-group groupSum/groupMax/groupMin, which is correct "
             "at any width.");
+    }
+
+    // What a kernel gets instead of the one it asked for when the device has no
+    // instruction for a fragment it loads: an empty library, and so a pipeline
+    // that is not valid, which ComputePass::dispatch drops rather than encodes.
+    // Built rather than left unset so that everything holding this program
+    // still has a pipeline to name, and empty rather than the generated source
+    // because every backend's ShaderLibrary declines an empty one in silence -
+    // so the only thing logged is the reason above, not a shader compiler's
+    // complaint about a type.
+    void buildRefusedPipeline(Device& device)
+    {
+        compiled = std::make_shared<const CompiledCompute>(device, ShaderSource {});
+    }
+
+    void reportUnsupportedPackedSimdMatrix(const Device& device) const
+    {
+        auto missingBFloat16 =
+            graph().usesPackedSimdMatrix(SimdMatrixElement::BFloat16)
+            && !device.supportsBFloat16SimdMatrix();
+
+        const auto* load = missingBFloat16 ? "simdMatrixBFloat16" : "simdMatrixHalf";
+
+        const auto* query = missingBFloat16 ? "supportsBFloat16SimdMatrix"
+                                            : "supportsHalfSimdMatrix";
+
+        LOG("eacp: this kernel loads a packed SIMD-group matrix fragment "
+            "through ",
+            load,
+            ", and Device::",
+            query,
+            " answers no, so no pipeline was built for it. Ask that query "
+            "before recording the load, and where it answers no build the "
+            "kernel that stages the weight into a shared<Float> tile instead. "
+            "The two are different kernels rather than two arms of one, "
+            "because staging carries barriers and the packed load does not.");
     }
 
     // Named here rather than left to the backend, which reports a threadgroup
@@ -655,6 +935,19 @@ private:
             " bytes of threadgroup memory and this device allows ",
             device.maxThreadgroupMemory(),
             ". Size its shared<> arrays against Device::maxThreadgroupMemory().");
+    }
+
+    [[noreturn]] void throwUnassigned(const char* member) const
+    {
+        auto message = "eacp: " + name() + " was dispatched with nothing assigned "
+                       + "to its '" + member + "' member.";
+
+        if (releasesBindings)
+            message += " It is a shared kernel, which lets go of every buffer "
+                       "and texture after each dispatch, so each call assigns "
+                       "all of them.";
+
+        throw std::logic_error {message};
     }
 
     const void* packWithExtents(const std::uint32_t* extents, int count)
@@ -681,7 +974,7 @@ private:
     GeneratedShader generated;
     Vector<std::byte> uniformBytes;
 
-    std::optional<ShaderLibrary> shaderLibrary;
-    std::optional<ComputePipeline> pipelineState;
+    std::shared_ptr<const CompiledCompute> compiled;
+    bool releasesBindings = false;
 };
 } // namespace eacp::GPU

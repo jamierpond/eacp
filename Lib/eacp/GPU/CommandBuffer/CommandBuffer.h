@@ -32,8 +32,15 @@ public:
     //
     // DispatchOrder::Concurrent lets the pass's dispatches overlap, and leaves
     // the ordering between dependent ones to ComputePass::barrier().
+    //
+    // TimingScope::EachDispatch times every kernel the pass dispatches on its
+    // own instead, each named label/Kernel in timings() - Kernel alone for an
+    // unlabelled pass. It is for finding where the time goes, not for shipping:
+    // on Metal each timed dispatch is an encoder of its own, and the dispatches
+    // of a Concurrent pass stop overlapping.
     ComputePass beginCompute(std::string_view label = {},
-                             DispatchOrder order = DispatchOrder::Serial);
+                             DispatchOrder order = DispatchOrder::Serial,
+                             TimingScope scope = TimingScope::Pass);
 
     // Fills every byte of the range with value on the GPU, in order with the
     // passes either side of it. The offset and the length must be multiples of
@@ -68,7 +75,27 @@ public:
     // at offset bytes into the buffer - Buffer::read's scoped sibling, waiting
     // for this command buffer alone rather than for the newest submission. The
     // copy is clamped to the buffer's end; an offset past it reads nothing.
-    void read(const Buffer& buffer, void* dst, int bytes, int offset = 0);
+    void read(const Buffer& buffer,
+              void* dst,
+              std::int64_t bytes,
+              std::int64_t offset = 0);
+
+    // Writes bytes into a buffer these passes wrote, starting at offset bytes
+    // into it - Buffer::update's scoped sibling, on the same terms read() is.
+    // It waits for *this* command buffer and then copies, so the host's bytes
+    // land after the passes recorded here and before anything encoded next, and
+    // nothing submitted after this buffer is waited for.
+    //
+    // Which is the difference that matters to a loop keeping more than one
+    // command buffer in flight. Buffer::update waits for the newest submission,
+    // because a Buffer cannot know which one wrote it; a caller that does know
+    // says so here, and keeps the overlap that waiting for the queue would
+    // throw away. The copy is clamped to the buffer's end; a no-op on an
+    // invalid buffer, null data or an offset past the end.
+    void update(Buffer& buffer,
+                const void* data,
+                std::int64_t bytes,
+                std::int64_t offset = 0);
 
     // Submits the recorded work and returns without waiting. The returned Async
     // resolves on the main thread once the GPU has finished, at which point

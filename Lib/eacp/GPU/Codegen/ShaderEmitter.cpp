@@ -796,6 +796,24 @@ const char* helperDefinition(const ShaderHelper& helper, Backend backend)
     return helper.metal;
 }
 
+// The one helper a graph needs that no expression node names: the fallback's
+// packed fragment load is a statement, and it widens each of a lane's two
+// elements through the same helper a scalar packed read goes through. Metal
+// loads such a patch as a packed fragment and calls nothing.
+bool helperWidensPackedSimdMatrix(const ShaderGraph& graph,
+                                  std::string_view name,
+                                  Backend backend)
+{
+    if (backend == Backend::Metal)
+        return false;
+
+    if (name == "eacpReadHalf")
+        return graph.usesPackedSimdMatrix(SimdMatrixElement::Half);
+
+    return name == "eacpReadBFloat16"
+           && graph.usesPackedSimdMatrix(SimdMatrixElement::BFloat16);
+}
+
 // Only the helpers a graph actually calls, so a shader that unpacks nothing
 // carries no definition for one.
 std::string helperDefinitions(const ShaderGraph& graph, Backend backend)
@@ -804,7 +822,7 @@ std::string helperDefinitions(const ShaderGraph& graph, Backend backend)
 
     for (const auto& helper: shaderHelpers)
     {
-        auto used = false;
+        auto used = helperWidensPackedSimdMatrix(graph, helper.name, backend);
 
         for (auto node = 0; node < graph.nodeCount() && !used; ++node)
         {
@@ -839,6 +857,19 @@ const char* componentSuffix(int component)
         return ".x";
 
     return component == 1 ? ".y" : ".z";
+}
+
+// The lane of a vector value, which is a different question: a thread index
+// reaches three components and a vector reaches four, so the one above stops
+// where it does and this one names .w. Nothing in the EDSL is wider than four,
+// so a fifth component is a caller's mistake rather than a lane to name.
+const char* vectorComponentSuffix(int component)
+{
+    assert(component >= 0 && component < 4
+           && "eacp: a vector has no component past .w");
+
+    constexpr const char* lanes[] = {".x", ".y", ".z", ".w"};
+    return lanes[component];
 }
 
 // The MSL type a run of consecutive buffer elements is loaded through.
@@ -1063,6 +1094,49 @@ std::string bracketed(const std::string& expression)
     return "(" + expression + ")";
 }
 
+// The MSL type a fragment of each element is, and the element type its load
+// reinterprets the buffer's pointer as. A packed fragment stays packed right
+// through the product: MSL's simdgroup_multiply_accumulate takes mixed operand
+// types into a float accumulator, which is the instruction the hardware has and
+// the reason there is no widening step to emit between the two.
+const char* metalSimdMatrixType(SimdMatrixElement element)
+{
+    switch (element)
+    {
+        case SimdMatrixElement::Half:
+            return "simdgroup_half8x8";
+        case SimdMatrixElement::BFloat16:
+            return "simdgroup_bfloat8x8";
+        case SimdMatrixElement::Float:
+            break;
+    }
+
+    return "simdgroup_float8x8";
+}
+
+const char* metalPackedElementType(SimdMatrixElement element)
+{
+    return element == SimdMatrixElement::Half ? "half" : "bfloat";
+}
+
+// What the fallback widens one packed element with - the same helper a scalar
+// InputBuffer::readHalf or readBFloat16 goes through, so the arithmetic that
+// produces a lane's pair here is the arithmetic every other packed read in the
+// shader uses.
+const char* packedSimdMatrixHelper(SimdMatrixElement element)
+{
+    return element == SimdMatrixElement::Half ? "eacpReadHalf" : "eacpReadBFloat16";
+}
+
+// How the two fallback dialects read a buffer's float element as the word its
+// bits are. The buffer is declared float whatever it holds, which is what the
+// packed scalar reads already assume. Metal never asks: a packed patch is a
+// fragment of its own type there, loaded through a reinterpreted pointer.
+const char* bitsOfFloat(Backend backend)
+{
+    return backend == Backend::Vulkan ? "floatBitsToUint" : "asuint";
+}
+
 // How the fallback backends hold a fragment: spread over the lanes of what
 // would have been the SIMD group the way Metal spreads it, each lane owning
 // the pair of elements at row lane / 4, columns (lane % 4) * 2 and the next -
@@ -1099,9 +1173,10 @@ int simdMatrixScratchElements(const ShaderGraph& graph)
 // The scratch declared, under the storage qualifier the dialect gives
 // threadgroup memory, in a kernel that holds any fragment at all.
 std::string simdMatrixScratchDeclaration(const ShaderGraph& graph,
-                                         const std::string& qualifier)
+                                         const std::string& qualifier,
+                                         bool wanted)
 {
-    if (graph.simdMatrixCount() == 0)
+    if (graph.simdMatrixCount() == 0 || !wanted)
         return {};
 
     return qualifier + " float " + simdMatrixScratchName + "["
@@ -1110,10 +1185,10 @@ std::string simdMatrixScratchDeclaration(const ShaderGraph& graph,
 
 // Whether a kernel declares any threadgroup memory of its own or the
 // emitter's - what the blank line after those declarations is for.
-bool declaresGroupMemory(const ShaderGraph& graph)
+bool declaresGroupMemory(const ShaderGraph& graph, bool scratchWanted)
 {
     return graph.sharedArrays().size() > 0 || graph.usesGroupReduction()
-           || graph.simdMatrixCount() > 0;
+           || (graph.simdMatrixCount() > 0 && scratchWanted);
 }
 
 // What the fallback addresses a fragment by, declared once at the top of any
@@ -1678,6 +1753,7 @@ void collectWrites(const ShaderGraph& graph,
         case StatementKind::Break:
         case StatementKind::Continue:
         case StatementKind::Store:
+        case StatementKind::VectorStore:
         case StatementKind::TextureStore:
         case StatementKind::SharedStore:
         case StatementKind::Barrier:
@@ -1726,6 +1802,7 @@ bool touchesShared(const ShaderGraph& graph, const Statement& statement)
         case StatementKind::Break:
         case StatementKind::Continue:
         case StatementKind::Store:
+        case StatementKind::VectorStore:
         case StatementKind::TextureStore:
         case StatementKind::AtomicAdd:
         case StatementKind::SimdMatrixFill:
@@ -1766,6 +1843,7 @@ void collectBufferWrites(const ShaderGraph& graph,
     switch (statement.kind)
     {
         case StatementKind::Store:
+        case StatementKind::VectorStore:
             written[statement.slot] = 1;
             return;
 
@@ -1851,15 +1929,21 @@ struct VisitSet
 
 // Whether the value under node no longer stands for itself after a statement:
 // it read a variable that statement wrote, an element of a storage buffer the
-// statement stored to, or threadgroup memory the statement may have moved.
+// statement stored to, or threadgroup memory the statement may have moved. A
+// node already holding one of the names in `names` is a value, not a read, and
+// stands for itself whatever runs after it.
 bool readsStale(const ShaderGraph& graph,
                 int node,
                 const Vector<char>& written,
                 const Vector<char>& buffersWritten,
                 bool sharedMoved,
-                VisitSet& seen)
+                VisitSet& seen,
+                const Vector<int>* names = nullptr)
 {
     if (node < 0 || !seen.visit(node))
+        return false;
+
+    if (names != nullptr && (*names)[node] >= 0)
         return false;
 
     const auto& expr = graph.expr(node);
@@ -1878,7 +1962,8 @@ bool readsStale(const ShaderGraph& graph,
         return true;
 
     for (auto argument: expr.args)
-        if (readsStale(graph, argument, written, buffersWritten, sharedMoved, seen))
+        if (readsStale(
+                graph, argument, written, buffersWritten, sharedMoved, seen, names))
             return true;
 
     return false;
@@ -1886,25 +1971,39 @@ bool readsStale(const ShaderGraph& graph,
 
 // Every expression the statements of a block reach, its nested bodies included.
 // A loop's condition is left out: the header takes no name of its own.
+void collectUseRoots(const ShaderGraph& graph, int block, Vector<int>& roots);
+
+void collectStatementRoots(const ShaderGraph& graph,
+                           const Statement& statement,
+                           Vector<int>& roots)
+{
+    if (statement.kind != StatementKind::Loop)
+        roots.add(statement.value);
+
+    roots.add(statement.index);
+    roots.add(statement.indexY);
+    roots.add(statement.stride);
+
+    if (statement.body >= 0)
+        collectUseRoots(graph, statement.body, roots);
+
+    if (statement.elseBody >= 0)
+        collectUseRoots(graph, statement.elseBody, roots);
+}
+
 void collectUseRoots(const ShaderGraph& graph, int block, Vector<int>& roots)
 {
     for (auto index: graph.block(block).statements)
-    {
-        const auto& statement = graph.statement(index);
+        collectStatementRoots(graph, graph.statement(index), roots);
+}
 
-        if (statement.kind != StatementKind::Loop)
-            roots.add(statement.value);
-
-        roots.add(statement.index);
-        roots.add(statement.indexY);
-        roots.add(statement.stride);
-
-        if (statement.body >= 0)
-            collectUseRoots(graph, statement.body, roots);
-
-        if (statement.elseBody >= 0)
-            collectUseRoots(graph, statement.elseBody, roots);
-    }
+// The reads whose value a statement can change: a variable, an element of a
+// storage buffer or of threadgroup memory, an atomic counter.
+bool dependsOnState(ExprKind kind)
+{
+    return kind == ExprKind::VarRead || kind == ExprKind::BufferRead
+           || kind == ExprKind::BufferVectorRead || kind == ExprKind::AtomicLoad
+           || kind == ExprKind::SharedRead;
 }
 
 // Emits one stage: its statements, then the expressions its outputs are.
@@ -1914,15 +2013,18 @@ void collectUseRoots(const ShaderGraph& graph, int block, Vector<int>& roots)
 // use. Control flow is what bounds that sharing, and the two rules it imposes
 // are the whole of what makes this different from printing an expression tree:
 //
-// A name is given up the moment a statement writes a variable the value behind
-// it read - which is what stops `d` computed before an `if` from standing for
-// the same thing after a body that moved what it was computed from. A name
-// neither body moves stays usable inside them both.
+// A handle is the value it had where it was built, as a C++ value is. Ahead of
+// a statement that writes what a handle built before it read - a variable, a
+// buffer element, threadgroup memory - the handle is named if anything after
+// the write still evaluates it (see freezeBefore), so `d` computed before an
+// `if` stands for the same thing after a body that moved what it was computed
+// from, and `p = exp(scores[i])` stored back over scores[i] is still p after.
 //
 // A loop condition takes no name at all. It is printed into the while header,
 // so binding it to a local ahead of the loop would test a value that never
-// changes again; the names the body can invalidate are given up there too,
-// since the header is re-evaluated after the body has run.
+// changes again. It is the one place a handle is re-evaluated: what the
+// condition reads, and anything built on those reads, is printed where it is
+// used, and a name for it is given up wherever the body moves what it read.
 //
 // A record write is what the rules answer to rather than bound by: its N
 // element stores are one write, so its value takes a name whatever its use
@@ -1934,8 +2036,13 @@ struct StageEmitter
                  Vector<int> attributeVaryings = {})
         : printer {graphToUse, backend, locals, std::move(attributeVaryings)}
         , visited(graphToUse.nodeCount())
+        , walked(graphToUse.nodeCount())
+        , searched(graphToUse.nodeCount())
     {
         locals.resize(graphToUse.nodeCount(), -1);
+        fragmentSources.resize(graphToUse.simdMatrixCount(),
+                                FragmentSource {});
+        loopConditionReads.resize(graphToUse.nodeCount(), 0);
     }
 
     const ShaderGraph& graph() const { return printer.graph; }
@@ -2008,12 +2115,99 @@ struct StageEmitter
         auto uses = blockUses(block);
         auto open = Vector<int> {};
         auto source = std::string {};
+        const auto& statements = graph().block(block).statements;
 
-        for (auto index: graph().block(block).statements)
-            source += emitStatement(graph().statement(index), indent, uses, open);
+        for (auto position = 0; position < statements.size(); ++position)
+        {
+            const auto& statement = graph().statement(statements[position]);
+            auto isLoop = statement.kind == StatementKind::Loop;
+
+            if (isLoop)
+                markConditionReads(statement.value, 1);
+
+            source += freezeBefore(block, position, indent, uses, open);
+            source += emitStatement(statement, indent, uses, open);
+
+            if (isLoop)
+                markConditionReads(statement.value, -1);
+        }
 
         retire(open);
         return source;
+    }
+
+    // The expressions the stage evaluates after its statements have all run -
+    // a fragment's colour and discard - which read a value built before a
+    // statement exactly as a later statement would.
+    Vector<int> trailingRoots;
+
+    // Where a fragment came from, when it came straight out of memory and
+    // nothing has written that memory, moved a variable or crossed a barrier
+    // since. A product whose operands both still have one reads their elements
+    // where they lie, which is what lets it need neither the scratch nor the
+    // barriers around it.
+    struct FragmentSource
+    {
+        bool live = false;
+        SimdMatrixElement element = SimdMatrixElement::Float;
+        std::string memory;
+        std::string offset;
+        std::string stride;
+    };
+
+    Vector<FragmentSource> fragmentSources;
+
+    // Whether any product had to stage its operands after all, which is the
+    // only thing the scratch is for.
+    bool stagedAProduct = false;
+
+    const FragmentSource* fragmentSourceFor(int slot) const
+    {
+        if (slot < 0 || slot >= fragmentSources.size())
+            return nullptr;
+
+        return fragmentSources[slot].live ? &fragmentSources[slot] : nullptr;
+    }
+
+    void forgetFragmentSource(int slot)
+    {
+        if (slot >= 0 && slot < fragmentSources.size())
+            fragmentSources[slot].live = false;
+    }
+
+    void forgetFragmentSources()
+    {
+        for (auto& source: fragmentSources)
+            source.live = false;
+    }
+
+    void rememberFragmentSource(int slot,
+                                SimdMatrixElement element,
+                                std::string memory,
+                                std::string offset,
+                                std::string stride)
+    {
+        if (slot < 0 || slot >= fragmentSources.size())
+            return;
+
+        fragmentSources[slot] = {true,
+                                 element,
+                                 std::move(memory),
+                                 std::move(offset),
+                                 std::move(stride)};
+    }
+
+    // Which statements leave a remembered source standing: one that declares a
+    // name, and the fragment statements, which say for their own slot.
+    // Everything else - a write, a barrier, an assignment to a variable an
+    // offset was built from, any branch - could make the memory or the index
+    // disagree with what was read, so it forgets all of them.
+    static bool keepsFragmentSources(StatementKind kind)
+    {
+        return kind == StatementKind::Declare
+               || kind == StatementKind::SimdMatrixFill
+               || kind == StatementKind::SimdMatrixLoad
+               || kind == StatementKind::SimdMatrixMultiplyAdd;
     }
 
     std::string emitStatement(const Statement& statement,
@@ -2022,6 +2216,9 @@ struct StageEmitter
                               Vector<int>& open)
     {
         auto inner = indent + "    ";
+
+        if (!keepsFragmentSources(statement.kind))
+            forgetFragmentSources();
 
         if (statement.kind == StatementKind::Loop)
         {
@@ -2053,10 +2250,12 @@ struct StageEmitter
             }
 
             // The condition is evaluated before either body runs, so it is
-            // printed while every name still stands; the ones a body moves on
-            // from are given up between it and them. An assignment needs no
-            // such pass first: its right-hand side is what the variable held
-            // before it, which is what the open names still stand for.
+            // printed while every name still stands. The only names a body can
+            // move on from are those built on an enclosing loop condition's
+            // reads, and they are given up between it and them; every other
+            // name is a value no body moves. An assignment needs no such pass
+            // first: its right-hand side is what the variable held before it,
+            // which is what the open names still stand for.
             case StatementKind::If:
             {
                 source = define({statement.value}, indent, uses, open);
@@ -2109,6 +2308,53 @@ struct StageEmitter
                 break;
             }
 
+            // The write mirror of a vector read: one store where the dialect
+            // has a spelling for one, and the N subscripts it stands in for
+            // where it has not. Metal reinterprets the address being stored to
+            // rather than the binding, so an output stays a run of floats and
+            // nothing it was bindable as is given up.
+            //
+            // Both operands are named first - see holdTheVector - so each is
+            // evaluated once and in full before any part of the record reaches
+            // memory. That is what lets write4(out, i, f(out.read4(i))) mean
+            // what it says, and what keeps an index computed from the buffer
+            // being written - write4(out, toUInt(out[i]), v) - addressing the
+            // element it was aimed at rather than the one the first component
+            // just landed on.
+            case StatementKind::VectorStore:
+            {
+                source =
+                    define({statement.index, statement.value}, indent, uses, open);
+                source += holdTheVector(statement, indent, open);
+
+                auto name = "buffer" + std::to_string(statement.slot);
+                auto base = printer.ref(statement.index);
+                auto stored = printer.ref(statement.value);
+                auto type = graph().expr(statement.value).type;
+
+                if (printer.backend == Backend::Metal)
+                {
+                    source += indent + "*((device " + metalPackedVectorType(type)
+                              + "*) (" + name + " + " + base + ")) = " + stored
+                              + ";\n";
+                    break;
+                }
+
+                for (auto component = 0; component < componentCount(type);
+                     ++component)
+                {
+                    source += indent + name + "[" + base;
+
+                    if (component > 0)
+                        source += " + " + std::to_string(component) + "u";
+
+                    source += "] = (" + stored + ")"
+                              + vectorComponentSuffix(component) + ";\n";
+                }
+
+                break;
+            }
+
             case StatementKind::AtomicAdd:
             {
                 source =
@@ -2152,10 +2398,10 @@ struct StageEmitter
                           + "] = " + printer.ref(statement.value) + ";\n";
                 break;
 
-            // The synchronisation point itself. The names it invalidates -
-            // anything computed from shared memory - are given up by the
-            // dropStale below, the same pass an assignment retires its
-            // variable's readers through.
+            // The synchronisation point itself. A handle read out of shared
+            // memory before it is still what the tile held there - named ahead
+            // of it by freezeBefore if it is used after - so a kernel that
+            // wants what the other threads published reads the tile again.
             // GLSL says it in two calls: the memory barrier publishes what
             // was written, the execution barrier is where the group meets.
             case StatementKind::Barrier:
@@ -2176,6 +2422,7 @@ struct StageEmitter
             case StatementKind::SimdMatrixFill:
                 source = define({statement.value}, indent, uses, open);
                 source += simdMatrixFill(statement, indent);
+                forgetFragmentSource(statement.slot);
                 break;
 
             case StatementKind::SimdMatrixLoad:
@@ -2187,6 +2434,9 @@ struct StageEmitter
 
             case StatementKind::SimdMatrixMultiplyAdd:
                 source = simdMatrixMultiplyAdd(statement, indent);
+
+                // The accumulator is a register now, whatever it was read from.
+                forgetFragmentSource(statement.slot);
                 break;
 
             // GLSL's imageStore takes a *signed* coordinate; MSL takes the
@@ -2223,7 +2473,8 @@ struct StageEmitter
         }
 
         // Afterwards either way, for the names this statement's own expressions
-        // introduced: a value read out of the variable it then wrote.
+        // introduced over a loop condition's reads: a value read out of the
+        // variable it then wrote, which the header has to read afresh.
         dropStale(statement, open);
         return source;
     }
@@ -2329,8 +2580,12 @@ private:
     std::string simdMatrixDeclaration(int slot) const
     {
         if (metal())
-            return "simdgroup_float8x8 " + simdMatrixName(slot);
+            return std::string(metalSimdMatrixType(graph().simdMatrixElement(slot)))
+                   + " " + simdMatrixName(slot);
 
+        // The fallback holds every fragment as a lane's pair of floats,
+        // whatever the memory it came out of: what a packed load changes there
+        // is the arithmetic that produces the pair, not the fragment.
         return std::string(simdMatrixLaneType(printer.backend)) + " "
                + simdMatrixName(slot);
     }
@@ -2350,6 +2605,23 @@ private:
                + ");\n";
     }
 
+    // One element of a patch, at whatever index into it, and whatever the
+    // memory holds: a plain read where it is floats, and the widening helper
+    // where two elements share one - which is how a product reads a bf16 or
+    // fp16 weight and multiplies it as an fp32, exactly as an fp32 patch of
+    // the same values would have been multiplied.
+    std::string simdMatrixElementAt(SimdMatrixElement element,
+                                    const std::string& memory,
+                                    const std::string& index) const
+    {
+        if (element == SimdMatrixElement::Float)
+            return memory + "[" + index + "]";
+
+        return std::string(packedSimdMatrixHelper(element)) + "("
+             + bitsOfFloat(printer.backend) + "(" + memory + "[(" + index
+             + ") / 2u]), (" + index + ") % 2u)";
+    }
+
     // One of the two elements of a patch a lane holds, as the memory names it:
     // the lane's row at the first of its pair of columns or the one after.
     static std::string simdMatrixLaneElement(const std::string& memory,
@@ -2364,6 +2636,33 @@ private:
                + "]";
     }
 
+    // The same element where the patch is packed: the index counts sixteen-bit
+    // elements, so the word holding one is at half that index and which half of
+    // it is the parity - exactly the arithmetic InputBuffer::readHalf and
+    // readBFloat16 do, through the same helper.
+    //
+    // Each element is fetched on its own rather than a lane's pair taken out of
+    // one word. The pair is two adjacent columns, but the patch's offset and
+    // row stride are the caller's and neither has to be even, so the pair is
+    // not reliably inside one word and a walk that assumed it was would read
+    // the wrong element on every odd row.
+    static std::string simdMatrixPackedLaneElement(Backend backend,
+                                                   SimdMatrixElement element,
+                                                   const std::string& memory,
+                                                   const std::string& offset,
+                                                   const std::string& stride,
+                                                   int which)
+    {
+        auto column = which == 0 ? std::string("sgmColumn")
+                                 : "sgmColumn + " + std::to_string(which) + "u";
+
+        auto index = "(" + offset + " + sgmRow * " + stride + " + " + column + ")";
+
+        return std::string(packedSimdMatrixHelper(element)) + "("
+               + bitsOfFloat(backend) + "(" + memory + "[" + index + " / 2u]), "
+               + index + " % 2u)";
+    }
+
     // The load and the store are the same patch walked in the two directions,
     // so they are one function: what changes is which side of the assignment
     // each is on. Every lane moves the pair it holds, so the store needs no
@@ -2376,10 +2675,20 @@ private:
         auto memory = simdMatrixMemoryName(statement);
         auto offset = bracketed(printer.ref(statement.index));
         auto stride = bracketed(printer.ref(statement.stride));
+        auto element = graph().simdMatrixElement(statement.slot);
+        auto packed = element != SimdMatrixElement::Float;
 
         if (metal())
         {
-            auto pointer = memory + " + " + offset;
+            // The buffer is declared float whatever it holds, so a packed load
+            // reinterprets its pointer the way the wide packed reads
+            // reinterpret one - and then counts in the packed element, which is
+            // what makes the offset the caller's own row arithmetic.
+            auto pointer = packed
+                               ? "(device const "
+                                     + std::string(metalPackedElementType(element))
+                                     + "*) (" + memory + ") + " + offset
+                               : memory + " + " + offset;
 
             if (loading)
                 return indent + simdMatrixDeclaration(statement.slot) + ";\n"
@@ -2390,8 +2699,21 @@ private:
                    + stride + ");\n";
         }
 
-        auto first = simdMatrixLaneElement(memory, offset, stride, 0);
-        auto second = simdMatrixLaneElement(memory, offset, stride, 1);
+        auto backend = printer.backend;
+
+        auto first = packed ? simdMatrixPackedLaneElement(
+                                  backend, element, memory, offset, stride, 0)
+                            : simdMatrixLaneElement(memory, offset, stride, 0);
+
+        auto second = packed ? simdMatrixPackedLaneElement(
+                                   backend, element, memory, offset, stride, 1)
+                             : simdMatrixLaneElement(memory, offset, stride, 1);
+
+        // Standing where it was read, so a product that follows can take
+        // its elements from there instead of staging them - whether the patch
+        // is floats or two elements to a float.
+        if (loading)
+            rememberFragmentSource(statement.slot, element, memory, offset, stride);
 
         if (loading)
             return indent + simdMatrixDeclaration(statement.slot) + " = "
@@ -2426,6 +2748,49 @@ private:
             return indent + "simdgroup_multiply_accumulate(" + accumulator + ", "
                    + left + ", " + right + ", " + accumulator + ");\n";
 
+        auto step = accumulator + "k";
+        auto term = accumulator + "l";
+        auto side = std::to_string(simdMatrixSize);
+
+        // Both operands still standing where they were read, so each lane
+        // takes its row of the left against its two columns of the right out
+        // of that memory directly. The same elements, the same k ascending and
+        // the same adds in the same order as the staged form below - with no
+        // scratch to put them in, and so no barriers to put them there behind.
+        if (const auto* leftMemory = fragmentSourceFor(statement.left))
+        {
+            if (const auto* rightMemory = fragmentSourceFor(statement.right))
+            {
+                auto leftIndex = leftMemory->offset + " + sgmRow * "
+                               + leftMemory->stride + " + " + step;
+
+                auto rightAt = [&](const std::string& tail)
+                {
+                    auto index = rightMemory->offset + " + " + step + " * "
+                               + rightMemory->stride + " + sgmColumn" + tail;
+
+                    return simdMatrixElementAt(
+                        rightMemory->element, rightMemory->memory, index);
+                };
+
+                auto fused = indent + "for (uint " + step + " = 0u; " + step
+                           + " < " + side + "u; ++" + step + ")\n";
+                fused += indent + "{\n";
+                fused += indent + "    float " + term + " = "
+                       + simdMatrixElementAt(
+                             leftMemory->element, leftMemory->memory, leftIndex)
+                       + ";\n";
+                fused += indent + "    " + accumulator + ".x += " + term + " * "
+                       + rightAt("") + ";\n";
+                fused += indent + "    " + accumulator + ".y += " + term + " * "
+                       + rightAt(" + 1u") + ";\n";
+                fused += indent + "}\n";
+                return fused;
+            }
+        }
+
+        stagedAProduct = true;
+
         // Both operands staged whole, each lane putting down the pair it
         // holds; then, once every pair is there, each lane takes its row of
         // the left against its two columns of the right. The accumulator is
@@ -2433,9 +2798,6 @@ private:
         // what is multiplied is the copy in the scratch, complete before
         // anything is added. The trailing barrier is what lets the next
         // product stage over this one.
-        auto step = accumulator + "k";
-        auto term = accumulator + "l";
-        auto side = std::to_string(simdMatrixSize);
         auto barrier = barrierStatement(printer.backend, indent);
         auto held = "sgmRow * " + side + "u + sgmColumn";
 
@@ -2462,6 +2824,171 @@ private:
             + ";\n";
         source += indent + "}\n";
         return source + barrier;
+    }
+
+    // A handle is the value it had where it was built. The statements that
+    // could make a later evaluation disagree are the ones that write what it
+    // read - a variable, a buffer element, threadgroup memory - so ahead of
+    // each such statement, every expression built before it that reads what it
+    // writes, and that is still to be evaluated by it or by what follows, is
+    // named here: evaluated once, before the write, and read back by name.
+    //
+    // Only the outermost such expression is named - `f(buffer[i])`, not
+    // `buffer[i]` - so f runs once rather than once per use. Nothing is named
+    // that no write stands between, so a kernel that never reads what it
+    // writes emits exactly what it did before.
+    //
+    // The exception is a loop's condition. It is evaluated again before every
+    // iteration by construction, so the reads it makes, and everything built
+    // on them, stay what they were: evaluated where they are used.
+    std::string freezeBefore(int block,
+                             int position,
+                             const std::string& indent,
+                             const Vector<int>& uses,
+                             Vector<int>& open)
+    {
+        const auto& statements = graph().block(block).statements;
+        const auto& statement = graph().statement(statements[position]);
+
+        auto sharedMoved = touchesShared(graph(), statement);
+
+        written.assign(graph().variables().size(), 0);
+        collectWrites(graph(), statement, written);
+
+        buffersWritten.assign(graph().storageBuffers().size(), 0);
+        collectBufferWrites(graph(), statement, buffersWritten);
+
+        if (!written.contains(1) && !buffersWritten.contains(1) && !sharedMoved)
+            return {};
+
+        auto roots = Vector<int> {};
+
+        if (statement.body >= 0)
+            collectUseRoots(graph(), statement.body, roots);
+
+        if (statement.elseBody >= 0)
+            collectUseRoots(graph(), statement.elseBody, roots);
+
+        for (auto later = position + 1; later < statements.size(); ++later)
+            collectStatementRoots(
+                graph(), graph().statement(statements[later]), roots);
+
+        if (block == ShaderGraph::rootBlock)
+            for (auto root: trailingRoots)
+                roots.add(root);
+
+        auto source = nameOperandsFirst(statement, indent, uses, open);
+        walked.restart();
+
+        for (auto root: roots)
+            source +=
+                freezeUnder(root, statement.sequence, sharedMoved, indent, open);
+
+        return source;
+    }
+
+    // The statement's own operands, named first and in the order the statement
+    // itself names them, so that what is frozen after them is spelled over
+    // those names rather than beside them. A record store names its record here
+    // too: the later components are built before the first store, and with the
+    // record named each of them is a swizzle of that name rather than a copy of
+    // the whole read.
+    std::string nameOperandsFirst(const Statement& statement,
+                                  const std::string& indent,
+                                  const Vector<int>& uses,
+                                  Vector<int>& open)
+    {
+        if (statement.kind == StatementKind::Loop)
+            return {};
+
+        auto operands = Vector<int> {};
+
+        for (auto operand:
+             {statement.index, statement.indexY, statement.stride, statement.value})
+            if (operand >= 0)
+                operands.add(operand);
+
+        // Sequenced: both name things, and which runs first decides which
+        // name they get. The operands of + are unsequenced, so left to the
+        // expression this came out of, one host compiler emitted one shader
+        // and another emitted a different one.
+        auto named = define(operands, indent, uses, open);
+
+        return named + holdTheRecord(statement, indent, open);
+    }
+
+    std::string freezeUnder(int node,
+                            int sequence,
+                            bool sharedMoved,
+                            const std::string& indent,
+                            Vector<int>& open)
+    {
+        if (node < 0 || locals[node] >= 0 || !walked.visit(node))
+            return {};
+
+        auto builtBefore = graph().sequenceOf(node) <= sequence;
+
+        if (builtBefore && !readsLoopCondition(node))
+        {
+            visited.restart();
+
+            if (!readsStale(graph(),
+                            node,
+                            written,
+                            buffersWritten,
+                            sharedMoved,
+                            visited,
+                            &locals))
+                return {};
+
+            return bind(node, indent, open);
+        }
+
+        auto source = std::string {};
+
+        for (auto argument: graph().expr(node).args)
+            source += freezeUnder(argument, sequence, sharedMoved, indent, open);
+
+        return source;
+    }
+
+    void markConditionReads(int node, int change)
+    {
+        searched.restart();
+        markReads(node, change);
+    }
+
+    void markReads(int node, int change)
+    {
+        if (node < 0 || !searched.visit(node))
+            return;
+
+        if (dependsOnState(graph().expr(node).kind))
+            loopConditionReads[node] += change;
+
+        for (auto argument: graph().expr(node).args)
+            markReads(argument, change);
+    }
+
+    bool readsLoopCondition(int node)
+    {
+        searched.restart();
+        return reachesConditionRead(node);
+    }
+
+    bool reachesConditionRead(int node)
+    {
+        if (node < 0 || !searched.visit(node))
+            return false;
+
+        if (loopConditionReads[node] > 0)
+            return true;
+
+        for (auto argument: graph().expr(node).args)
+            if (reachesConditionRead(argument))
+                return true;
+
+        return false;
     }
 
     Vector<int> countUsesOver(const Vector<int>& roots) const
@@ -2532,6 +3059,49 @@ private:
         return bind(statement.record, indent, open);
     }
 
+    // A wide store's operands, named before the store rather than printed into
+    // it.
+    //
+    // The index is the one the backends disagree about. Metal stores the whole
+    // vector through one pointer and prints the address once; HLSL and GLSL
+    // print it into every subscript, so an index inlined there is evaluated N
+    // times - and if it reads the buffer being written, every evaluation after
+    // the first reads back what this very store has already put there.
+    // write4(out, toUInt(out[i]), v) is exactly that shape, and inlined it would
+    // mean one thing on Metal and another on the other two.
+    //
+    // The value is named on every backend all the same, for the reason
+    // holdTheRecord names a record's: a wide store is one write of one record,
+    // and the record is worth a name wherever it is an operation rather than a
+    // leaf.
+    std::string holdTheVector(const Statement& statement,
+                              const std::string& indent,
+                              Vector<int>& open)
+    {
+        auto source = std::string {};
+
+        if (printer.backend != Backend::Metal)
+            source += holdOperand(statement.index, statement.slot, indent, open);
+
+        return source + holdOperand(statement.value, statement.slot, indent, open);
+    }
+
+    // One of them, unless naming it would buy nothing: something already named
+    // is already computed, and a leaf costs nothing however often it is
+    // repeated - unless it is a read of the buffer being written, which is not
+    // a matter of cost.
+    std::string
+        holdOperand(int node, int slot, const std::string& indent, Vector<int>& open)
+    {
+        if (node < 0 || locals[node] >= 0)
+            return {};
+
+        if (!wantsLocal(graph().expr(node).kind) && !readsSlot(node, slot))
+            return {};
+
+        return bind(node, indent, open);
+    }
+
     bool readsSlot(int node, int slot)
     {
         written.assign(graph().variables().size(), 0);
@@ -2579,7 +3149,7 @@ private:
         {
             visited.restart();
 
-            if (node != heldRecord
+            if (node != heldRecord && readsLoopCondition(node)
                 && readsStale(
                     graph(), node, written, buffersWritten, sharedMoved, visited))
                 locals[node] = -1;
@@ -2599,8 +3169,13 @@ private:
     // Held by the emitter rather than by the walk, so that naming a stage costs
     // one buffer instead of one per name per statement.
     VisitSet visited;
+    VisitSet walked;
+    VisitSet searched;
     Vector<char> written;
     Vector<char> buffersWritten;
+
+    // Per node, how many enclosing loops read it in their condition.
+    Vector<int> loopConditionReads;
 };
 
 // Whether the expression tree under node reads a uniform. A Varying read is the
@@ -3126,6 +3701,19 @@ std::string emitCompute(const ShaderGraph& graph, Backend backend)
               "groups - a multiple of ComputeProgram::simdWidth threads - or "
               "in one narrower than a single SIMD group.");
 
+    // The body first, because what it turns out to need decides what is
+    // declared above it: a kernel whose every product reads its operands where
+    // they lie stages nothing, and then the scratch is dead weight - and
+    // threadgroup memory a kernel does not use still costs it occupancy.
+    auto stageRoots = Vector<int> {};
+    collectStatementRoots(graph, ShaderGraph::rootBlock, stageRoots);
+
+    auto stage = StageEmitter {graph, backend};
+    auto body = stage.declareArrays(stageRoots, "    ");
+    body += stage.emitBlock(ShaderGraph::rootBlock, "    ");
+
+    auto scratchWanted = stage.stagedAProduct;
+
     if (backend == Backend::Metal)
         source += "#include <metal_stdlib>\nusing namespace metal;\n\n";
 
@@ -3282,9 +3870,9 @@ std::string emitCompute(const ShaderGraph& graph, Backend backend)
                       + groupScratchName(elementType) + "["
                       + std::to_string(threadsPerGroup(graph)) + "];\n";
 
-        source += simdMatrixScratchDeclaration(graph, "shared");
+        source += simdMatrixScratchDeclaration(graph, "shared", scratchWanted);
 
-        if (declaresGroupMemory(graph))
+        if (declaresGroupMemory(graph, scratchWanted))
             source += "\n";
 
         const auto group = graph.threadGroupShape();
@@ -3370,9 +3958,9 @@ std::string emitCompute(const ShaderGraph& graph, Backend backend)
                       + groupScratchName(elementType) + "["
                       + std::to_string(threadsPerGroup(graph)) + "];\n";
 
-        source += simdMatrixScratchDeclaration(graph, "groupshared");
+        source += simdMatrixScratchDeclaration(graph, "groupshared", scratchWanted);
 
-        if (declaresGroupMemory(graph))
+        if (declaresGroupMemory(graph, scratchWanted))
             source += "\n";
 
         const auto group = graph.threadGroupShape();
@@ -3426,14 +4014,7 @@ std::string emitCompute(const ShaderGraph& graph, Backend backend)
     // Stores ride the statement stream like everything else, so the body is
     // one block walk: a write records where it was made, inside whatever
     // loop or branch was open, and the emitter has no end-of-kernel step.
-    auto stageRoots = Vector<int> {};
-    collectStatementRoots(graph, ShaderGraph::rootBlock, stageRoots);
-
-    auto stage = StageEmitter {graph, backend};
-
-    source += stage.declareArrays(stageRoots, "    ");
-    source += stage.emitBlock(ShaderGraph::rootBlock, "    ");
-
+    source += body;
     source += "}\n";
     return source;
 }
@@ -3677,6 +4258,7 @@ std::string emit(const ShaderGraph& graph, Backend backend)
     auto fragmentStage = StageEmitter {graph, backend, promoted.varyingOf};
 
     source += fragmentStage.declareArrays(stageRoots, "    ");
+    fragmentStage.trailingRoots = fragmentRoots;
     source += fragmentStage.emitBlock(ShaderGraph::rootBlock, "    ");
     source += fragmentStage.defineFor(fragmentRoots, "    ");
 

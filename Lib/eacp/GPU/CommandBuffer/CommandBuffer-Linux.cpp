@@ -62,6 +62,14 @@ struct CommandBuffer::Native
         encoder.endQuery = pass * 2 + 1;
     }
 
+    VulkanComputeEncoder* openEncoder(std::string_view label)
+    {
+        auto* encoder = new VulkanComputeEncoder {commands};
+        timePass(*encoder, label);
+
+        return encoder;
+    }
+
     bool canSubmit() const { return commands != nullptr && !committed; }
 
     // Everything a submission needs recorded on it, in the order it needs it.
@@ -91,15 +99,28 @@ CommandBuffer::CommandBuffer(Device& device)
 {
 }
 
-ComputePass CommandBuffer::beginCompute(std::string_view label, DispatchOrder order)
+ComputePass CommandBuffer::beginCompute(std::string_view label,
+                                        DispatchOrder order,
+                                        TimingScope scope)
 {
+    impl->device->assertOwningThread();
+
     if (impl->commands == nullptr || impl->committed)
         return ComputePass(nullptr, order);
 
-    auto* encoder = new VulkanComputeEncoder {impl->commands};
-    impl->timePass(*encoder, label);
+    if (scope == TimingScope::Pass)
+        return ComputePass(impl->openEncoder(label), order);
 
-    return ComputePass(encoder, order);
+    // vkCmdWriteTimestamp2 goes anywhere in a command buffer, so a timed
+    // dispatch is a pair of them around it on the one buffer.
+    auto* native = impl.get();
+
+    return ComputePass(
+        impl->openEncoder({}),
+        order,
+        [native](std::string_view dispatchLabel)
+        { return (void*) native->openEncoder(dispatchLabel); },
+        std::string {label});
 }
 
 void CommandBuffer::fill(const BufferRange& range, std::uint8_t value)
@@ -141,6 +162,8 @@ void CommandBuffer::fill(const BufferRange& range, std::uint8_t value)
 
 void CommandBuffer::submit()
 {
+    impl->device->assertOwningThread();
+
     if (impl->canSubmit())
         impl->endAndSubmit();
 }
@@ -155,6 +178,10 @@ void CommandBuffer::commit()
 
 Threads::Async<void> CommandBuffer::commitAsync()
 {
+    // The submission is the part that belongs to this thread; the completion
+    // handler below hops to the message thread on its own and asserts nothing.
+    impl->device->assertOwningThread();
+
     auto promise = Threads::AsyncPromise<void> {};
 
     if (!impl->canSubmit())
@@ -176,6 +203,8 @@ Threads::Async<void> CommandBuffer::commitAsync()
 
 void CommandBuffer::wait()
 {
+    impl->device->assertOwningThread();
+
     if (impl->committed)
         impl->context.waitFor(impl->completionValue);
 }
@@ -189,7 +218,10 @@ bool CommandBuffer::isComplete() const
 // being in order, so a readback recorded now still runs behind whatever was
 // submitted in between - the same deal the D3D12 backend gets, and for the
 // same reason.
-void CommandBuffer::read(const Buffer& buffer, void* dst, int bytes, int offset)
+void CommandBuffer::read(const Buffer& buffer,
+                         void* dst,
+                         std::int64_t bytes,
+                         std::int64_t offset)
 {
     wait();
     buffer.read(dst, bytes, offset);

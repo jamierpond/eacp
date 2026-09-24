@@ -6,13 +6,118 @@
 
 #include <eacp/Core/ObjC/ObjC.h>
 
+#include <mutex>
+#include <vector>
+
+#include <unistd.h>
+
 namespace eacp::GPU
 {
+namespace
+{
+// Metal hands the deallocator whole pages, so the length the buffer is created
+// with is the caller's count rounded up to the page its last byte lies in -
+// which is mapped already. size() keeps reporting the count the caller gave.
+std::int64_t roundedUpToPage(std::int64_t bytes)
+{
+    const auto page = Buffer::memoryPageSize();
+
+    return ((bytes + page - 1) / page) * page;
+}
+
+// A residency request holds a lock that making the next no-copy buffer waits
+// on, so a loader adopting a model a piece at a time would make each piece
+// wait for the request of the one before it - a second of loading for what
+// is otherwise free. Requests are held here instead until no memory has been
+// adopted for a moment, and then all go at once; a loader that never pauses
+// sends them anyway once the oldest has waited long enough.
+class ResidencyRequests
+{
+public:
+    // Never destroyed: a timer from a burst already sent still fires up to
+    // 10 ms later, and one firing after exit ran the destructors would lock a
+    // destroyed mutex.
+    static ResidencyRequests& shared()
+    {
+        static auto& requests = *new ResidencyRequests {};
+        return requests;
+    }
+
+    void add(void* set, dispatch_group_t group)
+    {
+        dispatch_retain(group);
+        dispatch_group_enter(group);
+
+        auto generation = std::uint64_t {};
+        auto now = dispatch_time(DISPATCH_TIME_NOW, 0);
+
+        {
+            auto lock = std::lock_guard {mutex};
+
+            if (pending.empty())
+                oldest = now;
+
+            pending.push_back({set, group});
+            generation = ++latest;
+        }
+
+        dispatch_after(dispatch_time(now, quietPeriod),
+                       queue,
+                       ^{ sendIfQuiet(generation); });
+    }
+
+private:
+    struct Pending
+    {
+        void* set = nullptr;
+        dispatch_group_t group = nullptr;
+    };
+
+    static constexpr auto quietPeriod = std::int64_t {10} * NSEC_PER_MSEC;
+    static constexpr auto longestWait = std::int64_t {100} * NSEC_PER_MSEC;
+
+    void sendIfQuiet(std::uint64_t generation)
+    {
+        auto ready = std::vector<Pending> {};
+
+        {
+            auto lock = std::lock_guard {mutex};
+            auto waitedLongEnough =
+                dispatch_time(oldest, longestWait) <= dispatch_time(DISPATCH_TIME_NOW, 0);
+
+            if (generation != latest && !waitedLongEnough)
+                return;
+
+            ready.swap(pending);
+        }
+
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+                       ^{
+                           for (auto request: ready)
+                           {
+                               if (@available(macOS 15.0, iOS 18.0, *))
+                                   [(__bridge id<MTLResidencySet>) request.set
+                                       requestResidency];
+                               dispatch_group_leave(request.group);
+                               dispatch_release(request.group);
+                           }
+                       });
+    }
+
+    std::mutex mutex;
+    std::vector<Pending> pending;
+    std::uint64_t latest = 0;
+    dispatch_time_t oldest = 0;
+    dispatch_queue_t queue =
+        dispatch_queue_create("eacp.gpu.residency", DISPATCH_QUEUE_SERIAL);
+};
+} // namespace
+
 struct Buffer::Native
 {
     Native(Device& deviceToUse,
            const void* data,
-           int bytes,
+           std::int64_t bytes,
            BufferUsage,
            BufferStorage)
         : device(&deviceToUse)
@@ -40,14 +145,121 @@ struct Buffer::Native
                                               options:MTLResourceStorageModeShared];
     }
 
+    // The zero-copy path. Metal takes host pages as a buffer outright when the
+    // address is page-aligned, which is what makes a mapped weights file
+    // readable by a kernel without a second copy of it existing anywhere.
+    //
+    // The deallocator is the release rather than this struct's destructor,
+    // because it is Metal that knows when the memory is finished with: a
+    // command buffer still in flight holds a reference to the MTLBuffer long
+    // after the Buffer that made it has gone, and freeing the pages on the
+    // Buffer's own destruction would pull them out from under it.
+    Native(Device& deviceToUse, ExternalMemory memory, BufferUsage)
+        : device(&deviceToUse)
+        , length(memory.byteCount)
+    {
+        auto metalDevice = (__bridge id<MTLDevice>) device->nativeDevice();
+        auto onReleased = std::move(memory.onReleased);
+
+        if (metalDevice == nil || !Buffer::isPageAligned(memory))
+        {
+            length = 0;
+            onReleased();
+
+            return;
+        }
+
+        buffer = [metalDevice
+            newBufferWithBytesNoCopy:memory.bytes
+                              length:(NSUInteger) roundedUpToPage(memory.byteCount)
+                             options:MTLResourceStorageModeShared
+                         deallocator:^(void*, NSUInteger) { onReleased(); }];
+
+        // Nothing adopted the memory, so nothing will ever call the block: the
+        // caller is told here instead, and once.
+        if (buffer.get() == nil)
+        {
+            length = 0;
+            onReleased();
+
+            return;
+        }
+
+        requestResidencyInBackground(metalDevice);
+    }
+
+    // Metal wires a no-copy buffer's pages the first time a command buffer uses
+    // it, and for a mapped checkpoint that is half a second per nine gigabytes
+    // spent inside the first dispatch. A residency set asks for it now, on a
+    // background queue, so it overlaps whatever the caller does after loading
+    // rather than the first thing it runs - and reads the pages in from disk on
+    // the way when the file is not in the page cache. The set lives as long as
+    // the buffer and keeps its pages resident, as the first use would have.
+    void requestResidencyInBackground(id<MTLDevice> metalDevice)
+    {
+        if (@available(macOS 15.0, iOS 18.0, *))
+        {
+            auto descriptor = ObjC::Ptr<MTLResidencySetDescriptor> {};
+            descriptor = [MTLResidencySetDescriptor new];
+
+            id<MTLResidencySet> set =
+                [metalDevice newResidencySetWithDescriptor:descriptor.get()
+                                                     error:nil];
+
+            if (set == nil)
+                return;
+
+            residency = (NSObject*) set;
+
+            [set addAllocation:buffer.get()];
+            [set commit];
+
+            // Handed over unretained, so the set - and the buffer it holds -
+            // go when this Native does rather than when the request is done
+            // with it; the destructor waits for the request instead.
+            residencyRequest = dispatch_group_create();
+            ResidencyRequests::shared().add((__bridge void*) set, residencyRequest);
+        }
+    }
+
+    ~Native()
+    {
+        if (residencyRequest == nullptr)
+            return;
+
+        dispatch_group_wait(residencyRequest, DISPATCH_TIME_FOREVER);
+        dispatch_release(residencyRequest);
+    }
+
+    Native(const Native&) = delete;
+    Native& operator=(const Native&) = delete;
+
+    // The copy both update paths end in, so that each of them asserts the
+    // owning thread once rather than once on the way through the other.
+    void write(const void* data, std::int64_t bytes, std::int64_t offset)
+    {
+        auto metalBuffer = buffer.get();
+
+        if (metalBuffer == nil || data == nullptr || bytes <= 0 || offset < 0
+            || offset >= length)
+            return;
+
+        const auto available = length - offset;
+        const auto count = bytes < available ? bytes : available;
+
+        std::memcpy((char*) [metalBuffer contents] + offset, data, (std::size_t) count);
+    }
+
     ObjC::Ptr<NSObject<MTLBuffer>> buffer;
+    ObjC::Ptr<NSObject> residency;
+    dispatch_group_t residencyRequest = nullptr;
     Device* device = nullptr;
-    int length = 0;
+    std::int64_t length = 0;
 };
 
 Buffer::Buffer(Device& device,
                const void* data,
-               int bytes,
+               std::int64_t bytes,
                BufferUsage usage,
                BufferStorage storage)
     : impl(device, data, bytes, usage, storage)
@@ -58,7 +270,31 @@ Buffer::Buffer(Device& device,
         device.noteBufferCreated();
 }
 
-int Buffer::size() const
+Buffer::Buffer(Device& device, ExternalMemory memory, BufferUsage usage)
+    : impl(device, std::move(memory), usage)
+{
+    if (isValid())
+        device.noteBufferCreated();
+}
+
+// True of every Metal device there is, and false of a Device that never came up
+// - which makes no buffers at all, adopted or otherwise.
+//
+// There is deliberately no copying fallback behind it: memory Metal declines
+// leaves an invalid Buffer rather than a silent copy of a file the size of a
+// model, which is the one outcome a caller reaching for this would not want to
+// discover from a memory graph.
+bool Buffer::canAdoptMemory(const Device& device)
+{
+    return device.isValid();
+}
+
+std::int64_t Buffer::memoryPageSize()
+{
+    return (std::int64_t) getpagesize();
+}
+
+std::int64_t Buffer::size() const
 {
     return impl->length;
 }
@@ -68,8 +304,11 @@ bool Buffer::isValid() const
     return impl->buffer.get() != nil;
 }
 
-void Buffer::read(void* dst, int bytes, int offset) const
+void Buffer::read(void* dst, std::int64_t bytes, std::int64_t offset) const
 {
+    if (impl->device != nullptr)
+        impl->device->assertOwningThread();
+
     if (bytes <= 0 || offset < 0 || offset >= impl->length)
         return;
 
@@ -89,18 +328,28 @@ void Buffer::read(void* dst, int bytes, int offset) const
             dst, (const char*) [metalBuffer contents] + offset, (std::size_t) count);
 }
 
-void Buffer::update(const void* data, int bytes, int offset)
+void Buffer::update(const void* data, std::int64_t bytes, std::int64_t offset)
 {
-    auto metalBuffer = impl->buffer.get();
+    // Every Metal buffer here is shared storage, so the write below is a memcpy
+    // into memory a kernel submitted earlier may still be writing. Waiting for
+    // the newest submission is what puts the host's bytes after it, and it is
+    // the same wait read() takes - see the rule on Buffer.h, and
+    // updateUnordered for the frame loop, which cannot afford it.
+    if (impl->device != nullptr)
+    {
+        impl->device->assertOwningThread();
+        impl->device->waitForSubmittedWork();
+    }
 
-    if (metalBuffer == nil || data == nullptr || bytes <= 0 || offset < 0
-        || offset >= impl->length)
-        return;
+    impl->write(data, bytes, offset);
+}
 
-    auto available = impl->length - offset;
-    auto count = bytes < available ? bytes : available;
-    std::memcpy(
-        (char*) [metalBuffer contents] + offset, data, (std::size_t) count);
+void Buffer::updateUnordered(const void* data, std::int64_t bytes, std::int64_t offset)
+{
+    if (impl->device != nullptr)
+        impl->device->assertOwningThread();
+
+    impl->write(data, bytes, offset);
 }
 
 void* Buffer::nativeBuffer() const

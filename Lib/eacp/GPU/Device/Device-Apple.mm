@@ -6,6 +6,10 @@
 #include <eacp/Core/ObjC/CFRef.h>
 #include <eacp/Core/ObjC/ObjC.h>
 #include <eacp/Core/Utils/Containers.h>
+#include <eacp/Core/Utils/Environment.h>
+
+#include <deque>
+#include <utility>
 
 namespace eacp::GPU
 {
@@ -94,7 +98,24 @@ struct Device::Native
     // Retained rather than held weakly: the command buffer is autoreleased, and
     // the pool it came from may well have drained by the time a read waits.
     ObjC::Ptr<NSObject<MTLCommandBuffer>> lastSubmitted;
+
+    // The submissions that may still be running, oldest first, each beside
+    // its serial. Metal has no queue-wide fence to read, so whether a serial
+    // has finished is asked of the command buffers themselves.
+    std::uint64_t submissionCount = 0;
+    std::deque<std::pair<std::uint64_t, ObjC::Ptr<NSObject<MTLCommandBuffer>>>> inFlight;
 };
+
+namespace
+{
+bool hasCommandBufferFinished(NSObject<MTLCommandBuffer>* buffer)
+{
+    auto status = ((id<MTLCommandBuffer>) buffer).status;
+
+    return status == MTLCommandBufferStatusCompleted
+           || status == MTLCommandBufferStatusError;
+}
+} // namespace
 
 Device::Device()
     : impl()
@@ -104,6 +125,13 @@ Device::Device()
 Device& Device::shared()
 {
     static Device instance;
+
+    // Created lazily but owned by the main thread whichever thread asked for it
+    // first — every GPUView and every Frame drives this one from there. See the
+    // thread rule on Device.
+    [[maybe_unused]] static const auto boundToMainThread =
+        (instance.followMainThread(), true);
+
     return instance;
 }
 
@@ -173,6 +201,64 @@ int Device::maxThreadgroupMemory() const
     return (int) metalDevice.maxThreadgroupMemoryLength;
 }
 
+// What Metal itself recommends staying under, which on a unified-memory Mac is
+// a share of system RAM rather than a card's own, and already accounts for what
+// else is resident. Zero from a device that will not say.
+std::int64_t Device::memoryBudget() const
+{
+    auto metalDevice = (__bridge id<MTLDevice>) nativeDevice();
+
+    if (metalDevice == nil)
+        return 0;
+
+    return (std::int64_t) metalDevice.recommendedMaxWorkingSetSize;
+}
+
+// The family is the gate both packed fragment types share. MTLGPUFamilyApple7
+// is the first with the SIMD-group matrix instructions, and it is also where
+// the SIMD group is the 32 threads the EDSL's fragment layout is written
+// against - an Intel Mac has neither, and answering no there is a claim about
+// this GPU rather than about the OS.
+//
+// EACP_NO_PACKED_SIMD_MATRIX takes the answer away on a machine that has it, so
+// the staged path both queries exist to select stays reachable in a test on
+// hardware that would otherwise never take it.
+bool Device::supportsHalfSimdMatrix() const
+{
+    if (!isValid() || getEnvValue("EACP_NO_PACKED_SIMD_MATRIX") == "1")
+        return false;
+
+    auto metalDevice = (__bridge id<MTLDevice>) nativeDevice();
+
+    return [metalDevice supportsFamily:MTLGPUFamilyApple7] == YES;
+}
+
+// Everything above plus the OS: simdgroup_bfloat8x8 is Metal 3.1, which is
+// macOS 14 and iOS 17, and eacp's deployment targets are 11.0 and 14.0. The
+// guard is therefore real on both platforms rather than inert on one.
+//
+// Known risk, stated rather than hidden: this pairs the OS with Apple7, and
+// Apple7 is an M1. Metal 3.1 is a *language* version, so the type exists
+// wherever the OS is new enough, but whether every Apple7 part has the bf16
+// matrix instruction under it was measured here on an Apple9 only - an M1 on
+// macOS 14 will answer yes to this and has not been checked. Should such a part
+// turn out not to have it, the shader fails to compile, and the whole of what
+// that costs is the quiet refusal ComputeProgram::prepare already makes: an
+// invalid library, an invalid pipeline, and a dispatch that ComputePass drops.
+// Nothing crashes and nothing silently computes a wrong answer. Narrow this to
+// a later family, or to a runtime compile probe, the moment such a device is
+// found.
+bool Device::supportsBFloat16SimdMatrix() const
+{
+    if (!supportsHalfSimdMatrix())
+        return false;
+
+    if (@available(macOS 14.0, iOS 17.0, *))
+        return true;
+
+    return false;
+}
+
 void* Device::nativeContext() const
 {
     // Nothing to hand out: the queue, the texture cache and the samplers are
@@ -204,6 +290,34 @@ void Device::trackSubmittedWork(void* nativeCommandBuffer)
 {
     impl->lastSubmitted.reset(
         (__bridge NSObject<MTLCommandBuffer>*) nativeCommandBuffer);
+
+    while (!impl->inFlight.empty()
+           && hasCommandBufferFinished(impl->inFlight.front().second.get()))
+        impl->inFlight.pop_front();
+
+    impl->inFlight.emplace_back(++impl->submissionCount, impl->lastSubmitted);
+}
+
+std::uint64_t Device::lastSubmission() const
+{
+    return impl->submissionCount;
+}
+
+bool Device::hasFinished(std::uint64_t submission) const
+{
+    if (submission > impl->submissionCount)
+        return false;
+
+    for (const auto& [serial, buffer]: impl->inFlight)
+    {
+        if (serial > submission)
+            break;
+
+        if (!hasCommandBufferFinished((NSObject<MTLCommandBuffer>*) buffer.get()))
+            return false;
+    }
+
+    return true;
 }
 
 void Device::waitForSubmittedWork()

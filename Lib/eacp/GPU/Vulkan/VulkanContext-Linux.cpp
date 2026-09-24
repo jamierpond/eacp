@@ -8,6 +8,7 @@
 
 #include <eacp/Core/Threads/ThreadUtils.h>
 #include <eacp/Core/Utils/Environment.h>
+#include <eacp/Core/Utils/FilePath.h>
 
 #include <algorithm>
 #include <cassert>
@@ -67,21 +68,12 @@ std::uint64_t currentThreadId()
         std::hash<std::thread::id> {}(std::this_thread::get_id()));
 }
 
-// $XDG_CACHE_HOME/eacp, and $HOME/.cache/eacp where the first is unset. Empty
-// when neither is, which turns the pipeline cache off rather than guessing.
+// The app's own cache folder, FilePath::appCacheDirectory() - under
+// $XDG_CACHE_HOME, or $HOME/.cache where it is unset - beside the compiled
+// shaders ShaderBinaryCache keeps there.
 std::string vulkanCacheDirectory()
 {
-    const auto xdg = getEnvValue("XDG_CACHE_HOME");
-
-    if (!xdg.empty())
-        return xdg + "/eacp";
-
-    const auto home = getEnvValue("HOME");
-
-    if (home.empty())
-        return {};
-
-    return home + "/.cache/eacp";
+    return FilePath::appCacheDirectory().str();
 }
 
 std::string toHex(const std::uint8_t* bytes, int count)
@@ -708,15 +700,24 @@ bool VulkanShared::createInstance()
             extensions.add(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
 
-    // Asked for rather than required: a headless ICD offers neither.
-    const auto surfaceOffered =
-        hasInstanceExtension(VK_KHR_SURFACE_EXTENSION_NAME)
-        && hasInstanceExtension(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
+    // Asked for rather than required: a headless ICD offers none of them. The
+    // two window systems are independent - a driver may carry either.
+    const auto waylandOffered =
+        hasInstanceExtension(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
+    const auto xcbOffered = hasInstanceExtension(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
+
+    const auto surfaceOffered = hasInstanceExtension(VK_KHR_SURFACE_EXTENSION_NAME)
+                                && (waylandOffered || xcbOffered);
 
     if (surfaceOffered)
     {
         extensions.add(VK_KHR_SURFACE_EXTENSION_NAME);
-        extensions.add(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
+
+        if (waylandOffered)
+            extensions.add(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
+
+        if (xcbOffered)
+            extensions.add(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
     }
 
     VkInstanceCreateInfo info = {};
