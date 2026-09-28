@@ -13,11 +13,10 @@ bool isStandalone()
 // loop all the same.
 bool isDLL()
 {
-#if defined(__ANDROID__)
-    return false;
-#else
+    if constexpr (isAndroid())
+        return false;
+
     return Plugins::isDynamicLibrary();
-#endif
 }
 
 } // namespace eacp::Platform

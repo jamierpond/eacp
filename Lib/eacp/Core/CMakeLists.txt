@@ -67,6 +67,7 @@ if (APPLE)
                 App/Clipboard-macOS.mm
                 App/LoginItem-macOS.mm
                 Process/Process-Posix.cpp
+                Process/SpawnDirectory-Posix.cpp
                 Threads/EventLoop-macOS.mm)
         target_link_libraries(eacp-core PRIVATE
                 "-framework Cocoa"
@@ -104,25 +105,30 @@ elseif (UNIX AND NOT APPLE)
             Plugins/ModuleInfo-Linux.cpp
             Plugins/ModuleInfo-Posix.cpp
             Process/Process-Posix.cpp
+            Threads/EventLoop-Linux.cpp
             Threads/ThreadUtils-Linux.cpp
             Threads/Timer-Linux.cpp
             Utils/Environment-Posix.cpp
-            Utils/FilePath-Linux.cpp
             Utils/Files-Linux.cpp
             Utils/MemoryMappedFile-Posix.cpp)
     find_package(Threads ${EACP_FIND_QUIET} REQUIRED)
     target_link_libraries(eacp-core PRIVATE Threads::Threads)
 
-    # Android is Linux without a poll(2)-shaped loop or a stdout anyone reads:
-    # the loop runs on the thread's ALooper and the log goes to logcat.
+    # Android is Linux where the loop waits in the thread's ALooper, the log
+    # goes to logcat, files live in the app's own storage and spawning into a
+    # directory needs API 34.
     if (ANDROID)
         target_sources(eacp-core PRIVATE
+                Process/SpawnDirectory-Android.cpp
                 Threads/EventLoop-Android.cpp
+                Utils/FilePath-Android.cpp
                 Utils/Logging-Android.cpp)
         target_link_libraries(eacp-core PUBLIC android log)
     else ()
         target_sources(eacp-core PRIVATE
-                Threads/EventLoop-Linux.cpp
+                Process/SpawnDirectory-Posix.cpp
+                Threads/EventLoopWait-Linux.cpp
+                Utils/FilePath-Linux.cpp
                 Utils/Logging-Posix.cpp)
     endif ()
 endif ()

@@ -135,7 +135,8 @@ elseif (ANDROID)
             Menu/Menu-Linux.cpp
             Primitives/Path-Linux.cpp
             Tray/TrayIcon-Linux.cpp
-            View/View-Android.cpp
+            View/AndroidViewSurface-Android.cpp
+            View/View-Linux.cpp
             Window/AndroidMain-Android.c
             Window/Display-Android.cpp
             Window/Window-Android.cpp)

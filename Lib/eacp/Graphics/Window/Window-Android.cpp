@@ -2,11 +2,12 @@
 #include "Window.h"
 
 #include "../Graphics/Keyboard.h"
+#include "LinuxWindowSystem-Linux.h"
 #include "../View/AndroidViewSurface-Android.h"
 
 #include <eacp/Core/App/App.h>
 #include <eacp/Core/Threads/EventLoop-Android.h>
-#include <eacp/Core/Utils/Environment.h>
+#include <eacp/Core/Utils/FilePath-Android.h>
 
 #include <android/configuration.h>
 #include <android/native_window.h>
@@ -173,22 +174,6 @@ std::optional<ARect> androidSystemInsets(ANativeActivity* activity)
 void androidHandleCommand(android_app* app, int32_t command);
 int32_t androidHandleInput(android_app* app, AInputEvent* event);
 
-// $HOME and the XDG roots point into the app's own storage, so the Linux
-// FilePath code and the Vulkan pipeline cache find writable directories.
-void androidPointHomeAtAppStorage(android_app* app)
-{
-    const auto* activity = app->activity;
-
-    if (activity == nullptr || activity->internalDataPath == nullptr)
-        return;
-
-    auto data = std::string {activity->internalDataPath};
-
-    setEnv("HOME", data);
-    setEnv("XDG_CONFIG_HOME", data + "/config");
-    setEnv("XDG_DATA_HOME", data + "/data");
-    setEnv("XDG_CACHE_HOME", data + "/cache");
-}
 struct AndroidWindow : AndroidWindowSurface
 {
     AndroidWindow(const WindowOptions& optionsToUse, WindowEvents& eventsToUse)
@@ -196,6 +181,9 @@ struct AndroidWindow : AndroidWindowSurface
         , onResize(optionsToUse.onResize)
         , events(&eventsToUse)
     {
+        contentSize = {640.f, 400.f};
+        viewSurfaces = makeAndroidViewSurfaceBackend(*this);
+
         auto& activity = androidActivity();
         activity.window = this;
 
@@ -205,7 +193,7 @@ struct AndroidWindow : AndroidWindowSurface
     ~AndroidWindow()
     {
         if (contentView != nullptr)
-            androidUnbindWindowFromContentView(*contentView);
+            linuxUnbindWindowFromContentView(*contentView);
 
         auto& activity = androidActivity();
 
@@ -221,6 +209,12 @@ struct AndroidWindow : AndroidWindowSurface
 
         nativeWindow = current;
         scale = androidBackingScale(app);
+        mapped = nativeWindow != nullptr;
+        nativeSurface = {};
+
+        if (nativeWindow != nullptr)
+            nativeSurface = {
+                NativeSurfaceHandle::Kind::Android, nullptr, nativeWindow, 0};
 
         if (nativeWindow != nullptr)
         {
@@ -284,7 +278,18 @@ struct AndroidWindow : AndroidWindowSurface
         if (resized)
             layOutContent();
 
-        androidWindowSurfaceChanged(*contentView);
+        linuxWindowSurfaceStateChanged(*contentView);
+    }
+
+    // The glue still holds the window here; the views must let go of it.
+    void nativeWindowLost()
+    {
+        nativeWindow = nullptr;
+        nativeSurface = {};
+        mapped = false;
+
+        if (contentView != nullptr)
+            linuxWindowSurfaceStateChanged(*contentView);
     }
 
     void layOutContent()
@@ -301,7 +306,7 @@ struct AndroidWindow : AndroidWindowSurface
     void setContentView(View* view)
     {
         if (contentView != nullptr)
-            androidUnbindWindowFromContentView(*contentView);
+            linuxUnbindWindowFromContentView(*contentView);
 
         contentView = view;
 
@@ -309,7 +314,7 @@ struct AndroidWindow : AndroidWindowSurface
             return;
 
         layOutContent();
-        androidBindWindowToContentView(*contentView, *this);
+        linuxBindWindowToContentView(*contentView, *this);
     }
 
     void dispatchPrimary(MouseEventType type, Point position, int64_t eventTime)
@@ -339,7 +344,6 @@ struct AndroidWindow : AndroidWindowSurface
     ResizeCallback onResize;
     WindowEvents* events;
 
-    Point contentSize {640.f, 400.f};
     Insets insets;
     bool focused = false;
 };
@@ -492,12 +496,7 @@ void androidHandleCommand(android_app* app, int32_t command)
         // The glue still holds the window here; the record must let go of it.
         case APP_CMD_TERM_WINDOW:
             if (window != nullptr)
-            {
-                window->nativeWindow = nullptr;
-
-                if (window->contentView != nullptr)
-                    androidWindowSurfaceChanged(*window->contentView);
-            }
+                window->nativeWindowLost();
             break;
 
         case APP_CMD_GAINED_FOCUS:
@@ -545,6 +544,19 @@ struct Window::Native : AndroidWindow
 {
     using AndroidWindow::AndroidWindow;
 };
+
+// A touch screen has no pointer between touches, and no cursor.
+LinuxWindowSurface* linuxPointerWindow()
+{
+    return nullptr;
+}
+
+Point linuxPointerPosition()
+{
+    return {};
+}
+
+void linuxRefreshCursor() {}
 
 namespace Android
 {
@@ -680,7 +692,9 @@ extern "C" void eacpAndroidStart(android_app* app)
     using namespace eacp::Graphics;
 
     androidActivity().app = app;
-    androidPointHomeAtAppStorage(app);
+
+    if (app->activity != nullptr && app->activity->internalDataPath != nullptr)
+        eacp::setAndroidDataDirectory(app->activity->internalDataPath);
 
     app->onAppCmd = androidHandleCommand;
     app->onInputEvent = androidHandleInput;

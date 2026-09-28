@@ -14,7 +14,8 @@ enum class OS
     MacOS,
     iOS,
     Windows,
-    Linux
+    Linux,
+    Android
 };
 
 // The operating system this binary was built for. The single compile-time
@@ -30,6 +31,8 @@ constexpr OS current()
     return OS::iOS;
 #elif defined(__APPLE__)
     return OS::MacOS;
+#elif defined(__ANDROID__)
+    return OS::Android;
 #elif defined(__linux__)
     return OS::Linux;
 #else
@@ -57,12 +60,18 @@ constexpr bool isWindows()
     return current() == OS::Windows;
 }
 
-constexpr bool isLinux()
+constexpr bool isAndroid()
 {
-    return current() == OS::Linux;
+    return current() == OS::Android;
 }
 
-constexpr bool isPosix() // Apple || Linux
+// Linux desktop || Android: one kernel, and the same Vulkan backend and GLSL.
+constexpr bool isLinux()
+{
+    return current() == OS::Linux || isAndroid();
+}
+
+constexpr bool isPosix() // Apple || Linux (Android included)
 {
     return isApple() || isLinux();
 }
@@ -79,6 +88,8 @@ constexpr std::string_view name()
             return "Windows";
         case OS::Linux:
             return "Linux";
+        case OS::Android:
+            return "Android";
     }
     return "Unknown";
 }

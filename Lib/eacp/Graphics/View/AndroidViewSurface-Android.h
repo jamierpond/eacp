@@ -1,29 +1,24 @@
 #pragma once
 
-#include "../Primitives/Primitives.h"
+#include "ViewSurfaceBackend-Linux.h"
+#include "../Window/LinuxWindowSurface-Linux.h"
 
 struct ANativeWindow;
 
-// What Window-Android.cpp needs of View-Android.cpp.
+// The Android half of a presenting view. An activity has one surface, so the
+// window's whole ANativeWindow goes to one presenting view at a time.
 
 namespace eacp::Graphics
 {
-class View;
-
-// An activity has one surface, so a window's is handed whole to the first
-// presenting view in its tree.
-struct AndroidWindowSurface
+struct AndroidWindowSurface : LinuxWindowSurface
 {
+    // Null between the glue's TERM_WINDOW and the next INIT_WINDOW.
     ANativeWindow* nativeWindow = nullptr;
+
     int pixelWidth = 0;
     int pixelHeight = 0;
-    float scale = 1.f;
-    View* contentView = nullptr;
 };
 
-void androidBindWindowToContentView(View& contentView, AndroidWindowSurface& window);
-void androidUnbindWindowFromContentView(View& contentView);
-
-// The native window came, went or changed size.
-void androidWindowSurfaceChanged(View& contentView);
+std::unique_ptr<ViewSurfaceBackend>
+    makeAndroidViewSurfaceBackend(AndroidWindowSurface& window);
 } // namespace eacp::Graphics
