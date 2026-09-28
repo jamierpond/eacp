@@ -38,6 +38,7 @@ struct AndroidActivity
     std::function<bool(const Android::TouchEvent&)> touchHandler =
         [](const Android::TouchEvent&) { return false; };
     std::function<void(bool)> lifecycleHandler = [](bool) {};
+    std::function<void(Insets)> safeAreaHandler = [](Insets) {};
 
     AndroidPrimaryTouch primary;
 };
@@ -127,7 +128,14 @@ struct AndroidWindow : AndroidWindowSurface
         }
 
         if (app != nullptr && nativeWindow != nullptr)
+        {
+            auto before = insets;
             readInsets(app->contentRect);
+
+            if (before.top != insets.top || before.left != insets.left
+                || before.bottom != insets.bottom || before.right != insets.right)
+                androidActivity().safeAreaHandler(insets);
+        }
 
         return contentSize.x != oldSize.x || contentSize.y != oldSize.y;
     }
@@ -213,7 +221,7 @@ struct AndroidWindow : AndroidWindowSurface
     WindowEvents* events;
 
     Point contentSize {640.f, 400.f};
-    Android::Insets insets;
+    Insets insets;
     bool focused = false;
 };
 
@@ -438,6 +446,12 @@ void setLifecycleHandler(std::function<void(bool resumed)> handler)
 {
     androidActivity().lifecycleHandler =
         handler ? std::move(handler) : std::function<void(bool)> {[](bool) {}};
+}
+
+void setSafeAreaHandler(std::function<void(Insets)> handler)
+{
+    androidActivity().safeAreaHandler =
+        handler ? std::move(handler) : std::function<void(Insets)> {[](Insets) {}};
 }
 
 Insets getSafeAreaInsets()

@@ -37,13 +37,8 @@ void setTouchHandler(std::function<bool(const TouchEvent&)> handler);
 void setLifecycleHandler(std::function<void(bool resumed)> handler);
 
 // The window's content insets that system bars and cutouts cover, in points.
-struct Insets
-{
-    float top = 0.f;
-    float left = 0.f;
-    float bottom = 0.f;
-    float right = 0.f;
-};
-
 Insets getSafeAreaInsets();
+
+// Called whenever the insets above change.
+void setSafeAreaHandler(std::function<void(Insets)> handler);
 } // namespace eacp::Graphics::Android
