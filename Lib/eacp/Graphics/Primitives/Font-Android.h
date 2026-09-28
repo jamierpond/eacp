@@ -5,7 +5,7 @@
 #include <functional>
 
 // The glyph source behind Font, TextMetrics and SoftwareContext on Android:
-// TrueType files from /system/fonts, read by stb_truetype.
+// TrueType files from /system/fonts, read by FreeType.
 namespace eacp::Graphics::AndroidFonts
 {
 struct Face;

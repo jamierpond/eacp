@@ -1,9 +1,11 @@
 #include "Font-Android.h"
 
-#include <stb_truetype.h>
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include FT_ADVANCES_H
+#include FT_SYNTHESIS_H
 
 #include <algorithm>
-#include <fstream>
 #include <map>
 #include <memory>
 #include <tuple>
@@ -14,11 +16,9 @@ struct Face
 {
     using GlyphKey = std::tuple<int, int, bool>;
 
-    Vector<std::uint8_t> bytes;
-    stbtt_fontinfo info {};
-    int ascent = 0;
-    int descent = 0;
-    int lineGap = 0;
+    ~Face() { FT_Done_Face(face); }
+
+    FT_Face face = nullptr;
     float unitsPerEm = 1000.f;
     mutable std::map<GlyphKey, GlyphImage> glyphs;
 };
@@ -32,37 +32,36 @@ using AndroidFonts::Face;
 using AndroidFonts::GlyphImage;
 using AndroidFonts::ResolvedFont;
 
-std::unique_ptr<Face> readFace(const std::string& fileName)
+struct Library final
 {
-    auto stream = std::ifstream("/system/fonts/" + fileName, std::ios::binary);
-    if (!stream)
-        return nullptr;
+    Library() { FT_Init_FreeType(&library); }
+    ~Library() { FT_Done_FreeType(library); }
 
+    FT_Library library = nullptr;
+};
+
+std::unique_ptr<Face> readFace(FT_Library library, const std::string& fileName)
+{
     auto face = std::make_unique<Face>();
-    stream.seekg(0, std::ios::end);
-    face->bytes.resize(static_cast<int>(stream.tellg()));
-    stream.seekg(0);
-    stream.read(reinterpret_cast<char*>(face->bytes.data()), face->bytes.size());
+    auto path = "/system/fonts/" + fileName;
 
-    auto* data = face->bytes.data();
-    if (!stream
-        || !stbtt_InitFont(&face->info, data, stbtt_GetFontOffsetForIndex(data, 0)))
+    if (!library || FT_New_Face(library, path.c_str(), 0, &face->face) != 0)
         return nullptr;
 
-    stbtt_GetFontVMetrics(
-        &face->info, &face->ascent, &face->descent, &face->lineGap);
-    face->unitsPerEm = 1.f / stbtt_ScaleForMappingEmToPixels(&face->info, 1.f);
+    face->unitsPerEm = float(std::max<FT_UShort>(face->face->units_per_EM, 1));
     return face;
 }
 
 const Face* loadFace(const std::string& fileName)
 {
+    // The library is built first, so it is torn down after the faces.
+    static auto library = Library();
     static auto faces = std::map<std::string, std::unique_ptr<Face>>();
 
     auto found = faces.find(fileName);
     if (found == faces.end())
     {
-        found = faces.emplace(fileName, readFace(fileName)).first;
+        found = faces.emplace(fileName, readFace(library.library, fileName)).first;
         if (!found->second)
             LOG("eacp: no font at /system/fonts/", fileName);
     }
@@ -88,7 +87,7 @@ bool containsAny(const std::string& text, std::initializer_list<const char*> wor
 }
 
 // Android ships no bold monospace, so a bold mono name gets its regular face
-// thickened after rasterizing (see embolden).
+// emboldened before rasterizing.
 ResolvedFont resolveOptions(const FontOptions& options)
 {
     auto name = options.name;
@@ -136,49 +135,33 @@ int decodeUtf8(const std::string& text, int& index)
     return extra == 0 ? codepoint : 0xFFFD;
 }
 
-// Smears the coverage rightwards by radius pixels, keeping the brightest
-// sample: the look of a glyph drawn radius+1 times one pixel apart.
-void embolden(GlyphImage& glyph, int radius)
-{
-    auto width = glyph.width + radius;
-    auto thick = Vector<std::uint8_t>(width * glyph.height);
-
-    for (int y = 0; y < glyph.height; ++y)
-        for (int x = 0; x < width; ++x)
-        {
-            auto value = std::uint8_t {0};
-            for (int k = 0; k <= radius; ++k)
-                if (x - k >= 0 && x - k < glyph.width)
-                    value = std::max(value, glyph.coverage[y * glyph.width + x - k]);
-            thick[y * width + x] = value;
-        }
-
-    glyph.width = width;
-    glyph.coverage = std::move(thick);
-}
-
 GlyphImage rasterize(const ResolvedFont& font, int codepoint, float pixelSize)
 {
-    auto glyph = GlyphImage();
-    auto* info = &font.face->info;
-    auto scale = stbtt_ScaleForMappingEmToPixels(info, pixelSize);
+    auto* face = font.face->face;
+    auto charSize = static_cast<FT_F26Dot6>(std::lround(pixelSize * 64.f));
 
-    auto* bitmap = stbtt_GetCodepointBitmap(info,
-                                            scale,
-                                            scale,
-                                            codepoint,
-                                            &glyph.width,
-                                            &glyph.height,
-                                            &glyph.left,
-                                            &glyph.top);
-    if (!bitmap)
+    if (FT_Set_Char_Size(face, 0, charSize, 72, 72) != 0
+        || FT_Load_Char(face, FT_ULong(codepoint), FT_LOAD_TARGET_LIGHT) != 0)
         return {};
 
-    glyph.coverage.assign(bitmap, bitmap + glyph.width * glyph.height);
-    stbtt_FreeBitmap(bitmap, nullptr);
-
     if (font.syntheticBold)
-        embolden(glyph, std::max(1, int(std::lround(pixelSize / 24.f))));
+        FT_GlyphSlot_Embolden(face->glyph);
+
+    if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_LIGHT) != 0)
+        return {};
+
+    const auto& bitmap = face->glyph->bitmap;
+    auto glyph = GlyphImage();
+    glyph.left = face->glyph->bitmap_left;
+    glyph.top = -face->glyph->bitmap_top;
+    glyph.width = int(bitmap.width);
+    glyph.height = int(bitmap.rows);
+    glyph.coverage.resize(glyph.width * glyph.height);
+
+    for (int y = 0; y < glyph.height; ++y)
+        std::copy_n(bitmap.buffer + y * bitmap.pitch,
+                    glyph.width,
+                    glyph.coverage.data() + y * glyph.width);
 
     return glyph;
 }
@@ -197,30 +180,36 @@ GlyphRun layout(const ResolvedFont& font, const std::string& text)
     if (!font.face)
         return run;
 
-    auto* info = &font.face->info;
+    auto* face = font.face->face;
     auto scale = font.size / font.face->unitsPerEm;
+    auto kerning = FT_HAS_KERNING(face);
     auto pen = 0.f;
-    auto previous = 0;
+    auto previous = FT_UInt(0);
 
     for (int index = 0; index < (int) text.size();)
     {
         auto start = index;
         auto codepoint = decodeUtf8(text, index);
 
-        if (previous != 0)
-            pen += scale
-                   * float(stbtt_GetCodepointKernAdvance(info, previous, codepoint));
+        auto glyph = FT_Get_Char_Index(face, FT_ULong(codepoint));
 
-        auto advance = 0;
-        auto bearing = 0;
-        stbtt_GetCodepointHMetrics(info, codepoint, &advance, &bearing);
+        if (kerning && previous != 0 && glyph != 0)
+        {
+            auto kern = FT_Vector();
+            if (FT_Get_Kerning(face, previous, glyph, FT_KERNING_UNSCALED, &kern)
+                == 0)
+                pen += scale * float(kern.x);
+        }
+
+        auto advance = FT_Fixed(0);
+        FT_Get_Advance(face, glyph, FT_LOAD_NO_SCALE, &advance);
 
         run.codepoints.add(codepoint);
         run.byteOffsets.add(start);
         run.penPositions.add(pen);
 
         pen += scale * float(advance);
-        previous = codepoint;
+        previous = glyph;
     }
 
     run.width = pen;
@@ -242,20 +231,26 @@ const GlyphImage& getGlyph(const ResolvedFont& font, int codepoint, float pixelS
 
 float getAscent(const ResolvedFont& font)
 {
-    return font.face ? font.size * float(font.face->ascent) / font.face->unitsPerEm
-                     : font.size * 0.8f;
+    return font.face
+               ? font.size * float(font.face->face->ascender) / font.face->unitsPerEm
+               : font.size * 0.8f;
 }
 
 float getDescent(const ResolvedFont& font)
 {
-    return font.face ? -font.size * float(font.face->descent) / font.face->unitsPerEm
+    return font.face ? -font.size * float(font.face->face->descender)
+                           / font.face->unitsPerEm
                      : font.size * 0.2f;
 }
 
 float getLineGap(const ResolvedFont& font)
 {
-    return font.face ? font.size * float(font.face->lineGap) / font.face->unitsPerEm
-                     : 0.f;
+    if (!font.face)
+        return 0.f;
+
+    auto* face = font.face->face;
+    auto gap = face->height - (face->ascender - face->descender);
+    return font.size * float(std::max<FT_Short>(gap, 0)) / font.face->unitsPerEm;
 }
 } // namespace AndroidFonts
 

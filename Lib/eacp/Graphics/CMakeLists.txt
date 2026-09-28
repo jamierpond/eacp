@@ -153,9 +153,11 @@ elseif (ANDROID)
             PROPERTIES COMPILE_OPTIONS "-w")
     target_include_directories(eacp-graphics SYSTEM PUBLIC "${eacp_android_glue_dir}")
 
+    find_package(AndroidFreeType REQUIRED)
+
     # The app is a shared library NativeActivity loads: its entry point must
     # survive the link even though nothing in the library calls it.
-    target_link_libraries(eacp-graphics PUBLIC android log PRIVATE stb_truetype)
+    target_link_libraries(eacp-graphics PUBLIC android log PRIVATE eacp-freetype)
     target_link_options(eacp-graphics INTERFACE "-u" "ANativeActivity_onCreate")
 elseif (UNIX)
     # Wayland and X11 side by side, plus stubs for what needs a codec or a
