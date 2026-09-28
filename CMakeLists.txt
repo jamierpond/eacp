@@ -56,6 +56,14 @@ if (NOT EACP_BUILD_GRAPHICS)
             "Build the WebView module" FORCE)
 endif ()
 
+# Android 10 (API 29) is the floor: frame pacing calls
+# AChoreographer_postFrameCallback64. The NDK's default is far below it.
+if (ANDROID AND ANDROID_PLATFORM_LEVEL LESS 29)
+    message(FATAL_ERROR
+            "eacp needs Android 10 or later: configure with -DANDROID_PLATFORM=android-29 "
+            "(or higher); this build targets API ${ANDROID_PLATFORM_LEVEL}.")
+endif ()
+
 # What this host can do, decided once and read by Lib, Apps and Tests.
 #
 #   EACP_HAS_DRAW    a windowing system to put views in: Graphics.
@@ -65,6 +73,15 @@ endif ()
 #   EACP_HAS_CAPTURE Camera, CameraView, Video, VideoView.
 #   EACP_HAS_WEBVIEW a native web runtime (WKWebView, WebView2).
 #   EACP_HAS_COREML  a Core ML runtime: the ML module's runner.
+#   EACP_HAS_NETWORK an HTTP client backend: Network, and the WebView page
+#                    bridge over its RPC. Everywhere but Android, whose NDK
+#                    has no libcurl.
+set(EACP_HAS_NETWORK ON)
+
+if (ANDROID)
+    set(EACP_HAS_NETWORK OFF)
+endif ()
+
 set(EACP_HAS_DRAW OFF)
 
 if (EACP_BUILD_GRAPHICS AND (APPLE OR WIN32 OR LINUX OR ANDROID))

@@ -121,15 +121,27 @@ auto tReadsAStreamWithNoKnownSize = test("Files/readsAStreamWhoseSizeIsUnknown")
     } ignoreSigPipe;
 
     // Another thread, because opening either end of a FIFO blocks until the
-    // other is open. jthread so that a readFile which throws does not destroy it
-    // while joinable and terminate the whole suite.
+    // other is open. Joined on the way out, so that a readFile which throws
+    // does not destroy it while joinable and terminate the whole suite (what
+    // std::jthread would do, which the NDK's libc++ does not have).
     auto writer =
-        std::jthread {[&]
-                      {
-                          auto out = std::ofstream {path, std::ios::binary};
-                          out.write(contents.data(),
-                                    static_cast<std::streamsize>(contents.size()));
-                      }};
+        std::thread {[&]
+                     {
+                         auto out = std::ofstream {path, std::ios::binary};
+                         out.write(contents.data(),
+                                   static_cast<std::streamsize>(contents.size()));
+                     }};
+
+    struct JoinOnExit
+    {
+        ~JoinOnExit()
+        {
+            if (thread.joinable())
+                thread.join();
+        }
+
+        std::thread& thread;
+    } joinWriter {writer};
 
     const auto read = eacp::Files::readFile(FilePath {path});
 
