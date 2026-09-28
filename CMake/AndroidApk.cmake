@@ -1,0 +1,84 @@
+# eacp_add_android_apk(<target> PACKAGE <id> [LABEL <name>] [ORIENTATION <o>]
+#                      [VERSION_CODE <n>] [VERSION_NAME <s>] [RES_DIR <dir>]
+#                      [ICON <@mipmap/name>])
+#
+# Adds <target>-apk: the shared library <target> behind a NativeActivity,
+# packaged and debug-signed by Scripts/android-apk (no Gradle). The APK lands
+# at ${CMAKE_CURRENT_BINARY_DIR}/<target>.apk.
+
+set(EACP_ANDROID_APK_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/../Scripts/android-apk")
+set(EACP_ANDROID_MANIFEST_TEMPLATE
+        "${CMAKE_CURRENT_LIST_DIR}/AndroidManifest.xml.in")
+
+set(EACP_ANDROID_BUILD_TOOLS "35.0.0" CACHE STRING
+        "Android SDK build-tools version that packages APKs")
+set(EACP_ANDROID_TARGET_SDK "35" CACHE STRING
+        "targetSdkVersion, and the android.jar the manifest links against")
+
+function(eacp_add_android_apk target)
+    cmake_parse_arguments(APK ""
+            "PACKAGE;LABEL;ORIENTATION;VERSION_CODE;VERSION_NAME;RES_DIR;ICON" ""
+            ${ARGN})
+
+    if (NOT APK_PACKAGE)
+        message(FATAL_ERROR "eacp_add_android_apk(${target}): PACKAGE is required")
+    endif ()
+
+    set(EACP_APK_PACKAGE "${APK_PACKAGE}")
+    set(EACP_APK_LABEL "${target}")
+    set(EACP_APK_ORIENTATION "unspecified")
+    set(EACP_APK_VERSION_CODE "1")
+    set(EACP_APK_VERSION_NAME "${PROJECT_VERSION}")
+    set(EACP_APK_ICON_ATTRIBUTE "")
+
+    if (APK_LABEL)
+        set(EACP_APK_LABEL "${APK_LABEL}")
+    endif ()
+
+    if (APK_ORIENTATION)
+        set(EACP_APK_ORIENTATION "${APK_ORIENTATION}")
+    endif ()
+
+    if (APK_VERSION_CODE)
+        set(EACP_APK_VERSION_CODE "${APK_VERSION_CODE}")
+    endif ()
+
+    if (APK_VERSION_NAME)
+        set(EACP_APK_VERSION_NAME "${APK_VERSION_NAME}")
+    endif ()
+
+    if (NOT EACP_APK_VERSION_NAME)
+        set(EACP_APK_VERSION_NAME "0.1")
+    endif ()
+
+    if (APK_ICON)
+        set(EACP_APK_ICON_ATTRIBUTE "android:icon=\"${APK_ICON}\"")
+    endif ()
+
+    set(EACP_APK_MIN_SDK "${ANDROID_PLATFORM_LEVEL}")
+    set(EACP_APK_TARGET_SDK "${EACP_ANDROID_TARGET_SDK}")
+    set(EACP_APK_LIB_NAME "${target}")
+
+    set(manifest "${CMAKE_CURRENT_BINARY_DIR}/${target}-AndroidManifest.xml")
+    configure_file("${EACP_ANDROID_MANIFEST_TEMPLATE}" "${manifest}" @ONLY)
+
+    get_filename_component(sdk "${ANDROID_NDK}/../.." ABSOLUTE)
+    set(apk "${CMAKE_CURRENT_BINARY_DIR}/${target}.apk")
+
+    add_custom_command(
+            OUTPUT "${apk}"
+            COMMAND "${EACP_ANDROID_APK_SCRIPT}"
+                    "${sdk}"
+                    "${EACP_ANDROID_BUILD_TOOLS}"
+                    "android-${EACP_ANDROID_TARGET_SDK}"
+                    "${manifest}"
+                    "$<TARGET_FILE:${target}>"
+                    "${ANDROID_ABI}"
+                    "${apk}"
+                    "${APK_RES_DIR}"
+            DEPENDS ${target} "${manifest}" "${EACP_ANDROID_APK_SCRIPT}"
+            COMMENT "Packaging ${target}.apk"
+            VERBATIM)
+
+    add_custom_target(${target}-apk ALL DEPENDS "${apk}")
+endfunction()

@@ -1,5 +1,12 @@
 set(CMAKE_FOLDER Examples)
 
+# Android builds its own examples: each is a shared library behind a
+# NativeActivity, packaged as an APK, and Network (which Console uses) is out.
+if (ANDROID)
+    add_subdirectory(Android)
+    return ()
+endif ()
+
 add_subdirectory(Console)
 add_subdirectory(Network)
 
