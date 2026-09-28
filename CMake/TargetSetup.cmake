@@ -1,5 +1,23 @@
 include(AppleSetup)
 
+if (ANDROID)
+    include("${CMAKE_CURRENT_LIST_DIR}/AndroidApk.cmake")
+endif ()
+
+# An example app: an executable (a bundle on Apple), or on Android a shared
+# library behind a NativeActivity, packaged by <target>-apk and launched by
+# <target>-run (package com.eacp.<target in lower case>). An Android app keeps
+# its ordinary main().
+function(eacp_add_app target)
+    if (ANDROID)
+        add_library(${target} SHARED ${ARGN})
+        string(TOLOWER "${target}" package)
+        eacp_add_android_apk(${target} PACKAGE "com.eacp.${package}" LABEL "${target}")
+    else ()
+        add_executable(${target} ${ARGN})
+    endif ()
+endfunction()
+
 function(set_default_warnings_level target)
     if (MSVC)
         target_compile_options(${target} PRIVATE /W4)
@@ -302,6 +320,3 @@ function(eacp_default_setup)
         set(CMAKE_CXX_COMPILE_OPTIONS_IPO "-flto=full")
     endif ()
 endfunction()
-if (ANDROID)
-    include("${CMAKE_CURRENT_LIST_DIR}/AndroidApk.cmake")
-endif ()

@@ -1,9 +1,12 @@
 set(CMAKE_FOLDER Examples)
 
-# Android builds its own examples: each is a shared library behind a
-# NativeActivity, packaged as an APK, and Network (which Console uses) is out.
+# Android builds its own example and the GPU ones made with eacp_add_app, each
+# a shared library behind a NativeActivity packaged as an APK; Network (which
+# Console uses) and the 2D tier are out.
 if (ANDROID)
     add_subdirectory(Android)
+    add_subdirectory(GPU/Triangle)
+    add_subdirectory(GPU/GlyphAtlas)
     return ()
 endif ()
 

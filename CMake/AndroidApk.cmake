@@ -15,6 +15,19 @@ set(EACP_ANDROID_RUN_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/../Scripts/android-run")
 set(EACP_ANDROID_MANIFEST_TEMPLATE
         "${CMAKE_CURRENT_LIST_DIR}/AndroidManifest.xml.in")
 
+# The SDK: $ANDROID_HOME or $ANDROID_SDK_ROOT, else the one the NDK sits in
+# (the NDK's usual place, <sdk>/ndk/<version>).
+if (DEFINED ENV{ANDROID_HOME})
+    set(eacp_android_sdk_default "$ENV{ANDROID_HOME}")
+elseif (DEFINED ENV{ANDROID_SDK_ROOT})
+    set(eacp_android_sdk_default "$ENV{ANDROID_SDK_ROOT}")
+else ()
+    get_filename_component(eacp_android_sdk_default "${ANDROID_NDK}/../.." ABSOLUTE)
+endif ()
+
+set(EACP_ANDROID_SDK "${eacp_android_sdk_default}" CACHE PATH
+        "Android SDK that packages, installs and runs APKs")
+
 set(EACP_ANDROID_BUILD_TOOLS "35.0.0" CACHE STRING
         "Android SDK build-tools version that packages APKs")
 set(EACP_ANDROID_TARGET_SDK "35" CACHE STRING
@@ -67,7 +80,7 @@ function(eacp_add_android_apk target)
     set(manifest "${CMAKE_CURRENT_BINARY_DIR}/${target}-AndroidManifest.xml")
     configure_file("${EACP_ANDROID_MANIFEST_TEMPLATE}" "${manifest}" @ONLY)
 
-    get_filename_component(sdk "${ANDROID_NDK}/../.." ABSOLUTE)
+    set(sdk "${EACP_ANDROID_SDK}")
     set(apk "${CMAKE_CURRENT_BINARY_DIR}/${target}.apk")
 
     add_custom_command(
@@ -81,6 +94,7 @@ function(eacp_add_android_apk target)
                     "${ANDROID_ABI}"
                     "${apk}"
                     "${APK_RES_DIR}"
+                    "$<$<CONFIG:Debug>:debug>"
             DEPENDS ${target} "${manifest}" "${EACP_ANDROID_APK_SCRIPT}"
             COMMENT "Packaging ${target}.apk"
             VERBATIM)

@@ -72,26 +72,30 @@ The dividing line is drawing. Everything that never touches a screen — the app
 and threading core, processes, plugins, files, the HTTP client and server, IPC
 and RPC, the SIMD kernels — builds on Linux too, which is what makes eacp usable
 for a headless service as well as for a GUI. The graphics stack builds on all
-four platforms, because it wraps each one's own compositor instead of shipping
-one: Cocoa and Metal, Win32 and D3D12, UIKit, and Wayland or X11 with Vulkan.
+five platforms, because it wraps each one's own compositor instead of shipping
+one: Cocoa and Metal, Win32 and D3D12, UIKit, Wayland or X11 with Vulkan, and
+Android's NativeActivity with Vulkan.
 
-| Module | macOS | Windows | iOS | Linux |
-| --- | :---: | :---: | :---: | :---: |
-| `Core` — lifecycle, event loops, timers, processes, plugins, files | ✅ | ✅ | ✅ | ✅ |
-| `Network` — HTTP client and server, WebSocket client, TCP, IPC, RPC | ✅ | ✅ | ✅ | ✅ |
-| `SIMD` — portable kernels with runtime backend dispatch | ✅ | ✅ | ✅ | ✅ |
-| `Graphics` — windows, views, widgets, menus, drawing | ✅ | ✅ | ✅ | ✅ † |
-| `GPU` / `GPUWidgets` — Metal, D3D12, Vulkan and the shader EDSL | ✅ | ✅ | ✅ | ✅ |
-| `CpuCompute` — the same compute kernels run on the CPU, no device needed | ✅ | ✅ | ✅ | ✅ |
-| `Text` / `Sprites` — glyph rasterization, atlas, batched quads | ✅ | ✅ | ✅ | ✅ |
-| `UI` / `SVG` — component tier and SVG rendering | ✅ | ✅ | ✅ | ✅ † |
-| `WebView` — WKWebView and WebView2 | ✅ | ✅ | ✅ | — |
-| `Camera` / `CameraView` — capture devices and frames | ✅ | ✅ | ✅ | — |
-| `Video` / `VideoView` — screen capture, encode, playback | ✅ | ✅ | — | — |
-| `ML` — tensor graphs compiled and run through Core ML | ✅ | — | ✅ | — |
+| Module | macOS | Windows | iOS | Linux | Android |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| `Core` — lifecycle, event loops, timers, processes, plugins, files | ✅ | ✅ | ✅ | ✅ | ✅ ‡ |
+| `Network` — HTTP client and server, WebSocket client, TCP, IPC, RPC | ✅ | ✅ | ✅ | ✅ | — |
+| `SIMD` — portable kernels with runtime backend dispatch | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `Graphics` — windows, views, widgets, menus, drawing | ✅ | ✅ | ✅ | ✅ † | ✅ † |
+| `GPU` / `GPUWidgets` — Metal, D3D12, Vulkan and the shader EDSL | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `CpuCompute` — the same compute kernels run on the CPU, no device needed | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `Text` / `Sprites` — glyph rasterization, atlas, batched quads | ✅ | ✅ | ✅ | ✅ | ✅ ‡ |
+| `UI` / `SVG` — component tier and SVG rendering | ✅ | ✅ | ✅ | ✅ † | ✅ † |
+| `WebView` — WKWebView and WebView2 | ✅ | ✅ | ✅ | — | — |
+| `Camera` / `CameraView` — capture devices and frames | ✅ | ✅ | ✅ | — | — |
+| `Video` / `VideoView` — screen capture, encode, playback | ✅ | ✅ | — | — | — |
+| `ML` — tensor graphs compiled and run through Core ML | ✅ | — | ✅ | — | — |
 
-† Linux has no platform 2D tier and no menus; what that costs is spelled out
-two paragraphs down.
+† Linux and Android have no platform 2D tier and no menus; what that costs is
+spelled out two paragraphs down. ‡ Android: Android 10 (API 29) or later on a
+Vulkan 1.3 device, as a NativeActivity (see [Android](#android)); no HTTP
+client (the NDK has no libcurl), no IME text input yet, and text is shaped a
+code point at a time (no kerning, ligatures or complex scripts).
 
 Linux graphics is on wherever the graphics modules are built, exactly as the
 other three platforms are, and it is three things. An `eacp-graphics` with two
@@ -514,15 +518,21 @@ cmake --build build --target Console   # build/Apps/Console/Console
 
 ### Android
 
-A NativeActivity app with no Java and no Gradle: the app is a shared library,
-and `eacp_add_android_apk` (`CMake/AndroidApk.cmake`) packages and debug-signs
-it with the SDK's own tools. `Apps/Android/HelloGPU` is the example: a Vulkan
-clear, a spinning triangle through the shader EDSL, text through the glyph
-atlas (rasterized by `android.graphics`), and touches logged.
+A NativeActivity app with no Java code and no Gradle: the app is a shared
+library with its ordinary `main()`, and `eacp_add_app` (`CMake/TargetSetup.cmake`)
+builds it as one and packages it through `eacp_add_android_apk`
+(`CMake/AndroidApk.cmake`), debug-signed with the SDK's own tools — debuggable
+in Debug builds. `Apps/Android/HelloGPU` is the example: a Vulkan clear
+following the finger, a spinning triangle through the shader EDSL, text through
+the glyph atlas (rasterized by `android.graphics`), and touches logged.
+`Apps/GPU/Triangle` and `Apps/GPU/GlyphAtlas` build as APKs the same way.
 
-Needs a JDK (`brew install openjdk@21`; `JAVA_HOME` or Homebrew's is found)
-and the Android SDK at `$ANDROID_HOME` with NDK r27 and a Vulkan 1.3 device —
-the arm64 emulator on Apple Silicon qualifies:
+The floor is Android 10 (API 29; configuring lower is an error) on a device
+with Vulkan 1.3, which the manifest requires — the arm64 emulator on Apple
+Silicon qualifies. Tested with NDK r27 (27.3.13750724), build-tools 35.0.0 and
+platform 35. It needs a JDK 17+ for `keytool` and `apksigner` (`JAVA_HOME`,
+else `java` on the `PATH`, `java_home`, Homebrew's or Android Studio's), and
+the SDK at `$ANDROID_HOME` (or `-DEACP_ANDROID_SDK=`):
 
 ```bash
 sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
@@ -531,7 +541,8 @@ avdmanager create avd -n eacp -k "system-images;android-35;google_apis;arm64-v8a
 ```
 
 Then one command builds, boots the emulator if nothing is attached (`EACP_AVD`,
-else the first AVD), installs and launches:
+else the first AVD), installs, launches and prints the app's first seconds of
+logcat:
 
 ```bash
 cmake -G Ninja -B build-android -DCMAKE_BUILD_TYPE=Release \
@@ -539,6 +550,10 @@ cmake -G Ninja -B build-android -DCMAKE_BUILD_TYPE=Release \
     -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29
 cmake --build build-android --target HelloGPU-run
 ```
+
+One ABI per build directory (`arm64-v8a` for devices and the Apple Silicon
+emulator, `x86_64` for an Intel one). Tests build too; `Network`, the WebView
+bridge and their tests are left out on Android.
 
 eacp logs to logcat under the tag `eacp`: `adb logcat -s eacp`. A native crash
 prints a tombstone to logcat; symbolicate it against the unstripped library in
