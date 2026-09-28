@@ -1,13 +1,15 @@
 #include <eacp/GPU/GPU.h>
 #include <eacp/Graphics/Window/Android.h>
 #include <eacp/Sprites/Sprites.h>
+#include <eacp/Text/Text.h>
 
 using namespace eacp;
 using namespace GPU;
 
 // The smallest Android check: a GPUView clearing through the Vulkan backend,
 // every touch pointer logged, the colour following the first finger, and a
-// SoftwareContext overlay of rings, a disc and text drawn as a sprite on top.
+// SoftwareContext overlay of rings, a disc and text drawn as a sprite on top,
+// and lines of text through eacp's glyph atlas under it.
 
 namespace
 {
@@ -121,7 +123,39 @@ struct HelloView final : GPUView
 
         sprites.begin(pass);
         sprites.drawTexture(*overlay, {0.f, 0.f, size.w, size.h});
+        sprites.end();
+
+        drawText(pass, frame);
     }
+
+    void drawText(RenderPass& pass, Frame& frame)
+    {
+        auto regular = Text::Font {"Menlo", 17.f};
+        auto bold = Text::Font {"Menlo", 17.f, Text::FontStyle::Bold};
+        auto sans = Text::Font {"sans-serif", 22.f};
+        auto shadow = Graphics::Color {0.f, 0.12f, 0.f, 0.3f};
+        auto white = Graphics::Color::white(0.9f);
+
+        text.setViewport(frame.logicalSize(), frame.backingScale());
+        text.setSampleCount(sampleCount());
+        text.begin();
+
+        auto line = [&](std::string_view string, float y, const Text::Font& font)
+        {
+            text.draw(string, {41.f, y + 1.f}, shadow, font);
+            text.draw(string, {40.f, y}, white, font);
+        };
+
+        line("Moo Jump Again", 400.f, regular);
+        line("Moo Jump Again", 430.f, bold);
+        line("wasd / hjkl to walk  -  q to quit", 460.f, regular);
+        line("Glyphs by android.graphics", 500.f, sans);
+        line("gjpqy Ag 0123456789 {}[]()", 535.f, sans);
+
+        text.flush(pass);
+    }
+
+    Text::TextRenderer text;
 
     Sprites::SpriteRenderer sprites {{1.f, 1.f}, sampleCount()};
     std::optional<Texture> overlay;

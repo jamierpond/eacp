@@ -1,7 +1,7 @@
 # Glyph rasterization and atlas caching. The atlas, packer, upload path and the
 # UAX #9 bidi pass are portable C++ over eacp-gpu; only the rasterizer is
-# per-platform (CoreText on Apple, DirectWrite on Windows, FreeType + HarfBuzz
-# + fontconfig on Linux), which is what lets the rest be tested against a stub
+# per-platform (CoreText on Apple, DirectWrite on Windows, android.graphics over
+# JNI on Android, FreeType + HarfBuzz + fontconfig on Linux), which is what lets the rest be tested against a stub
 # glyph source instead of against installed fonts. Bidi.cpp builds everywhere
 # and is called only by the Linux rasterizer: the other two text engines
 # reorder inside themselves.
@@ -18,6 +18,10 @@ if (APPLE)
 elseif (WIN32)
     target_sources(eacp-text PRIVATE GlyphRasterizer-Windows.cpp)
     target_link_libraries(eacp-text PRIVATE dwrite)
+elseif (ANDROID)
+    # Typeface, Paint and Canvas over JNI; jnigraphics reads the Bitmap back.
+    target_sources(eacp-text PRIVATE GlyphRasterizer-Android.cpp)
+    target_link_libraries(eacp-text PRIVATE jnigraphics)
 elseif (UNIX)
     include(FindLinuxText)
 
