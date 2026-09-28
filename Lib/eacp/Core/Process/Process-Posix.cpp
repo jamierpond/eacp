@@ -213,6 +213,9 @@ private:
                 posix_spawn_file_actions_addclose(&actions, fd);
         }
 
+        // Bionic has the call from API 34 only; below that a working
+        // directory is not applied.
+#if !defined(__ANDROID__) || __ANDROID_API__ >= 34
         if (!options.workingDirectory.empty())
         {
             // _np is the only variant available at our deployment target; the
@@ -227,6 +230,7 @@ private:
 #pragma clang diagnostic pop
 #endif
         }
+#endif
 
         auto attr = posix_spawnattr_t {};
         posix_spawnattr_init(&attr);

@@ -1,6 +1,10 @@
 add_subdirectory(Core)
 add_subdirectory(SIMD)
-add_subdirectory(Network)
+
+# The Linux HTTP client is libcurl, which the NDK does not ship.
+if (NOT ANDROID)
+    add_subdirectory(Network)
+endif ()
 
 # Always added: it builds the shader codegen library (eacp-gpu-codegen), which
 # is pure string generation, and returns before eacp-gpu when there is no GPU.

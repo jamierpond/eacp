@@ -104,16 +104,27 @@ elseif (UNIX AND NOT APPLE)
             Plugins/ModuleInfo-Linux.cpp
             Plugins/ModuleInfo-Posix.cpp
             Process/Process-Posix.cpp
-            Threads/EventLoop-Linux.cpp
             Threads/ThreadUtils-Linux.cpp
             Threads/Timer-Linux.cpp
             Utils/Environment-Posix.cpp
             Utils/FilePath-Linux.cpp
             Utils/Files-Linux.cpp
-            Utils/Logging-Posix.cpp
             Utils/MemoryMappedFile-Posix.cpp)
     find_package(Threads ${EACP_FIND_QUIET} REQUIRED)
     target_link_libraries(eacp-core PRIVATE Threads::Threads)
+
+    # Android is Linux without a poll(2)-shaped loop or a stdout anyone reads:
+    # the loop runs on the thread's ALooper and the log goes to logcat.
+    if (ANDROID)
+        target_sources(eacp-core PRIVATE
+                Threads/EventLoop-Android.cpp
+                Utils/Logging-Android.cpp)
+        target_link_libraries(eacp-core PUBLIC android log)
+    else ()
+        target_sources(eacp-core PRIVATE
+                Threads/EventLoop-Linux.cpp
+                Utils/Logging-Posix.cpp)
+    endif ()
 endif ()
 
 set_default_target_setting(eacp-core)
