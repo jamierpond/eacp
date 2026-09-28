@@ -11,9 +11,11 @@
 #include <android/configuration.h>
 #include <android/native_window.h>
 #include <android_native_app_glue.h>
+#include <jni.h>
 
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <string>
 
 namespace eacp::Graphics
@@ -61,6 +63,101 @@ float androidBackingScale(android_app* app)
         return 1.f;
 
     return (float) density / (float) ACONFIGURATION_DENSITY_MEDIUM;
+}
+
+// The system bars' and the cutout's insets in pixels, read over JNI: the glue's
+// content rect covers the whole window once an app is edge to edge, which
+// every app targeting API 35 is. Empty before the decor view is attached.
+std::optional<ARect> androidSystemInsets(ANativeActivity* activity)
+{
+    if (activity == nullptr || activity->vm == nullptr)
+        return std::nullopt;
+
+    auto* env = static_cast<JNIEnv*>(nullptr);
+    auto attached = false;
+
+    if (activity->vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6)
+        != JNI_OK)
+    {
+        if (activity->vm->AttachCurrentThread(&env, nullptr) != JNI_OK)
+            return std::nullopt;
+
+        attached = true;
+    }
+
+    auto result = std::optional<ARect> {};
+
+    auto failed = [env]
+    {
+        if (!env->ExceptionCheck())
+            return false;
+
+        env->ExceptionClear();
+        return true;
+    };
+
+    auto* activityClass = env->GetObjectClass(activity->clazz);
+    auto getWindow =
+        env->GetMethodID(activityClass, "getWindow", "()Landroid/view/Window;");
+    auto* window =
+        failed() ? nullptr : env->CallObjectMethod(activity->clazz, getWindow);
+
+    if (!failed() && window != nullptr)
+    {
+        auto* windowClass = env->GetObjectClass(window);
+        auto getDecorView =
+            env->GetMethodID(windowClass, "getDecorView", "()Landroid/view/View;");
+        auto* decor = env->CallObjectMethod(window, getDecorView);
+
+        if (!failed() && decor != nullptr)
+        {
+            auto* viewClass = env->GetObjectClass(decor);
+            auto getRootInsets = env->GetMethodID(
+                viewClass, "getRootWindowInsets", "()Landroid/view/WindowInsets;");
+            auto* rootInsets = env->CallObjectMethod(decor, getRootInsets);
+
+            if (!failed() && rootInsets != nullptr)
+            {
+                auto* typeClass = env->FindClass("android/view/WindowInsets$Type");
+                auto systemBars =
+                    env->GetStaticMethodID(typeClass, "systemBars", "()I");
+                auto cutout =
+                    env->GetStaticMethodID(typeClass, "displayCutout", "()I");
+                auto types = env->CallStaticIntMethod(typeClass, systemBars)
+                             | env->CallStaticIntMethod(typeClass, cutout);
+
+                auto* insetsClass = env->GetObjectClass(rootInsets);
+                auto getInsets = env->GetMethodID(
+                    insetsClass, "getInsets", "(I)Landroid/graphics/Insets;");
+                auto* insets =
+                    failed() ? nullptr
+                             : env->CallObjectMethod(rootInsets, getInsets, types);
+
+                if (!failed() && insets != nullptr)
+                {
+                    auto* valuesClass = env->GetObjectClass(insets);
+                    auto field = [&](const char* name)
+                    {
+                        return env->GetIntField(
+                            insets, env->GetFieldID(valuesClass, name, "I"));
+                    };
+
+                    result = ARect {field("left"),
+                                    field("top"),
+                                    field("right"),
+                                    field("bottom")};
+
+                    if (failed())
+                        result.reset();
+                }
+            }
+        }
+    }
+
+    if (attached)
+        activity->vm->DetachCurrentThread();
+
+    return result;
 }
 
 void androidHandleCommand(android_app* app, int32_t command);
@@ -130,7 +227,11 @@ struct AndroidWindow : AndroidWindowSurface
         if (app != nullptr && nativeWindow != nullptr)
         {
             auto before = insets;
-            readInsets(app->contentRect);
+
+            if (auto system = androidSystemInsets(app->activity))
+                readSystemInsets(*system);
+            else
+                readInsets(app->contentRect);
 
             if (before.top != insets.top || before.left != insets.left
                 || before.bottom != insets.bottom || before.right != insets.right)
@@ -138,6 +239,14 @@ struct AndroidWindow : AndroidWindowSurface
         }
 
         return contentSize.x != oldSize.x || contentSize.y != oldSize.y;
+    }
+
+    void readSystemInsets(const ARect& pixels)
+    {
+        insets.top = (float) pixels.top / scale;
+        insets.left = (float) pixels.left / scale;
+        insets.bottom = (float) pixels.bottom / scale;
+        insets.right = (float) pixels.right / scale;
     }
 
     // The glue's content rect is the part of the window no system bar covers.
