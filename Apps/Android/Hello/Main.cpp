@@ -1,14 +1,59 @@
 #include <eacp/GPU/GPU.h>
 #include <eacp/Graphics/Window/Android.h>
+#include <eacp/Sprites/Sprites.h>
 
 using namespace eacp;
 using namespace GPU;
 
 // The smallest Android check: a GPUView clearing through the Vulkan backend,
-// every touch pointer logged, and the colour following the first finger.
+// every touch pointer logged, the colour following the first finger, and a
+// SoftwareContext overlay of rings, a disc and text drawn as a sprite on top.
 
 namespace
 {
+Graphics::Image paintOverlay(Graphics::Point size, float scale)
+{
+    auto context = Graphics::SoftwareContext(
+        int(std::lround(size.x * scale)), int(std::lround(size.y * scale)), scale);
+
+    auto ring = Graphics::Path();
+    ring.addEllipse({40.f, 120.f, 120.f, 120.f});
+    context.setColor(Graphics::Color::white(0.85f));
+    context.setLineWidth(2.5f);
+    context.strokePath(ring);
+
+    auto thickRing = Graphics::Path();
+    thickRing.addEllipse({190.f, 120.f, 120.f, 120.f});
+    context.setLineWidth(5.f);
+    context.strokePath(thickRing);
+
+    auto disc = Graphics::Path();
+    disc.addEllipse({70.f, 150.f, 60.f, 60.f});
+    context.setColor({0.1f, 0.1f, 0.2f, 0.6f});
+    context.fillPath(disc);
+
+    context.setColor(Graphics::Color::white(0.3f));
+    context.fillRoundedRect({40.f, 270.f, 270.f, 70.f}, 14.f);
+
+    auto regular =
+        Graphics::Font(Graphics::FontOptions().withName("Menlo").withSize(17.f));
+    auto bold = Graphics::Font(
+        Graphics::FontOptions().withName("Menlo-Bold").withSize(17.f));
+    auto proportional = Graphics::Font(Graphics::FontOptions().withSize(14.f));
+
+    context.setColor(Graphics::Color::white());
+    context.drawText("Moo Jump", {56.f, 300.f}, regular);
+    context.drawText("Moo Jump", {176.f, 300.f}, bold);
+    context.drawText("q / Esc to quit - Again", {56.f, 326.f}, proportional);
+
+    LOG("overlay: \"Moo Jump\" is ",
+        Graphics::TextMetrics::measureWidth("Moo Jump", regular),
+        "pt wide, ascent ",
+        Graphics::TextMetrics::getAscent(regular));
+
+    return context.getImage();
+}
+
 const char* phaseName(Graphics::Android::TouchPhase phase)
 {
     switch (phase)
@@ -64,8 +109,23 @@ struct HelloView final : GPUView
     void render(Frame& frame) override
     {
         auto pass = frame.beginPass({Graphics::Color {red, 0.45f, blue}});
-        (void) pass;
+        auto size = getLocalBounds();
+
+        if (!overlay || overlaySize.x != size.w || overlaySize.y != size.h)
+        {
+            overlaySize = {size.w, size.h};
+            overlay = Device::shared().makeTexture(
+                paintOverlay(overlaySize, backingScale()));
+            sprites.setLogicalSize(overlaySize);
+        }
+
+        sprites.begin(pass);
+        sprites.drawTexture(*overlay, {0.f, 0.f, size.w, size.h});
     }
+
+    Sprites::SpriteRenderer sprites {{1.f, 1.f}, sampleCount()};
+    std::optional<Texture> overlay;
+    Graphics::Point overlaySize;
 
     float red = 0.95f;
     float blue = 0.35f;
