@@ -118,20 +118,30 @@ std::optional<ARect> androidSystemInsets(ANativeActivity* activity)
 
             if (!failed() && rootInsets != nullptr)
             {
+                // WindowInsets.Type is API 30; below it the class is missing
+                // and the caller falls back to the glue's content rect.
                 auto* typeClass = env->FindClass("android/view/WindowInsets$Type");
-                auto systemBars =
-                    env->GetStaticMethodID(typeClass, "systemBars", "()I");
-                auto cutout =
-                    env->GetStaticMethodID(typeClass, "displayCutout", "()I");
-                auto types = env->CallStaticIntMethod(typeClass, systemBars)
-                             | env->CallStaticIntMethod(typeClass, cutout);
+                auto* insets = static_cast<jobject>(nullptr);
 
-                auto* insetsClass = env->GetObjectClass(rootInsets);
-                auto getInsets = env->GetMethodID(
-                    insetsClass, "getInsets", "(I)Landroid/graphics/Insets;");
-                auto* insets =
-                    failed() ? nullptr
-                             : env->CallObjectMethod(rootInsets, getInsets, types);
+                if (!failed() && typeClass != nullptr)
+                {
+                    auto systemBars =
+                        env->GetStaticMethodID(typeClass, "systemBars", "()I");
+                    auto cutout =
+                        env->GetStaticMethodID(typeClass, "displayCutout", "()I");
+                    auto types =
+                        failed() ? 0
+                                 : env->CallStaticIntMethod(typeClass, systemBars)
+                                       | env->CallStaticIntMethod(typeClass, cutout);
+
+                    auto* insetsClass = env->GetObjectClass(rootInsets);
+                    auto getInsets = env->GetMethodID(
+                        insetsClass, "getInsets", "(I)Landroid/graphics/Insets;");
+                    insets =
+                        failed()
+                            ? nullptr
+                            : env->CallObjectMethod(rootInsets, getInsets, types);
+                }
 
                 if (!failed() && insets != nullptr)
                 {
