@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Usage: android-run <sdk> <apk> <package>
+#
+# Installs and launches an eacp APK on the device adb sees, booting an emulator
+# first when none is attached: $EACP_AVD, or else the first AVD the emulator
+# lists. The app logs to logcat under the tag "eacp".
+set -euo pipefail
+
+sdk="$1"
+apk="$2"
+package="$3"
+adb="$sdk/platform-tools/adb"
+emulator="$sdk/emulator/emulator"
+
+if ! "$adb" get-state >/dev/null 2>&1; then
+    avd="${EACP_AVD:-$("$emulator" -list-avds | head -n 1)}"
+
+    if [[ -z "$avd" ]]; then
+        echo "no device attached and no AVD to boot: create one with avdmanager" >&2
+        exit 1
+    fi
+
+    echo "booting emulator $avd" >&2
+    nohup "$emulator" -avd "$avd" -no-snapshot-save -no-audio -gpu host \
+        >/dev/null 2>&1 &
+    "$adb" wait-for-device
+
+    until [[ "$("$adb" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]]; do
+        sleep 2
+    done
+fi
+
+"$adb" install -r "$apk"
+"$adb" shell am force-stop "$package"
+"$adb" shell am start -n "$package/android.app.NativeActivity"
+
+echo "running $package; its log: $adb logcat -s eacp" >&2

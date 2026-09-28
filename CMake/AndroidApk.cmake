@@ -5,8 +5,13 @@
 # Adds <target>-apk: the shared library <target> behind a NativeActivity,
 # packaged and debug-signed by Scripts/android-apk (no Gradle). The APK lands
 # at ${CMAKE_CURRENT_BINARY_DIR}/<target>.apk.
+#
+# And <target>-run, which builds the APK, then installs and launches it through
+# Scripts/android-run on the device adb sees, booting an emulator ($EACP_AVD,
+# or the first AVD) when none is attached.
 
 set(EACP_ANDROID_APK_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/../Scripts/android-apk")
+set(EACP_ANDROID_RUN_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/../Scripts/android-run")
 set(EACP_ANDROID_MANIFEST_TEMPLATE
         "${CMAKE_CURRENT_LIST_DIR}/AndroidManifest.xml.in")
 
@@ -81,4 +86,10 @@ function(eacp_add_android_apk target)
             VERBATIM)
 
     add_custom_target(${target}-apk ALL DEPENDS "${apk}")
+
+    add_custom_target(${target}-run
+            COMMAND "${EACP_ANDROID_RUN_SCRIPT}" "${sdk}" "${apk}" "${APK_PACKAGE}"
+            DEPENDS ${target}-apk
+            USES_TERMINAL
+            VERBATIM)
 endfunction()

@@ -1,3 +1,3 @@
 set(CMAKE_FOLDER Examples/Android)
 
-add_subdirectory(Hello)
+add_subdirectory(HelloGPU)

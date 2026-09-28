@@ -260,7 +260,9 @@ CI builds every configuration in that matrix and runs the test suite on macOS
 and a Clang lane that runs the graphics backend on lavapipe under a headless
 Weston and then under an Xvfb — all three build it, one has a device, a
 compositor and an X server to run it on);
-iOS is built for the simulator. macOS is the most exercised of them, and Android is not supported.
+iOS is built for the simulator. macOS is the most exercised of them. Android
+is in progress on this branch — Core, the window, Vulkan, GPU, GPUWidgets,
+Text and UI build and run (see [Android](#android)); it is not in CI yet.
 
 The HTTP client is one API over three backends — NSURLSession on Apple
 platforms, WinHTTP on Windows, libcurl on Linux — so a Linux build needs
@@ -509,6 +511,42 @@ cmake --build build --target Console   # build/Apps/Console/Console
   ```bash
   cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Debug -DEACP_CI_BUILD=ON
   ```
+
+### Android
+
+A NativeActivity app with no Java and no Gradle: the app is a shared library,
+and `eacp_add_android_apk` (`CMake/AndroidApk.cmake`) packages and debug-signs
+it with the SDK's own tools. `Apps/Android/HelloGPU` is the example: a Vulkan
+clear, a spinning triangle through the shader EDSL, text through the glyph
+atlas (rasterized by `android.graphics`), and touches logged.
+
+Needs a JDK (`brew install openjdk@21`; `JAVA_HOME` or Homebrew's is found)
+and the Android SDK at `$ANDROID_HOME` with NDK r27 and a Vulkan 1.3 device —
+the arm64 emulator on Apple Silicon qualifies:
+
+```bash
+sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
+    "ndk;27.3.13750724" "emulator" "system-images;android-35;google_apis;arm64-v8a"
+avdmanager create avd -n eacp -k "system-images;android-35;google_apis;arm64-v8a" -d pixel_7
+```
+
+Then one command builds, boots the emulator if nothing is attached (`EACP_AVD`,
+else the first AVD), installs and launches:
+
+```bash
+cmake -G Ninja -B build-android -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=$ANDROID_HOME/ndk/27.3.13750724/build/cmake/android.toolchain.cmake \
+    -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29
+cmake --build build-android --target HelloGPU-run
+```
+
+eacp logs to logcat under the tag `eacp`: `adb logcat -s eacp`. A native crash
+prints a tombstone to logcat; symbolicate it against the unstripped library in
+the build tree:
+
+```bash
+adb logcat -d | $ANDROID_HOME/ndk/27.3.13750724/ndk-stack -sym build-android/Apps/Android/HelloGPU
+```
 
 ## Repository layout
 
