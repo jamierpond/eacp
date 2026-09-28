@@ -3,8 +3,10 @@ include(CPM)
 # find_package rather than include(FindPkgConfig): this file is itself
 # reached through find_package(VulkanBackend), and a bare include leaves
 # PkgConfig's find_package_handle_standard_args reporting against the wrong
-# package name.
-find_package(PkgConfig REQUIRED)
+# package name. Android has no xcb to look for.
+if (NOT ANDROID)
+    find_package(PkgConfig REQUIRED)
+endif ()
 
 # Nothing links libvulkan: volkInitialize() dlopens it at runtime. Vulkan-Headers
 # and volk must share one SDK tag - volk's table is generated per header revision.
@@ -70,24 +72,31 @@ if (NOT TARGET eacp-vulkan)
             "${volk_SOURCE_DIR}"
             "${VulkanMemoryAllocator_SOURCE_DIR}/include")
 
-    # PUBLIC: volk.c must see the platform defines too, or
-    # vkCreateWaylandSurfaceKHR and vkCreateXcbSurfaceKHR are missing from the
-    # dispatch table.
+    # PUBLIC: volk.c must see the platform defines too, or the surface
+    # constructors (vkCreateWaylandSurfaceKHR, vkCreateXcbSurfaceKHR,
+    # vkCreateAndroidSurfaceKHR) are missing from the dispatch table.
+    if (ANDROID)
+        set(eacp_vulkan_platforms VK_USE_PLATFORM_ANDROID_KHR)
+    else ()
+        set(eacp_vulkan_platforms VK_USE_PLATFORM_WAYLAND_KHR VK_USE_PLATFORM_XCB_KHR)
+    endif ()
+
     target_compile_definitions(eacp-vulkan PUBLIC
             VK_NO_PROTOTYPES
-            VK_USE_PLATFORM_WAYLAND_KHR
-            VK_USE_PLATFORM_XCB_KHR
+            ${eacp_vulkan_platforms}
             VMA_STATIC_VULKAN_FUNCTIONS=0
             VMA_DYNAMIC_VULKAN_FUNCTIONS=1
             VMA_VULKAN_VERSION=1003000)
 
     # vulkan_xcb.h includes <xcb/xcb.h>, so every consumer of the headers needs
     # to be able to find it. The headers only: nothing here links xcb.
-    pkg_check_modules(EACP_VULKAN_XCB xcb)
+    if (NOT ANDROID)
+        pkg_check_modules(EACP_VULKAN_XCB xcb)
 
-    if (EACP_VULKAN_XCB_FOUND)
-        target_include_directories(eacp-vulkan SYSTEM PUBLIC
-                ${EACP_VULKAN_XCB_INCLUDE_DIRS})
+        if (EACP_VULKAN_XCB_FOUND)
+            target_include_directories(eacp-vulkan SYSTEM PUBLIC
+                    ${EACP_VULKAN_XCB_INCLUDE_DIRS})
+        endif ()
     endif ()
 
     # The loader is opened by name at runtime; only the opener is linked.

@@ -1,6 +1,7 @@
 #include "../Common.h"
 
 #include "VulkanContext.h"
+#include "VulkanSurface.h"
 #include "VulkanTypes.h"
 
 #include "../Codegen/UniformLayout.h"
@@ -709,23 +710,22 @@ bool VulkanShared::createInstance()
     }
 
     // Asked for rather than required: a headless ICD offers none of them. The
-    // two window systems are independent - a driver may carry either.
-    const auto waylandOffered =
-        hasInstanceExtension(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
-    const auto xcbOffered = hasInstanceExtension(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
+    // window systems are independent - a driver may carry any of them.
+    auto windowSystemsOffered = Vector<const char*> {};
+
+    for (const auto* name: windowSystemSurfaceExtensions())
+        if (hasInstanceExtension(name))
+            windowSystemsOffered.add(name);
 
     const auto surfaceOffered = hasInstanceExtension(VK_KHR_SURFACE_EXTENSION_NAME)
-                                && (waylandOffered || xcbOffered);
+                                && !windowSystemsOffered.empty();
 
     if (surfaceOffered)
     {
         extensions.add(VK_KHR_SURFACE_EXTENSION_NAME);
 
-        if (waylandOffered)
-            extensions.add(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
-
-        if (xcbOffered)
-            extensions.add(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
+        for (const auto* name: windowSystemsOffered)
+            extensions.add(name);
     }
 
     VkInstanceCreateInfo info = {};
