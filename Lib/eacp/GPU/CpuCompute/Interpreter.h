@@ -11,8 +11,14 @@
 
 namespace eacp::GPU::CpuCompute
 {
+// libc++ has std::atomic_ref from LLVM 19; the NDK's (r27, LLVM 18) does not,
+// and there the compiler's builtins do the same relaxed operations.
+#if defined(__cpp_lib_atomic_ref)
 static_assert(std::atomic_ref<Word>::is_always_lock_free);
 static_assert(std::atomic_ref<Word>::required_alignment == alignof(Word));
+#else
+static_assert(__atomic_always_lock_free(sizeof(Word), 0));
+#endif
 
 struct SlotView
 {
@@ -32,14 +38,22 @@ struct SlotView
     // uint32_t, so the words are real, aligned uint32_t objects.
     Word atomicLoad(Word element) const
     {
+#if defined(__cpp_lib_atomic_ref)
         return std::atomic_ref<Word>(atomicWord(element))
             .load(std::memory_order_relaxed);
+#else
+        return __atomic_load_n(&atomicWord(element), __ATOMIC_RELAXED);
+#endif
     }
 
     Word atomicAdd(Word element, Word value) const
     {
+#if defined(__cpp_lib_atomic_ref)
         return std::atomic_ref<Word>(atomicWord(element))
             .fetch_add(value, std::memory_order_relaxed);
+#else
+        return __atomic_fetch_add(&atomicWord(element), value, __ATOMIC_RELAXED);
+#endif
     }
 
     Word& atomicWord(Word element) const
