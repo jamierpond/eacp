@@ -23,7 +23,15 @@
 // here instead of failing to link later.
 #if EACP_HAS_CONTEXT
 #include "Layers/LayerViews.h"
-#include "Primitives/TextMetrics.h"
 #include "Widgets/TextInput.h"
 #include "Window/NativeChildSurface.h"
+#endif
+
+#if EACP_HAS_CONTEXT || defined(__ANDROID__)
+#include "Primitives/TextMetrics.h"
+#endif
+
+// Android has no 2D tier of its own; it draws one on the CPU instead.
+#if defined(__ANDROID__)
+#include "Graphics/SoftwareContext.h"
 #endif
