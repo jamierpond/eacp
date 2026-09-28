@@ -92,7 +92,7 @@ Android's NativeActivity with Vulkan.
 | `ML` — tensor graphs compiled and run through Core ML | ✅ | — | ✅ | — | — |
 
 † Linux and Android have no platform 2D tier and no menus; what that costs is
-spelled out two paragraphs down. ‡ Android: Android 10 (API 29) or later on a
+spelled out two paragraphs down. ‡ Android: Android 13 (API 33) or later on a
 Vulkan 1.3 device, as a NativeActivity (see [Android](#android)); no HTTP
 client (the NDK has no libcurl), no IME text input yet, and text is shaped a
 code point at a time (no kerning, ligatures or complex scripts).
@@ -527,7 +527,7 @@ following the finger, a spinning triangle through the shader EDSL, text through
 the glyph atlas (rasterized by `android.graphics`), and touches logged.
 `Apps/GPU/Triangle` and `Apps/GPU/GlyphAtlas` build as APKs the same way.
 
-The floor is Android 10 (API 29; configuring lower is an error) on a device
+The floor is Android 13 (API 33; configuring lower is an error) on a device
 with Vulkan 1.3, which the manifest requires — the arm64 emulator on Apple
 Silicon qualifies. Tested with NDK r27 (27.3.13750724), build-tools 35.0.0 and
 platform 35. It needs a JDK 17+ for `keytool` and `apksigner` (`JAVA_HOME`,
@@ -547,7 +547,7 @@ logcat:
 ```bash
 cmake -G Ninja -B build-android -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE=$ANDROID_HOME/ndk/27.3.13750724/build/cmake/android.toolchain.cmake \
-    -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29
+    -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-33
 cmake --build build-android --target HelloGPU-run
 ```
 

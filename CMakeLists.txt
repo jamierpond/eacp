@@ -56,11 +56,11 @@ if (NOT EACP_BUILD_GRAPHICS)
             "Build the WebView module" FORCE)
 endif ()
 
-# Android 10 (API 29) is the floor: frame pacing calls
-# AChoreographer_postFrameCallback64. The NDK's default is far below it.
-if (ANDROID AND ANDROID_PLATFORM_LEVEL LESS 29)
+# Android 13 (API 33) is the floor, in line with the macOS and Windows floors;
+# every Vulkan 1.3 phone runs it. The NDK's default is far below it.
+if (ANDROID AND ANDROID_PLATFORM_LEVEL LESS 33)
     message(FATAL_ERROR
-            "eacp needs Android 10 or later: configure with -DANDROID_PLATFORM=android-29 "
+            "eacp needs Android 13 or later: configure with -DANDROID_PLATFORM=android-33 "
             "(or higher); this build targets API ${ANDROID_PLATFORM_LEVEL}.")
 endif ()
 

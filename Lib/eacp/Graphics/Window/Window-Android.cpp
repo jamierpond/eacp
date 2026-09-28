@@ -119,12 +119,10 @@ std::optional<ARect> androidSystemInsets(ANativeActivity* activity)
 
             if (!failed() && rootInsets != nullptr)
             {
-                // WindowInsets.Type is API 30; below it the class is missing
-                // and the caller falls back to the glue's content rect.
                 auto* typeClass = env->FindClass("android/view/WindowInsets$Type");
                 auto* insets = static_cast<jobject>(nullptr);
 
-                if (!failed() && typeClass != nullptr)
+                if (!failed())
                 {
                     auto systemBars =
                         env->GetStaticMethodID(typeClass, "systemBars", "()I");
