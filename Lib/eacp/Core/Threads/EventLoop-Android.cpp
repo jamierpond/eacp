@@ -1,5 +1,6 @@
 #include "EventLoop-Android.h"
 #include "ThreadUtils-Linux.h"
+#include "../Utils/Logging.h"
 #include "../Utils/Singleton.h"
 
 #include <android/looper.h>
@@ -195,7 +196,10 @@ bool pollAndroidLooper(AndroidLoopState& loop, int timeoutMs, bool& timedOut)
     }
 
     if (ident == ALOOPER_POLL_ERROR)
+    {
+        LOG("EventLoop: ALooper_pollOnce failed");
         return false;
+    }
 
     if (ident == wakerIdent)
         loop.waker.drain();
