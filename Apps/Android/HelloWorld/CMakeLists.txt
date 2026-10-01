@@ -1,0 +1,3 @@
+eacp_add_app(HelloWorld Main.cpp) # fill me in: more .cpp files
+target_link_libraries(HelloWorld PRIVATE eacp-gpu) # fill me in: eacp-text, ...
+set_default_target_setting(HelloWorld)
