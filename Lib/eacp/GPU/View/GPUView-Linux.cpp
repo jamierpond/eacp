@@ -23,9 +23,13 @@ namespace
 constexpr auto acquireTimeoutNanoseconds = std::uint64_t {100000000};
 
 VkCompositeAlphaFlagBitsKHR
-    chooseCompositeAlpha(const VkSurfaceCapabilitiesKHR& capabilities)
+    chooseCompositeAlpha(const VkSurfaceCapabilitiesKHR& capabilities,
+                         bool transparent)
 {
     const auto offered = capabilities.supportedCompositeAlpha;
+
+    if (transparent && (offered & VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR) != 0)
+        return VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
 
     if ((offered & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) != 0)
         return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -89,8 +93,8 @@ struct GPUView::Native
             render();
     }
 
-    // Fires before the wl_surface is torn down: a swapchain that outlives it is
-    // a use-after-free inside the driver.
+    // Fires before the native surface is torn down: a swapchain that outlives
+    // it is a use-after-free inside the driver.
     void surfaceLost()
     {
         destroySwapchain();
@@ -113,7 +117,7 @@ struct GPUView::Native
 
     float surfaceScale() const
     {
-        if (record.surface != nullptr && record.scale > 0.f)
+        if (record.handle.isValid() && record.scale > 0.f)
             return record.scale;
 
         return Graphics::linuxDefaultBackingScale;
@@ -124,7 +128,7 @@ struct GPUView::Native
     // first that arrives is the initial scale rather than a change.
     void notifyScaleChange()
     {
-        if (record.surface == nullptr)
+        if (!record.handle.isValid())
             return;
 
         const auto scale = surfaceScale();
@@ -208,6 +212,38 @@ struct GPUView::Native
         stampedTick();
     }
 
+    // The instance enables a platform extension only where the driver offered
+    // it, so volk leaves the entry point of the other one null.
+    bool createWaylandSurface()
+    {
+        if (vkCreateWaylandSurfaceKHR == nullptr)
+            return false;
+
+        VkWaylandSurfaceCreateInfoKHR info = {};
+        info.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
+        info.display = static_cast<wl_display*>(record.handle.connection);
+        info.surface = static_cast<wl_surface*>(record.handle.surface);
+
+        return vkCreateWaylandSurfaceKHR(
+                   getVulkanShared().getInstance(), &info, nullptr, &vkSurface)
+               == VK_SUCCESS;
+    }
+
+    bool createXcbSurface()
+    {
+        if (vkCreateXcbSurfaceKHR == nullptr)
+            return false;
+
+        VkXcbSurfaceCreateInfoKHR info = {};
+        info.sType = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR;
+        info.connection = static_cast<xcb_connection_t*>(record.handle.connection);
+        info.window = static_cast<xcb_window_t>(record.handle.window);
+
+        return vkCreateXcbSurfaceKHR(
+                   getVulkanShared().getInstance(), &info, nullptr, &vkSurface)
+               == VK_SUCCESS;
+    }
+
     bool createSurface()
     {
         auto& shared = getVulkanShared();
@@ -221,17 +257,26 @@ struct GPUView::Native
         if (vkSurface != VK_NULL_HANDLE)
             return true;
 
-        if (record.display == nullptr || record.surface == nullptr)
-            return false;
+        // One branch per window system, and nothing below this cares which.
+        using Kind = Graphics::NativeSurfaceHandle::Kind;
 
-        VkWaylandSurfaceCreateInfoKHR info = {};
-        info.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
-        info.display = record.display;
-        info.surface = record.surface;
+        auto created = false;
 
-        if (vkCreateWaylandSurfaceKHR(
-                shared.getInstance(), &info, nullptr, &vkSurface)
-            != VK_SUCCESS)
+        switch (record.handle.kind)
+        {
+            case Kind::Wayland:
+                created = createWaylandSurface();
+                break;
+
+            case Kind::X11:
+                created = createXcbSurface();
+                break;
+
+            case Kind::None:
+                break;
+        }
+
+        if (!created)
         {
             vkSurface = VK_NULL_HANDLE;
             return false;
@@ -315,7 +360,7 @@ struct GPUView::Native
         return VK_PRESENT_MODE_FIFO_KHR;
     }
 
-    // Wayland answers 0xFFFFFFFF, meaning "you decide": a wl_surface has no
+    // Wayland answers 0xFFFFFFFF, meaning "you decide": its surfaces have no
     // server-side size, so the extent comes from the record.
     VkExtent2D chooseExtent(const VkSurfaceCapabilitiesKHR& capabilities) const
     {
@@ -385,7 +430,7 @@ struct GPUView::Native
 
         // Naming the compositor's own transform says there is nothing to undo.
         info.preTransform = capabilities.currentTransform;
-        info.compositeAlpha = chooseCompositeAlpha(capabilities);
+        info.compositeAlpha = chooseCompositeAlpha(capabilities, transparent);
         info.presentMode = choosePresentMode(physical);
         info.clipped = VK_TRUE;
 
@@ -630,7 +675,7 @@ struct GPUView::Native
 
     bool readyToRender()
     {
-        if (deviceLost || record.surface == nullptr)
+        if (deviceLost || !record.handle.isValid())
             return false;
 
         if (!Device::shared().isValid())
@@ -767,6 +812,7 @@ struct GPUView::Native
     bool depthEnabled = false;
     bool stencilEnabled = false;
     bool continuous = false;
+    bool transparent = false;
 
     VkSurfaceKHR vkSurface = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
@@ -891,6 +937,19 @@ void GPUView::setFramesInFlight(int count)
 int GPUView::framesInFlight() const
 {
     return impl->framesInFlight;
+}
+
+void GPUView::setTransparent(bool shouldBeTransparent)
+{
+    impl->transparent = shouldBeTransparent;
+
+    if (impl->swapchain != VK_NULL_HANDLE)
+        impl->swapchainStale = true;
+}
+
+bool GPUView::isTransparent() const
+{
+    return impl->transparent;
 }
 
 // No drawable to resize here: the swapchain is rebuilt from the surface's own

@@ -15,6 +15,13 @@ using namespace eacp::GPU;
 // behind the UI's frames. Metal has always honoured it - Device::Native holds
 // its MTLCommandQueue as an instance member - and it is the D3D12 backend these
 // caught, where every Device forwarded to one process-wide context.
+//
+// These are also the positive half of Device::assertOwningThread: every case
+// below runs a whole chain - buffers, pipeline, command buffer, read-back - on
+// the thread that made the Device, and a worker reaching Device::shared() to
+// compile a kernel does not take ownership of it. There is no negative case and
+// there cannot be one here: the rule is an assert, and an assert that fires
+// aborts the run rather than failing a test.
 
 namespace
 {
@@ -202,4 +209,39 @@ auto tWorkerDevicesRunConcurrently = test("GPU/workerDevicesRunConcurrently") = 
 
     check(results[0]);
     check(results[1]);
+};
+
+// The rule assertOwningThread asserts, asked as a question so both answers can
+// be checked: Device::shared() belongs to the main thread whichever thread asks,
+// and a Device made on a worker belongs to that worker and to nothing else.
+auto tOwningThreadIsAnswerable = test("GPU/owningThreadIsAnswerable") = []
+{
+    auto& shared = Device::shared();
+
+    if (!shared.isValid())
+        return;
+
+    check(shared.threadOwner().followsMainThread);
+    check(shared.threadOwner().isCurrent());
+
+    auto sharedOwnedOffMain = true;
+    auto workerOwnedOnWorker = false;
+    auto workerOwner = Device::ThreadOwner {};
+
+    auto worker = std::thread(
+        [&]
+        {
+            sharedOwnedOffMain = shared.threadOwner().isCurrent();
+
+            auto device = Device();
+            workerOwner = device.threadOwner();
+            workerOwnedOnWorker = workerOwner.isCurrent();
+        });
+
+    worker.join();
+
+    check(!sharedOwnedOffMain);
+    check(workerOwnedOnWorker);
+    check(!workerOwner.followsMainThread);
+    check(!workerOwner.isCurrent());
 };

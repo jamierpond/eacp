@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Buffer/Buffer.h"
+#include "../Buffer/BufferPool.h"
 #include "../CommandBuffer/CommandBuffer.h"
 #include "../Pipeline/ComputePipeline.h"
 #include "../Pipeline/RenderPipeline.h"
@@ -10,7 +11,12 @@
 #include "../Timing/FrameTimer.h"
 
 #include <cstdint>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <typeindex>
 
 namespace eacp::Graphics
 {
@@ -32,6 +38,20 @@ namespace eacp::GPU
 // (an MTLBuffer belongs to its MTLDevice; a D3D12 recording to its queue's
 // pool). Using a Device off the thread that constructed it is a debug assertion
 // rather than a race left to be found later.
+//
+// The rule in full, because it is what assertOwningThread() below checks. A
+// Device is owned by the thread that constructed it, and the process-wide
+// Device::shared() is owned by the main thread whichever thread happened to ask
+// for it first - every GPUView and every Frame drives that one from the main
+// thread, so binding it to the first caller would be an accident of startup
+// order. Everything a Device makes is used on its owning thread: creating a
+// buffer, reading or updating one, beginning a frame, and submitting, waiting
+// on or reading back a command buffer all assert it. A worker thread that wants
+// the GPU makes a Device of its own and keeps the whole chain - buffers,
+// pipelines, command buffers - on that thread; touching Device::shared() from
+// there to compile a kernel is allowed and does not move its ownership. The
+// check is one thread-id compare behind an assert, so a release build pays for
+// nothing but the call.
 class Device
 {
 public:
@@ -39,24 +59,66 @@ public:
 
     static Device& shared();
 
+    // Fires a debug assertion when this Device is used from a thread that does
+    // not own it. Called at the top of the operations that touch the backend;
+    // an app may call it at the top of its own, on the same terms.
+    void assertOwningThread() const;
+
+    // The owning thread as a value, for state that has to answer the same
+    // question after the Device is gone - BufferPool's link, which a Buffer
+    // can outlive. Asked in every build, unlike the assertion.
+    struct ThreadOwner
+    {
+        std::thread::id id;
+        bool followsMainThread = false;
+
+        bool isCurrent() const;
+    };
+
+    ThreadOwner threadOwner() const { return {owningThread, mainThreadOwned}; }
+
     Buffer makeBuffer(const void* data,
-                      int bytes,
+                      std::int64_t bytes,
                       BufferUsage usage = BufferUsage::Vertex,
                       BufferStorage storage = BufferStorage::Device)
     {
+        assertOwningThread();
+
         return {*this, data, bytes, usage, storage};
     }
 
     template <typename T, std::size_t N>
     Buffer makeBuffer(const T (&array)[N], BufferUsage usage = BufferUsage::Vertex)
     {
-        return makeBuffer(array, (int) sizeof(array), usage);
+        return makeBuffer(array, (std::int64_t) sizeof(array), usage);
     }
 
     // An uninitialised buffer of the given size, e.g. a compute output target.
-    Buffer makeBuffer(int bytes, BufferUsage usage = BufferUsage::Storage)
+    // Its contents are whatever was there: the storage may be recycled from a
+    // buffer of the same size and usage that the GPU has finished with (see
+    // BufferPool), so a kernel that needs zeros writes them.
+    Buffer makeBuffer(std::int64_t bytes, BufferUsage usage = BufferUsage::Storage)
     {
-        return {*this, nullptr, bytes, usage};
+        assertOwningThread();
+
+        return BufferPool::of(*this).take(bytes, usage);
+    }
+
+    // A buffer over memory the caller owns: shared with it where the backend
+    // can, copied out of it where it cannot, which Buffer::canAdoptMemory
+    // answers. The memory must be page-aligned in both address and length -
+    // see ExternalMemory, which also carries the callback that frees it.
+    //
+    // What this is for is a file already in the address space. Mapping a
+    // weights file and adopting the whole mapping makes every tensor in it a
+    // BufferRange into one buffer, with nothing copied and nothing to keep in
+    // step: the pages arrive as the GPU first touches them.
+    Buffer makeBufferOverMemory(ExternalMemory memory,
+                                BufferUsage usage = BufferUsage::Storage)
+    {
+        assertOwningThread();
+
+        return {*this, std::move(memory), usage};
     }
 
     // A 2D texture from tightly packed 4-byte pixels (row 0 at the top), or an
@@ -97,7 +159,12 @@ public:
         return {*this, library};
     }
 
-    CommandBuffer makeCommandBuffer() { return CommandBuffer {*this}; }
+    CommandBuffer makeCommandBuffer()
+    {
+        assertOwningThread();
+
+        return CommandBuffer {*this};
+    }
 
     bool isValid() const;
 
@@ -169,6 +236,46 @@ public:
     // zero, and a check against zero stands down.
     int maxThreadgroupMemory() const;
 
+    // How many bytes of device-local memory this device would rather we kept
+    // resident, or zero where it will not say. Not how much exists and not how
+    // much is free: the number a driver answers when asked what a well-behaved
+    // process should stay under, which is what anything holding storage of its
+    // own - BufferPool here, a caller's allocator just as much - wants to size
+    // itself against. A discrete card answers its own memory; a unified one
+    // answers a share of the system's.
+    std::int64_t memoryBudget() const;
+
+    // Whether this device loads an 8x8 SIMD-group matrix fragment out of a
+    // buffer of packed sixteen-bit elements **natively** - one instruction, no
+    // widening - which is what ComputeProgram::simdMatrixHalf and
+    // simdMatrixBFloat16 emit on Metal.
+    //
+    // "Natively" is the whole of what these answer, and not "at all". They are
+    // false on D3D12 and Vulkan, where the same two calls still build and still
+    // compute the right thing: a fragment there is spread over the lanes, and a
+    // packed load is each lane widening the pair it holds through the helper
+    // every other packed read uses. Whether a program *builds* is
+    // ComputeProgram::fitsPackedSimdMatrix, which is the check prepare() makes
+    // and which only Metal can fail.
+    //
+    // So this is the question a kernel author asks **before building**, to
+    // choose between two kernels: the packed load where the answer is yes, and
+    // a staged threadgroup tile of widened floats where it is no. It is not a
+    // branch to put inside a kernel. The staging path carries barriers the
+    // packed path does not, and a barrier some threads in a group reach and
+    // others do not is undefined - so the two cannot be the arms of one `if`.
+    // On Windows and Linux both shapes build, and this answering no says the
+    // staged one is the one worth having.
+    //
+    // fp16 fragments are Metal 2.3, so they are on the macOS 11 floor eacp
+    // builds against; bf16 fragments are Metal 3.1 and need macOS 14 or iOS 17,
+    // which is the whole reason these are two calls and not one. Both
+    // additionally want the Apple-family GPU whose SIMD group is the 32 threads
+    // the EDSL's tiling arithmetic is written against - ComputeProgram::
+    // simdWidth. An invalid Device answers false to both.
+    bool supportsHalfSimdMatrix() const;
+    bool supportsBFloat16SimdMatrix() const;
+
     // Opaque native handles for cross-translation-unit use by other GPU types.
     void* nativeDevice() const;
     void* nativeQueue() const;
@@ -202,6 +309,15 @@ public:
     // to the fence.
     void trackSubmittedWork(void* nativeCommandBuffer);
     void waitForSubmittedWork();
+
+    // Every submission to this Device's queue - a CommandBuffer's, a Frame's -
+    // gets a serial, counting up from 1 in the order they were submitted. These
+    // two are what lets something the GPU may still be using be kept exactly as
+    // long as it has to be: note lastSubmission() when you are done with it,
+    // and it is free once hasFinished() says so for the next one. BufferPool is
+    // built on them. Neither blocks.
+    std::uint64_t lastSubmission() const;
+    bool hasFinished(std::uint64_t submission) const;
 
     // How many frames have begun on this device. StreamingBuffers picks which
     // of its pools to write into from this, so that a renderer streaming
@@ -256,13 +372,45 @@ public:
     // real storage.
     void noteBufferCreated() { ++bufferCount; }
 
+    // This Device's own T: one, made on first use and
+    // destroyed with the Device, before the backend device itself. For state
+    // that is only valid on this Device - compiled pipelines, recycled buffers
+    // - and must neither outlive it nor be found again by a later Device at
+    // the same address. The lookup is safe from any thread; what T does with
+    // that is T's own business.
+    template <typename T>
+    T& perDevice()
+    {
+        auto lock = std::scoped_lock {perDeviceMutex};
+        auto& slot = perDeviceObjects[std::type_index {typeid(T)}];
+
+        if (slot == nullptr)
+            slot = std::make_shared<T>();
+
+        return *static_cast<T*>(slot.get());
+    }
+
 private:
+    // Makes this Device follow the main thread rather than the one that
+    // constructed it. Private because Device::shared() is the only caller and
+    // it is a member, so nothing outside can move a Device's ownership.
+    void followMainThread() { mainThreadOwned = true; }
+
     struct Native;
     Pimpl<Native> impl;
 
     FrameTimer timer;
 
+    // The thread this Device was constructed on, and therefore the one it may
+    // be used from - unless followMainThread() said to track the main thread
+    // instead, which Device::shared() does.
+    std::thread::id owningThread = std::this_thread::get_id();
+    bool mainThreadOwned = false;
+
     std::uint64_t frameCount = 0;
     int bufferCount = 0;
+
+    std::mutex perDeviceMutex;
+    std::map<std::type_index, std::shared_ptr<void>> perDeviceObjects;
 };
 } // namespace eacp::GPU
