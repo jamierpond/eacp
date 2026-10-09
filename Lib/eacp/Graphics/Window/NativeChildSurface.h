@@ -1,5 +1,6 @@
 #pragma once
 
+#include "KeyForwarding.h"
 #include "../View/View.h"
 
 namespace eacp::Graphics
@@ -61,6 +62,9 @@ public:
 
     void resized() override;
     void visibilityChanged(bool nowVisible) override;
+
+    std::function<bool(const NativeKeyEvent&)> onUnhandledKey =
+        [](const NativeKeyEvent&) { return false; };
 
 private:
     struct Native;

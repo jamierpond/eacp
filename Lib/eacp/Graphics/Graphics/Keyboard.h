@@ -103,6 +103,21 @@ constexpr uint16_t ForwardDelete = 0x75;
 
 constexpr uint16_t CapsLock = 0x39;
 
+// Modifier keys as keys in their own right, left and right apart, for
+// GameInput, where Shift to sprint is a held key. On macOS the view callbacks
+// never deliver them (AppKit reports them through flagsChanged:, which is
+// ModifierKeys' business); Windows and Linux do.
+constexpr uint16_t Shift = 0x38;
+constexpr uint16_t RightShift = 0x3C;
+constexpr uint16_t Control = 0x3B;
+constexpr uint16_t RightControl = 0x3E;
+constexpr uint16_t Option = 0x3A;
+constexpr uint16_t RightOption = 0x3D;
+constexpr uint16_t Alt = Option;
+constexpr uint16_t RightAlt = RightOption;
+constexpr uint16_t Command = 0x37;
+constexpr uint16_t RightCommand = 0x36;
+
 // Keypad, distinct from the number row: a numeric keypad reports its own codes,
 // and an app that folds them together cannot bind them separately.
 constexpr uint16_t KeypadEnter = 0x4C;
@@ -123,6 +138,12 @@ constexpr uint16_t KeypadMultiply = 0x43;
 constexpr uint16_t KeypadDivide = 0x4B;
 constexpr uint16_t KeypadClear = 0x47;
 constexpr uint16_t KeypadEquals = 0x51;
+
+// Android's Back, and the Back key some desktop keyboards carry. Outside the
+// Mac's range, which has no such key. Distinct from Escape because passing it
+// on means something: on Android a Back no view kept leaves the activity, so
+// a view closes a popup on it and lets every other press go.
+constexpr uint16_t Back = 0x100;
 
 // A platform key with no framework mapping. Backends that translate native
 // codes (Windows) report it for keys outside the table above.

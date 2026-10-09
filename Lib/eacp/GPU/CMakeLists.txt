@@ -13,10 +13,18 @@ target_compile_options(eacp-gpu-codegen PUBLIC
         $<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>)
 
 target_sources(eacp-gpu-codegen PRIVATE
+        Codegen/ComputeKernel.cpp
+        Codegen/KernelName.cpp
+        Codegen/PackedScalars.cpp
         Codegen/PackedVertex.cpp
         Codegen/ShaderBuilder.cpp
         Codegen/ShaderEmitter.cpp
-        Codegen/ShaderGraph.cpp)
+        Codegen/ShaderGraph.cpp
+        Codegen/ShaderMembers.cpp
+        Codegen/ShaderValue.cpp
+        Codegen/UniformLayout.cpp
+        Pipeline/VertexLayout.cpp
+        Shader/ShaderSource.cpp)
 
 # Which dialect build() calls the native one: selection only, no backend.
 if (APPLE)
@@ -31,6 +39,10 @@ set_default_target_setting(eacp-gpu-codegen)
 eacp_enable_unity_build(eacp-gpu-codegen)
 add_ide_sources(eacp-gpu-codegen)
 
+# The CPU executor, device-free like the codegen it links, so it builds wherever
+# that does.
+add_subdirectory(CpuCompute)
+
 if (NOT EACP_HAS_GPU)
     return ()
 endif ()
@@ -40,13 +52,23 @@ add_library(eacp-gpu STATIC)
 target_link_libraries(eacp-gpu PUBLIC eacp-graphics eacp-gpu-codegen)
 
 target_sources(eacp-gpu PRIVATE
+        Buffer/Buffer.cpp
+        Buffer/BufferPool.cpp
         Buffer/StreamingBuffers.cpp
+        Codegen/ComputeProgram.cpp
+        Codegen/KernelCache.cpp
+        Codegen/ShaderProgram.cpp
+        CommandBuffer/CommandBuffer.cpp
         Device/Device.cpp
         Frame/Frame.cpp
         Frame/RenderPass.cpp
+        Pipeline/ComputePipelineCache.cpp
+        Shader/ShaderBinaryCache.cpp
+        Timing/CallCost.cpp
         Timing/CommandTimer.cpp
         Timing/FrameTimer.cpp
-        Texture/MipChain.cpp)
+        Texture/MipChain.cpp
+        View/GPUView.cpp)
 
 if (APPLE)
     # The Metal backend is shared across macOS and iOS (the -Apple files); only
@@ -99,8 +121,10 @@ elseif (WIN32)
             windowsapp
             runtimeobject)
 else ()
-    # The Vulkan backend. Nothing here links or includes libwayland: the
-    # wl_display and wl_surface it presents to are opaque pointers.
+    # The Vulkan backend. Nothing here links a window system: the connection,
+    # surface and window it presents to arrive as a NativeSurfaceHandle, and
+    # the only headers that come in are the ones vulkan_wayland.h and
+    # vulkan_xcb.h declare their create-info structs from.
     if (NOT TARGET eacp-spirv)
         message(FATAL_ERROR
                 "A Linux build needs the SPIR-V compiler: the Vulkan "
@@ -124,7 +148,14 @@ else ()
             Texture/Texture-Linux.cpp
             Timing/GpuTimestamps-Linux.cpp
             View/GPUView-Linux.cpp
-            Vulkan/VulkanContext-Linux.cpp)
+            Vulkan/VulkanContext-Linux.cpp
+            Vulkan/VulkanRenderPass-Linux.cpp)
+
+    if (ANDROID)
+        target_sources(eacp-gpu PRIVATE Vulkan/VulkanSurface-Android.cpp)
+    else ()
+        target_sources(eacp-gpu PRIVATE Vulkan/VulkanSurface-Linux.cpp)
+    endif ()
 
     # Both PRIVATE: neither Vulkan nor glslang reaches past this library.
     target_link_libraries(eacp-gpu PRIVATE eacp-vulkan eacp-spirv)

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../Primitives/Primitives.h"
-#include "../View/View-Linux.h"
+#include "LinuxWindowSurface-Linux.h"
 
 #include <wayland-client.h>
 
@@ -46,29 +46,16 @@ struct WaylandOutputInfo
     bool configured = false;
 };
 
-// What the input and view-surface code need of a Window; Window::Native
-// derives from it.
-struct WaylandWindowSurface
+// A Window on this connection: the neutral half plus the wl_surface every
+// piece of Wayland glue starts from.
+struct WaylandWindowSurface : LinuxWindowSurface
 {
+    WaylandWindowSurface();
+
     // Null while the window is headless or the connection failed.
-    wl_surface* surface = nullptr;
+    wl_surface* getSurface() const;
 
-    View* contentView = nullptr;
-
-    // In points, and so are pointer positions on `surface`.
-    Point contentSize;
-
-    float scale = linuxDefaultBackingScale;
-    bool mapped = false;
-
-    // Intent only; a real pointer lock also needs keyboard focus.
-    bool mouseLockIntent = false;
-
-    std::function<void(bool)> onKeyboardFocus = [](bool) {};
-
-    // The compositor went away mid-session: drop the surface and everything
-    // made from it, and report the window hidden.
-    Callback onConnectionLost = [] {};
+    void setSurface(wl_surface* surface);
 };
 
 struct WaylandSurfaceTarget
@@ -95,9 +82,9 @@ public:
 
     void destroy();
 
-    wl_buffer* get() const { return buffer; }
-    int getWidth() const { return width; }
-    int getHeight() const { return height; }
+    constexpr wl_buffer* get() const { return buffer; }
+    constexpr int getWidth() const { return width; }
+    constexpr int getHeight() const { return height; }
 
 private:
     wl_buffer* buffer = nullptr;
@@ -116,37 +103,42 @@ public:
     WaylandDisplay(const WaylandDisplay&) = delete;
     WaylandDisplay& operator=(const WaylandDisplay&) = delete;
 
-    bool isValid() const { return display != nullptr; }
+    constexpr bool isValid() const { return display != nullptr; }
 
-    wl_display* getDisplay() const { return display; }
-    wl_compositor* getCompositor() const { return compositor; }
-    wl_subcompositor* getSubcompositor() const { return subcompositor; }
-    wl_shm* getShm() const { return shm; }
-    wp_viewporter* getViewporter() const { return viewporter; }
-    wl_seat* getSeat() const { return seat; }
-    wl_data_device_manager* getDataDeviceManager() const { return dataDevices; }
-    libdecor* getDecorations() const { return decorations; }
+    constexpr wl_display* getDisplay() const { return display; }
+    constexpr wl_compositor* getCompositor() const { return compositor; }
+    constexpr wl_subcompositor* getSubcompositor() const { return subcompositor; }
+    constexpr wl_shm* getShm() const { return shm; }
+    constexpr wp_viewporter* getViewporter() const { return viewporter; }
+    constexpr wl_seat* getSeat() const { return seat; }
 
-    wp_fractional_scale_manager_v1* getFractionalScales() const
+    constexpr wl_data_device_manager* getDataDeviceManager() const
+    {
+        return dataDevices;
+    }
+
+    constexpr libdecor* getDecorations() const { return decorations; }
+
+    constexpr wp_fractional_scale_manager_v1* getFractionalScales() const
     {
         return fractionalScales;
     }
 
-    zwp_pointer_constraints_v1* getPointerConstraints() const
+    constexpr zwp_pointer_constraints_v1* getPointerConstraints() const
     {
         return pointerConstraints;
     }
 
-    zwp_relative_pointer_manager_v1* getRelativePointers() const
+    constexpr zwp_relative_pointer_manager_v1* getRelativePointers() const
     {
         return relativePointers;
     }
 
-    WaylandInput* getInput() const { return input.get(); }
+    WaylandInput* getInput() const;
 
     // False once the compositor has gone: every global is dropped then, so
     // windows made afterwards come up surfaceless, exactly as headless ones do.
-    bool isConnected() const { return compositor != nullptr; }
+    constexpr bool isConnected() const { return compositor != nullptr; }
 
     // Null when the compositor advertised no output.
     const WaylandOutputInfo* getPrimaryOutput() const;
@@ -199,6 +191,11 @@ private:
     int decorationsLoopFd = -1;
 };
 
-// Null when headless or no compositor could be reached.
+// Whether the environment names a compositor to connect to. Asked before any
+// connection is opened, so it is the environment and nothing more.
+bool waylandCompositorIsReachable();
+
+// Null when Wayland is not this copy's window system, or no compositor could
+// be reached.
 WaylandDisplay* waylandDisplay();
 } // namespace eacp::Graphics

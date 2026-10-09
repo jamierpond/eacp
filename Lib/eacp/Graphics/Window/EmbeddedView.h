@@ -14,8 +14,10 @@ struct EmbeddedViewOptions
 // A surface of ours inside a window somebody else owns.
 //
 // The host hands over a native handle — an NSView* on macOS, an HWND on
-// Windows — and everything inside the surface built against it is ours: a
-// content View, its subviews, its GPU content, its input.
+// Windows, an X11 window id on Linux, where the id is a number and travels in
+// the pointer parameter every plugin API passes one in — and everything inside
+// the surface built against it is ours: a content View, its subviews, its GPU
+// content, its input.
 //
 // Two kinds of host embed a surface, and they want opposite things from it.
 // One hands over its whole window and has no layout of its own; that is what
@@ -52,7 +54,7 @@ public:
 
     // Where the surface is, in that same space: what was last set, or the
     // options' size at the origin.
-    Rect getBounds() const { return bounds; }
+    constexpr Rect getBounds() const { return bounds; }
 
     // Resizes the surface about its top-left, leaving the automatic sizing
     // alone — the call a host that handed over its whole window makes when
@@ -70,7 +72,7 @@ public:
     // window, taking the mouse over its rectangle from whatever the host has
     // underneath.
     void setVisible(bool shouldBeVisible);
-    bool isVisible() const { return visible; }
+    constexpr bool isVisible() const { return visible; }
 
     // How many physical pixels the surface should put in a point.
     //
@@ -82,11 +84,16 @@ public:
     // mouse event lands — so it is one answer for the whole surface rather
     // than a correction applied to its frame.
     //
-    // 0, the default, follows the platform: on Windows, the window's own DPI.
-    // Ignored on macOS, where points are the platform's own space and AppKit
-    // does this conversion itself.
+    // 0, the default, follows the platform: on Windows, the window's own DPI;
+    // on Linux one pixel per point, because X11 has no per-window scale to
+    // read and the host is the only thing that knows better. Ignored on macOS,
+    // where points are the platform's own space and AppKit does this
+    // conversion itself.
     void setPixelsPerPoint(float pixelsPerPoint);
 
+    // The surface's own native handle, in the same currency the host's came
+    // in: an NSView*, an HWND, and on Linux the child window's id widened into
+    // the pointer.
     void* getHandle();
 
 private:

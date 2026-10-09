@@ -6,6 +6,8 @@
 #include "../Pipeline/ComputePipeline.h"
 #include "../Windows/D3D12Types.h"
 
+#include <eacp/Core/Utils/Logging.h>
+
 // Windows/D3D12 backend. Records onto the command buffer's recording via the
 // D3D12ComputeEncoder. Buffers bind as root descriptors by GPU address (no
 // descriptor heap involved); textures cannot - a root descriptor is a buffer
@@ -21,6 +23,36 @@ namespace eacp::GPU
 {
 namespace
 {
+// D3D12 caps thread groups at 65535 in every dimension
+// (D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION), and Metal has no
+// comparable ceiling, so a grid authored there can be illegal here. What an
+// over-limit dimension then does is the driver's business rather than the
+// API's: this NVIDIA one runs X grids far past the cap - its hardware limit is
+// ~2^31 there - and quietly produces nothing for a Y past it, which is a 30 s
+// decode whose every sample is zero. So this neither clamps nor skips, because
+// either would break the grids that do run; it says which dimension is out of
+// spec and leaves the dispatch alone.
+void warnIfPastDispatchLimit(UINT x, UINT y, UINT z)
+{
+    constexpr auto limit =
+        UINT {D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION};
+
+    if (x <= limit && y <= limit && z <= limit)
+        return;
+
+    LOG("eacp: a dispatch of ",
+        x,
+        "x",
+        y,
+        "x",
+        z,
+        " threadgroups is past D3D12's limit of ",
+        limit,
+        " per dimension. Whether it runs is up to the driver, and a Y or Z "
+        "past the cap commonly runs as nothing at all. Reshape the grid so "
+        "every dimension fits.");
+}
+
 // Orders a dispatch's UAV writes against any later read or write of the same
 // resources in this recording (chained kernels, readback copies).
 void barrierAfterDispatch(ID3D12GraphicsCommandList* list)
@@ -70,12 +102,16 @@ ComputePass::~ComputePass()
 void ComputePass::setPipeline(const ComputePipeline& pipeline)
 {
     boundGroup = pipeline.threadGroupShape();
+    boundPipeline = false;
 
     if (!impl->encoder)
         return;
 
     if (auto* state = static_cast<ID3D12PipelineState*>(pipeline.nativeState()))
+    {
         impl->encoder->commands->list->SetPipelineState(state);
+        boundPipeline = true;
+    }
 }
 
 namespace
@@ -173,9 +209,11 @@ void ComputePass::setOutputTexture(const Texture& texture, int slot)
     list->SetComputeRootDescriptorTable(computeTextureUAVParam(slot), data->uav.gpu);
 }
 
-void ComputePass::setBytes(const void* data, int bytes, int slot)
+void ComputePass::setBytes(const void* data, std::int64_t bytes, int slot)
 {
-    if (!impl->encoder || slot < 0 || slot >= maxUniformSlots)
+    // The `bytes <= 0` half is what keeps the cast below honest: a negative
+    // count would arrive at uploadConstants as an enormous std::size_t.
+    if (!impl->encoder || bytes <= 0 || slot < 0 || slot >= maxUniformSlots)
         return;
 
     auto& commands = *impl->encoder->commands;
@@ -189,12 +227,13 @@ void ComputePass::setBytes(const void* data, int bytes, int slot)
 
 void ComputePass::dispatch(int count)
 {
-    if (!impl->encoder || count <= 0)
+    if (!impl->encoder || !boundPipeline || count <= 0)
         return;
 
     auto width = static_cast<UINT>(groupFor1D().x);
     auto groups = (static_cast<UINT>(count) + width - 1) / width;
 
+    warnIfPastDispatchLimit(groups, 1, 1);
     auto* list = impl->encoder->commands->list.get();
     list->Dispatch(groups, 1, 1);
     impl->orderAfterDispatch(list);
@@ -202,7 +241,7 @@ void ComputePass::dispatch(int count)
 
 void ComputePass::dispatch(int width, int height)
 {
-    if (!impl->encoder || width <= 0 || height <= 0)
+    if (!impl->encoder || !boundPipeline || width <= 0 || height <= 0)
         return;
 
     auto group = groupFor2D();
@@ -211,6 +250,7 @@ void ComputePass::dispatch(int width, int height)
     auto groupsX = (static_cast<UINT>(width) + sizeX - 1) / sizeX;
     auto groupsY = (static_cast<UINT>(height) + sizeY - 1) / sizeY;
 
+    warnIfPastDispatchLimit(groupsX, groupsY, 1);
     auto* list = impl->encoder->commands->list.get();
     list->Dispatch(groupsX, groupsY, 1);
     impl->orderAfterDispatch(list);
@@ -218,7 +258,7 @@ void ComputePass::dispatch(int width, int height)
 
 void ComputePass::dispatch(int width, int height, int depth)
 {
-    if (!impl->encoder || width <= 0 || height <= 0 || depth <= 0)
+    if (!impl->encoder || !boundPipeline || width <= 0 || height <= 0 || depth <= 0)
         return;
 
     auto group = groupFor3D();
@@ -229,6 +269,7 @@ void ComputePass::dispatch(int width, int height, int depth)
     auto groupsY = (static_cast<UINT>(height) + sizeY - 1) / sizeY;
     auto groupsZ = (static_cast<UINT>(depth) + sizeZ - 1) / sizeZ;
 
+    warnIfPastDispatchLimit(groupsX, groupsY, groupsZ);
     auto* list = impl->encoder->commands->list.get();
     list->Dispatch(groupsX, groupsY, groupsZ);
     impl->orderAfterDispatch(list);
@@ -245,10 +286,12 @@ void ComputePass::dispatch(int width, int height, int depth)
 // this is not simply the same three lines twice. That transition is only a
 // transition, so in a concurrent pass the writer's UAV work is ordered against
 // it by hand first.
-void ComputePass::dispatchIndirect(const Buffer& arguments, int offsetInBytes)
+void ComputePass::dispatchIndirect(const Buffer& arguments,
+                                   std::int64_t offsetInBytes)
 {
-    if (!impl->encoder || offsetInBytes < 0
-        || offsetInBytes > arguments.size() - (int) sizeof(DispatchArguments))
+    if (!impl->encoder || !boundPipeline || offsetInBytes < 0
+        || offsetInBytes
+               > arguments.size() - (std::int64_t) sizeof(DispatchArguments))
         return;
 
     auto* data = static_cast<D3D12BufferData*>(arguments.nativeBuffer());
@@ -287,6 +330,19 @@ void ComputePass::barrier()
 // A concurrent pass owes the rest of the recording what the per-dispatch
 // barriers owed it in a serial one, so the last dispatches are ordered here
 // against whatever the next pass or a readback copy does.
+void ComputePass::beginTimedDispatch(std::string_view label)
+{
+    if (impl->encoder)
+    {
+        if (impl->isConcurrent())
+            impl->recordBarrier();
+
+        endTimedPass(*impl->encoder);
+    }
+
+    impl->encoder.reset(static_cast<D3D12ComputeEncoder*>(openTimedEncoder(label)));
+}
+
 void ComputePass::end()
 {
     if (impl->encoder)

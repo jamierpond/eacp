@@ -17,6 +17,10 @@ add_subdirectory(ComputeImage)
 # Non-blocking submission: CommandBuffer::commitAsync overlapping GPU work with
 # the CPU, measured against the blocking commit.
 add_subdirectory(AsyncCompute)
+
+# One kernel on both backends: ComputePass on the GPU and CpuCompute::Executor
+# on the CPU, compared and timed, and the CPU path alone where no device is.
+add_subdirectory(CpuCompute)
 add_subdirectory(Paths)
 
 # Analytic antialiasing in a kernel: coverage computed per pixel from a path's
@@ -81,7 +85,6 @@ if (EACP_HAS_TEXT)
     add_subdirectory(VariableFont)
 endif ()
 
-# Links eacp-video (macOS-only: AVFoundation + ScreenCaptureKit).
 if (APPLE AND NOT IOS)
     add_subdirectory(VideoRecorderGpu)
 endif ()

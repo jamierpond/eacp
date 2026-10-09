@@ -2,7 +2,11 @@
 
 #include "../Common.h"
 
-#include <eacp/Graphics/Graphics.h>
+#include <eacp/Core/Utils/Pimpl.h>
+#include <eacp/Graphics/Helpers/DisplayLink.h>
+#include <eacp/Graphics/View/View.h>
+
+#include <functional>
 
 namespace eacp::GPU
 {
@@ -24,12 +28,12 @@ public:
     GPUView();
     ~GPUView() override;
 
-    virtual void render(Frame&) {}
+    virtual void render(Frame&);
 
     // Called once per display refresh while continuous mode is on; the view
     // then redraws via render(). Advance animation state here, scaled by the
     // frame's delta time, so motion stays smooth and rate-independent.
-    virtual void update(Threads::FrameTime) {}
+    virtual void update(Threads::FrameTime);
 
     // The drawable is resized before the subclass answers the new size, and the
     // resize's own frame drawn after it on the backends that draw one -- so a
@@ -61,6 +65,18 @@ public:
 
     void setContinuous(bool continuous);
     bool isContinuous() const;
+
+    // Whether the view's alpha reaches what is beneath it, so a pass cleared
+    // to alpha 0 shows the views and windows behind it rather than black. The
+    // colour a pass leaves is premultiplied. Off by default, which is opaque:
+    // the clear colour's alpha is ignored and the view is a solid rectangle.
+    //
+    // A view in a WindowOptions::transparentBackground window is transparent
+    // whatever this says, since that window's alpha already reaches the
+    // desktop. On Windows this is also what lets a view draw over a child
+    // window (a NativeChildSurface) in a top-level Window and still show it.
+    void setTransparent(bool shouldBeTransparent);
+    bool isTransparent() const;
 
     // Caps how often continuous mode renders. The display link still wakes
     // at every refresh, but update()/render() run at most `fps` times a

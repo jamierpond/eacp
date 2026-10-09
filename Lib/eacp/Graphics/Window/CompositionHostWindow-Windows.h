@@ -5,16 +5,17 @@
 #include "../View/View.h"
 
 #include <bitset>
+#include <memory>
+#include <optional>
 
 namespace eacp::Graphics
 {
 
-// Maps a content view's root to the HWND hosting it. Both the top-level Window
-// and the child EmbeddedView register through CompositionHostWindow, so a
-// WebView (or any repaint-driven View) nested in either surface can resolve its
-// host HWND. Main-thread only, so no locking is needed.
-void registerContentViewHwnd(View* root, HWND hwnd);
-void unregisterContentViewHwnd(View* root);
+// The HWND hosting the content view `view` belongs to. Both the top-level
+// Window and the child EmbeddedView register their content view through
+// CompositionHostWindow, so a WebView (or any repaint-driven View) nested in
+// either surface can resolve its host HWND. Main-thread only, so no locking is
+// needed.
 HWND findHostHwndForView(View* view);
 
 // Whether `hwnd` hosts a WindowOptions::transparentBackground surface. Content
@@ -69,7 +70,7 @@ struct CompositionHostWindow
     // The lock expresses intent: it engages while the HWND has focus and
     // WM_SETFOCUS / WM_KILLFOCUS re-engage / suspend it.
     void setMouseLocked(bool locked);
-    bool isMouseLocked() const { return mouseLockIntent; }
+    constexpr bool isMouseLocked() const { return mouseLockIntent; }
 
     // Tears down the visual tree, registry entry, and HWND. Call from the
     // owning surface's destructor.
@@ -124,6 +125,7 @@ private:
 
     void fillWindowBackground(HDC dc) const;
     void resizeContentViewToClient();
+    void layOutContentView();
     void ensureMouseLeaveTracking();
     void dispatchMouseToContentView(MouseEvent event);
 
@@ -133,6 +135,11 @@ private:
     // Where the held button went down, in screen pixels — see
     // dispatchMouseToContentView for why it is not kept in client points.
     POINT mouseDownScreenPosition {};
+
+    // Where the pointer last was, in points: Windows reports positions, and
+    // MouseEvent::delta is the difference. Empty until the pointer is seen,
+    // and again once it has left, so a return does not report the jump.
+    std::optional<Point> lastPointerPosition;
 
     // The mouse's own movement, which the ordinary pointer messages cannot
     // report: they carry the pointer's position after the system's acceleration
@@ -144,6 +151,10 @@ private:
 
     bool rawMouseRegistered = false;
     Point rawMouseMovement;
+
+    std::shared_ptr<CompositionHostWindow*> lifetime {
+        std::make_shared<CompositionHostWindow*>(this)};
+
     void ensureAllLayersRendered(const View* view, float dpiScale) const;
     void dispatchKeyEvent(UINT msg, WPARAM wParam, LPARAM lParam);
     void synthesizeMouseUpOnCaptureLoss();

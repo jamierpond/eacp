@@ -4,9 +4,11 @@
 #include "Helpers/DisplayLink.h"
 #include "Helpers/SystemAppearance.h"
 #include "HotKey/GlobalHotKey.h"
+#include "Input/GameInput.h"
 #include "Tray/TrayIcon.h"
 #include "View/ViewList.h"
 #include "Window/Display.h"
+#include "Window/EmbeddedView.h"
 #include "Window/ViewWindow.h"
 #include "Window/Window.h"
 
@@ -24,6 +26,6 @@
 #include "Layers/LayerViews.h"
 #include "Primitives/TextMetrics.h"
 #include "Widgets/TextInput.h"
-#include "Window/EmbeddedView.h"
+#include "Window/KeyGrab.h"
 #include "Window/NativeChildSurface.h"
 #endif

@@ -1,8 +1,10 @@
-#include "Common.h"
+#include "CpuCrossCheck.h"
 
 #include <eacp/GPU/Codegen/ShaderEmitter.h>
 
 #include <cstdint>
+#include <cstring>
+#include <iterator>
 #include <string>
 
 // The unsigned integer vectors: a pair of indices held in one value, the four
@@ -17,10 +19,10 @@
 using namespace nano;
 using namespace eacp;
 using namespace eacp::GPU;
+using namespace eacp::GPU::CrossChecks;
 
 namespace
 {
-constexpr auto uintBytes = (int) sizeof(std::uint32_t);
 constexpr auto groupSize = ComputePass::threadGroupWidth;
 constexpr auto groups = 4;
 constexpr auto sharedThreads = groupSize * groups;
@@ -28,25 +30,6 @@ constexpr auto sharedThreads = groupSize * groups;
 bool contains(const std::string& text, const char* needle)
 {
     return text.find(needle) != std::string::npos;
-}
-
-Buffer makeFilledUInts(int elements, std::uint32_t value)
-{
-    auto values = Vector<std::uint32_t> {};
-    values.assign(elements, value);
-
-    return Buffer {Device::shared(),
-                   values.data(),
-                   uintBytes * values.size(),
-                   BufferUsage::Storage};
-}
-
-Vector<std::uint32_t> readUInts(const Buffer& buffer, int elements)
-{
-    auto values = Vector<std::uint32_t> {};
-    values.resize(elements);
-    buffer.read(values.data(), uintBytes * elements);
-    return values;
 }
 
 // Everything a uint2 and a uint4 can be asked componentwise, one thread's worth
@@ -226,6 +209,52 @@ struct SharedPairKernel final : ComputeProgram
     Uniform<UIntOutputBuffer> output;
 
     EACP_SHADER(output)
+};
+
+// A whole Float4 through the bitcasts and back, with one bit manipulation in
+// between. The flip is an exclusive-or against the sign bit, which is a thing
+// only the bits can say - there is no float arithmetic that negates a NaN - so
+// a backend that routed the cast through a conversion answers differently
+// rather than approximately.
+struct WideBitcastKernel final : ComputeProgram
+{
+    WideBitcastKernel() { compile(); }
+
+    void define() override
+    {
+        auto i = threadId();
+        auto bits = asUInt(values.read4(i));
+
+        write(output, i * 2u, bits);
+        write(output, i * 2u + 1u, asUInt(asFloat(bits ^ 0x80000000u)));
+    }
+
+    Uniform<InputBuffer> values;
+    Uniform<UIntOutputBuffer> output;
+
+    EACP_SHADER(values, output)
+};
+
+// The wide store on an integer output, which Metal reaches through a
+// packed_uint4 pointer exactly as it reaches the float one. What it leaves
+// behind has to be what the record write would have.
+struct WideUIntStoreKernel final : ComputeProgram
+{
+    WideUIntStoreKernel() { compile(); }
+
+    void define() override
+    {
+        auto i = threadId();
+
+        write4(quads, i, source.read4(i) + 1u);
+        write2(pairs, i, uint2(i, i * 3u));
+    }
+
+    Uniform<UIntInputBuffer> source;
+    Uniform<UIntOutputBuffer> quads;
+    Uniform<UIntOutputBuffer> pairs;
+
+    EACP_SHADER(source, quads, pairs)
 };
 } // namespace
 
@@ -471,6 +500,43 @@ auto tUIntVectorBitcasts = test("UIntVector/theBitcastsUseTheVectorSpelling") = 
     expectGlslCompiles(builder.graph());
 };
 
+// The same pair of casts a width up, spelled out on all three dialects: MSL
+// carries the width in the name, and HLSL and GLSL have one name per direction
+// because both are componentwise over a vector already.
+auto tUIntVectorWideBitcasts = test("UIntVector/aQuadBitcastsOnEveryDialect") = []
+{
+    auto builder = ShaderBuilder {};
+
+    auto input = builder.inputBuffer();
+    auto output = builder.uintOutputBuffer();
+    auto i = builder.threadId();
+
+    auto bits = asUInt(input.read4(i));
+
+    builder.write(output, i, bits ^ 0x80000000u);
+    builder.write(output, i + 4u, asUInt(asFloat(bits)));
+
+    auto metal = emitMetal(builder.graph());
+    auto hlsl = emitHlsl(builder.graph());
+    auto glsl = emitGlsl(builder.graph());
+
+    check(contains(metal,
+                   "uint4 t1 = as_type<uint4>(float4(*((device const "
+                   "packed_float4*) (buffer0 + t0))));"));
+    check(contains(metal, "as_type<uint4>(as_type<float4>(t1))"));
+
+    check(contains(hlsl, "uint4 t1 = asuint(float4(buffer0[t0], "));
+    check(contains(hlsl, "asuint(asfloat(t1))"));
+    check(!contains(hlsl, "as_type"));
+
+    check(contains(glsl, "uvec4 t1 = floatBitsToUint(vec4(buffer0[t0], "));
+    check(contains(glsl, "floatBitsToUint(uintBitsToFloat(t1))"));
+    check(!contains(glsl, "as_type"));
+    check(!contains(glsl, "asuint"));
+
+    expectGlslCompiles(builder.graph());
+};
+
 auto tUIntVectorUniformPacking = test("UIntVector/aTripleUniformPadsOnlyOnHlsl") = []
 {
     auto builder = ShaderBuilder {};
@@ -496,162 +562,215 @@ auto tUIntVectorUniformPacking = test("UIntVector/aTripleUniformPadsOnlyOnHlsl")
 
 auto tUIntVectorArithmeticRuns = test("UIntVector/wrapsAndMasksExactly") = []
 {
-    auto& device = Device::shared();
-
-    if (!device.isValid())
-        return;
-
     constexpr auto threads = 128;
 
-    auto output = makeFilledUInts(threads * perThread, 0u);
-
     auto kernel = VectorArithmeticKernel {};
-    kernel.output = output;
-    kernel.prepare();
 
-    auto commands = device.makeCommandBuffer();
+    CrossCheck {kernel}
+        .output(kernel.output, threads * perThread, 0u)
+        .run(threads,
+             [&](const Readback& readback)
+             {
+                 const auto& values = readback.uints(kernel.output);
+                 auto wrapped = 0;
 
-    {
-        auto pass = commands.beginCompute();
-        pass.dispatch(kernel, threads);
-    }
+                 for (auto thread = 0; thread < threads; ++thread)
+                 {
+                     std::uint32_t expected[perThread] = {};
+                     expectedRecord((std::uint32_t) thread, expected);
 
-    commands.commit();
+                     for (auto slot = 0; slot < perThread; ++slot)
+                         check(values[thread * perThread + slot] == expected[slot],
+                               readback.name());
 
-    auto values = readUInts(output, threads * perThread);
-    auto wrapped = 0;
+                     if (expected[1] < 4294967280u + (std::uint32_t) thread)
+                         ++wrapped;
+                 }
 
-    for (auto thread = 0; thread < threads; ++thread)
-    {
-        std::uint32_t expected[perThread] = {};
-        expectedRecord((std::uint32_t) thread, expected);
-
-        for (auto slot = 0; slot < perThread; ++slot)
-            check(values[thread * perThread + slot] == expected[slot]);
-
-        if (expected[1] < 4294967280u + (std::uint32_t) thread)
-            ++wrapped;
-    }
-
-    // And the wraparound past 2^32 is genuinely exercised rather than assumed.
-    check(wrapped > 0);
+                 // And the wraparound past 2^32 is genuinely exercised rather
+                 // than assumed.
+                 check(wrapped > 0, readback.name());
+             });
 };
 
 auto tUIntVectorUniformsRun = test("UIntVector/uniformPairsArriveAsSent") = []
 {
-    auto& device = Device::shared();
-
-    if (!device.isValid())
-        return;
-
     constexpr auto threads = 32;
-
-    auto output = makeFilledUInts(threads * 5, 0u);
 
     auto kernel = UniformPairKernel {};
     kernel.origin = {4000000000u, 17u};
     kernel.step = {3u, 5u, 7u};
-    kernel.output = output;
-    kernel.prepare();
 
-    auto commands = device.makeCommandBuffer();
+    CrossCheck {kernel}
+        .output(kernel.output, threads * 5, 0u)
+        .run(threads,
+             [&](const Readback& readback)
+             {
+                 const auto& values = readback.uints(kernel.output);
+                 const auto* name = readback.name();
 
-    {
-        auto pass = commands.beginCompute();
-        pass.dispatch(kernel, threads);
-    }
+                 for (auto thread = 0; thread < threads; ++thread)
+                 {
+                     auto i = (std::uint32_t) thread;
 
-    commands.commit();
-
-    auto values = readUInts(output, threads * 5);
-
-    for (auto thread = 0; thread < threads; ++thread)
-    {
-        auto i = (std::uint32_t) thread;
-
-        check(values[thread * 5 + 0] == 4000000000u + i);
-        check(values[thread * 5 + 1] == 17u + i * 2u);
-        check(values[thread * 5 + 2] == 3u * i);
-        check(values[thread * 5 + 3] == 5u * i);
-        check(values[thread * 5 + 4] == 7u * i);
-    }
+                     check(values[thread * 5 + 0] == 4000000000u + i, name);
+                     check(values[thread * 5 + 1] == 17u + i * 2u, name);
+                     check(values[thread * 5 + 2] == 3u * i, name);
+                     check(values[thread * 5 + 3] == 5u * i, name);
+                     check(values[thread * 5 + 4] == 7u * i, name);
+                 }
+             });
 };
 
 auto tUIntVectorVarRuns = test("UIntVector/aPairAdvancesThroughALoop") = []
 {
-    auto& device = Device::shared();
-
-    if (!device.isValid())
-        return;
-
     constexpr auto threads = 64;
 
-    auto output = makeFilledUInts(threads * 2, 0u);
-
     auto kernel = VarLoopKernel {};
-    kernel.output = output;
-    kernel.prepare();
 
-    auto commands = device.makeCommandBuffer();
+    CrossCheck {kernel}
+        .output(kernel.output, threads * 2, 0u)
+        .run(
+            threads,
+            [&](const Readback& readback)
+            {
+                const auto& values = readback.uints(kernel.output);
 
-    {
-        auto pass = commands.beginCompute();
-        pass.dispatch(kernel, threads);
-    }
+                for (auto thread = 0; thread < threads; ++thread)
+                {
+                    auto i = (std::uint32_t) thread;
+                    std::uint32_t accumulated[] = {i, i + 1u};
 
-    commands.commit();
+                    for (auto turn = 0u; turn < 3u; ++turn)
+                    {
+                        accumulated[0] = accumulated[0] * 2u + turn;
+                        accumulated[1] = accumulated[1] * 2u + 1u;
+                    }
 
-    auto values = readUInts(output, threads * 2);
-
-    for (auto thread = 0; thread < threads; ++thread)
-    {
-        auto i = (std::uint32_t) thread;
-        std::uint32_t accumulated[] = {i, i + 1u};
-
-        for (auto turn = 0u; turn < 3u; ++turn)
-        {
-            accumulated[0] = accumulated[0] * 2u + turn;
-            accumulated[1] = accumulated[1] * 2u + 1u;
-        }
-
-        check(values[thread * 2 + 0] == accumulated[0]);
-        check(values[thread * 2 + 1] == accumulated[1]);
-    }
+                    check(values[thread * 2 + 0] == accumulated[0], readback.name());
+                    check(values[thread * 2 + 1] == accumulated[1], readback.name());
+                }
+            });
 };
 
 auto tUIntVectorSharedRuns = test("UIntVector/sharedPairsCrossLanes") = []
 {
-    auto& device = Device::shared();
-
-    if (!device.isValid())
-        return;
-
-    auto output = makeFilledUInts(sharedThreads * 2, 0u);
-
     auto kernel = SharedPairKernel {};
-    kernel.output = output;
-    kernel.prepare();
 
-    auto commands = device.makeCommandBuffer();
+    CrossCheck {kernel}
+        .output(kernel.output, sharedThreads * 2, 0u)
+        .agreeing()
+        .run(sharedThreads,
+             [&](const Readback& readback)
+             {
+                 const auto& values = readback.uints(kernel.output);
 
-    {
-        auto pass = commands.beginCompute();
-        pass.dispatch(kernel, sharedThreads);
-    }
+                 for (auto thread = 0; thread < sharedThreads; ++thread)
+                 {
+                     auto base = (thread / groupSize) * groupSize;
+                     auto opposite =
+                         (std::uint32_t) (base + groupSize - 1 - thread % groupSize);
 
-    commands.commit();
+                     check(values[thread * 2 + 0] == opposite, readback.name());
+                     check(values[thread * 2 + 1] == opposite * 3u + 1u,
+                           readback.name());
+                 }
 
-    auto values = readUInts(output, sharedThreads * 2);
+                 // A reversal rather than the identity, which unshared scratch
+                 // would give.
+                 check(values[0] != 0u, readback.name());
+             });
+};
 
-    for (auto thread = 0; thread < sharedThreads; ++thread)
-    {
-        auto base = (thread / groupSize) * groupSize;
-        auto opposite = (std::uint32_t) (base + groupSize - 1 - thread % groupSize);
+// The patterns a bitcast has to carry unchanged are exactly the ones a
+// conversion would not: a denormal, a signalling NaN, an infinity and a
+// negative zero go up as the bits of a float buffer and have to come back as
+// themselves.
+auto tUIntVectorWideBitcastsRun = test("UIntVector/aQuadBitcastKeepsEveryBit") = []
+{
+    constexpr std::uint32_t patterns[] = {0x00000000u,
+                                          0x80000000u,
+                                          0x3f800000u,
+                                          0xbf800000u,
+                                          0x00000001u,
+                                          0x007fffffu,
+                                          0x7f800000u,
+                                          0xff800000u,
+                                          0x7fc00000u,
+                                          0x7f800001u,
+                                          0x12345678u,
+                                          0xdeadbeefu,
+                                          0x00800000u,
+                                          0xcafef00du,
+                                          0x40490fdbu,
+                                          0xffffffffu};
 
-        check(values[thread * 2 + 0] == opposite);
-        check(values[thread * 2 + 1] == opposite * 3u + 1u);
-    }
+    constexpr auto elements = (int) std::size(patterns);
+    constexpr auto threads = elements / 4;
 
-    // A reversal rather than the identity, which unshared scratch would give.
-    check(values[0] != 0u);
+    auto values = Vector<float> {};
+    values.resize(elements);
+    std::memcpy(values.data(), patterns, sizeof(patterns));
+
+    auto kernel = WideBitcastKernel {};
+
+    CrossCheck {kernel}
+        .input(kernel.values, values)
+        .output(kernel.output, threads * 8, 0u)
+        .run(threads,
+             [&](const Readback& readback)
+             {
+                 const auto& read = readback.uints(kernel.output);
+
+                 for (auto element = 0; element < elements; ++element)
+                 {
+                     auto record = element / 4;
+                     auto lane = element % 4;
+
+                     check(read[record * 8 + lane] == patterns[element],
+                           readback.name());
+                     check(read[record * 8 + 4 + lane]
+                               == (patterns[element] ^ 0x80000000u),
+                           readback.name());
+                 }
+             });
+};
+
+// The integer wide store lays its record down where the record write would
+// have, at the index UIntInputBuffer::read2/3/4 counts in.
+auto tUIntVectorWideStoreRuns = test("UIntVector/aWideStoreLaysTheRecordDown") = []
+{
+    constexpr auto threads = 8;
+    constexpr auto quadCount = threads * 4;
+    constexpr auto pairCount = threads * 2;
+
+    auto seed = Vector<std::uint32_t> {};
+
+    for (auto i = 0; i < quadCount; ++i)
+        seed.add((std::uint32_t) i * 7u + 1u);
+
+    auto kernel = WideUIntStoreKernel {};
+
+    CrossCheck {kernel}
+        .input(kernel.source, seed)
+        .output(kernel.quads, quadCount, 0u)
+        .output(kernel.pairs, pairCount, 0u)
+        .run(threads,
+             [&](const Readback& readback)
+             {
+                 const auto& wide = readback.uints(kernel.quads);
+                 const auto& two = readback.uints(kernel.pairs);
+                 const auto* name = readback.name();
+
+                 for (auto thread = 0; thread < threads; ++thread)
+                 {
+                     for (auto lane = 0; lane < 4; ++lane)
+                         check(wide[thread * 4 + lane]
+                                   == seed[thread * 4 + lane] + 1u,
+                               name);
+
+                     check(two[thread * 2 + 0] == (std::uint32_t) thread, name);
+                     check(two[thread * 2 + 1] == (std::uint32_t) thread * 3u, name);
+                 }
+             });
 };

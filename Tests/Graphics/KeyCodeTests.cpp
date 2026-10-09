@@ -46,7 +46,7 @@ const NamedKey allKeys[] = {
 
     {"Space", KeyCode::Space},   {"Return", KeyCode::Return},
     {"Tab", KeyCode::Tab},       {"Delete", KeyCode::Delete},
-    {"Escape", KeyCode::Escape},
+    {"Escape", KeyCode::Escape}, {"Back", KeyCode::Back},
 
     {"LeftArrow", KeyCode::LeftArrow},
     {"RightArrow", KeyCode::RightArrow},
@@ -73,6 +73,15 @@ const NamedKey allKeys[] = {
     {"PageUp", KeyCode::PageUp}, {"PageDown", KeyCode::PageDown},
     {"ForwardDelete", KeyCode::ForwardDelete},
     {"CapsLock", KeyCode::CapsLock},
+
+    {"Shift", KeyCode::Shift},
+    {"RightShift", KeyCode::RightShift},
+    {"Control", KeyCode::Control},
+    {"RightControl", KeyCode::RightControl},
+    {"Option", KeyCode::Option},
+    {"RightOption", KeyCode::RightOption},
+    {"Command", KeyCode::Command},
+    {"RightCommand", KeyCode::RightCommand},
 
     {"KeypadEnter", KeyCode::KeypadEnter},
     {"Keypad0", KeyCode::Keypad0},
@@ -179,7 +188,13 @@ auto tKeypadIsDistinctFromNumberRow = test("KeyCode/keypadDiffersFromTheNumberRo
     check(KeyCode::Return != KeyCode::KeypadEnter);
 };
 
-auto tKeyEventDefaults = test("KeyCode/keyEventDefaultsAreInert") = []
+auto tAltIsOption = test("KeyCode/altNamesTheOptionKey") = []
+{
+    check(KeyCode::Alt == KeyCode::Option);
+    check(KeyCode::RightAlt == KeyCode::RightOption);
+};
+
+auto tKeyEventDefaults =test("KeyCode/keyEventDefaultsAreInert") = []
 {
     const auto event = KeyEvent {};
 

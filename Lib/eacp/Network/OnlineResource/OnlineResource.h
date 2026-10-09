@@ -5,6 +5,8 @@
 #include <eacp/Core/Threads/Async.h>
 #include <eacp/Core/Utils/FilePath.h>
 
+#include <map>
+
 namespace eacp
 {
 // A file an app needs from the network, kept on disk and fetched at most
@@ -47,6 +49,10 @@ public:
         // Wall-clock limit on the transfer, after which it fails. Zero
         // leaves the platform's own limit in place.
         Time::MS timeout {0};
+
+        // Sent on every request the resource makes, the conditional GET
+        // included: an Authorization header for a gated server, say.
+        std::map<std::string, std::string> headers {};
     };
 
     enum class Freshness
@@ -63,8 +69,8 @@ public:
 
     struct Result
     {
-        const FilePath* operator->() const { return &path; }
-        const FilePath& operator*() const { return path; }
+        const FilePath* operator->() const;
+        const FilePath& operator*() const;
 
         bool ok = false;
         bool cancelled = false;
@@ -142,8 +148,8 @@ public:
     OnlineResource(const OnlineResource&) = delete;
     OnlineResource& operator=(const OnlineResource&) = delete;
 
-    const Info& info() const { return resource; }
-    const FilePath& directory() const { return folder; }
+    const Info& info() const;
+    const FilePath& directory() const;
 
     // Where the resource is, or will be, on disk.
     FilePath path() const;

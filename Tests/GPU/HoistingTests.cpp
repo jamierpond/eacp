@@ -1,23 +1,26 @@
-#include "Common.h"
+#include "CpuCrossCheck.h"
 
 #include <cmath>
 #include <string>
 
 // Which of the emitter's tN names survive control flow.
 //
-// A repeated subexpression is bound to a name; a statement that moves what the
-// value behind it read gives that name up. The question these pin is what
-// happens at the two boundaries: an if, whose bodies may or may not move
-// anything, and a loop header, which is re-tested after the body has run.
+// A repeated subexpression is bound to a name, and a handle is the value it had
+// where it was built: a statement that later moves what it read - a variable,
+// an element, the tile - does not change it, so the handle is named before
+// that statement and read back by name after it. The one exception is a loop
+// header, which is re-tested after the body has run: what the condition reads,
+// and what is built on those reads, is evaluated where it is used.
 //
-// A name kept where it should not be is a wrong number, so every shape here is
-// checked twice: as emitted text on both backends, and - where the value is
-// what is at stake - by running the kernel and comparing against the same loop
-// written in C++.
+// A name kept where it should not be, or given up where it should be kept, is
+// a wrong number, so every shape here is checked twice: as emitted text on all
+// three backends, and - where the value is what is at stake - by running the
+// kernel and comparing against the same loop written in C++.
 
 using namespace nano;
 using namespace eacp;
 using namespace eacp::GPU;
+using namespace eacp::GPU::CrossChecks;
 
 namespace
 {
@@ -219,6 +222,55 @@ void recordRaisedBound(ShaderBuilder& builder)
                  });
 }
 
+// Two separate reads of one element of a read-only buffer, written by two calls
+// that know nothing of each other. Nothing can store to an input, so the two are
+// the same value and the graph hands them one node.
+void recordSharedInputReads(ShaderBuilder& builder)
+{
+    auto input = builder.inputBuffer();
+    auto output = builder.outputBuffer();
+
+    auto row = builder.threadId();
+
+    builder.write(output, row, input[row] * 2.0f);
+    builder.write(output, row + 1u, input[row] + 1.0f);
+}
+
+// The same two reads of an output, with a store between them. These are not the
+// same value - the store is what makes them different - so they stay two nodes
+// and two loads.
+void recordWritableReads(ShaderBuilder& builder)
+{
+    auto output = builder.outputBuffer();
+    auto tally = builder.outputBuffer();
+
+    auto row = builder.threadId();
+
+    builder.write(tally, row, output[row]);
+    builder.write(output, row, builder.constant(1.0f));
+    builder.write(tally, row + 1u, output[row]);
+}
+
+// A read that is loop-invariant and shared, used only inside the body. Sharing
+// is what the graph does with two calls; it is not licence to move the load,
+// and the loop body is where the name is handed out.
+void recordLoopedRead(ShaderBuilder& builder)
+{
+    auto input = builder.inputBuffer();
+    auto output = builder.outputBuffer();
+
+    auto row = builder.threadId();
+    auto i = builder.var(0u);
+
+    builder.loop(i < rowLength,
+                 [&]
+                 {
+                     auto value = input[row];
+                     builder.write(output, row * rowLength + i, value * value);
+                     i += 1u;
+                 });
+}
+
 // A name the if condition needs twice, over a variable the body then raises.
 void recordRaisedInBranch(ShaderBuilder& builder)
 {
@@ -343,29 +395,6 @@ struct RaisedScaleKernel final : ComputeProgram
     EACP_SHADER(input, output, tail)
 };
 
-Buffer makeStorage(const Vector<float>& values)
-{
-    return Buffer {Device::shared(),
-                   values.data(),
-                   (int) sizeof(float) * values.size(),
-                   BufferUsage::Storage};
-}
-
-Buffer makeStorage(int elements)
-{
-    auto zeroed = Vector<float> {};
-    zeroed.assign(elements, 0.0f);
-    return makeStorage(zeroed);
-}
-
-Vector<float> readBack(const Buffer& buffer, int elements)
-{
-    auto values = Vector<float> {};
-    values.resize(elements);
-    buffer.read(values.data(), (int) sizeof(float) * elements);
-    return values;
-}
-
 // A row whose largest element sits at a different place in every row, and
 // whose values are not ordered around it.
 Vector<float> makeRows()
@@ -402,6 +431,70 @@ auto tArgMaxLoadsTheElementOnce = test("Hoisting/aBranchKeepsTheLoadItWasGiven")
     expectGlslCompiles(builder.graph());
 };
 
+// Two reads of one element of a read-only buffer are one load and one name. The
+// graph shares them structurally - an input cannot be stored to, so the two are
+// the same value - and the emitter then names the node it evaluates twice.
+auto tSharedInputReadLoadsOnce = test("Hoisting/twoReadsOfAnInputAreOneLoad") = []
+{
+    auto builder = ShaderBuilder {};
+    recordSharedInputReads(builder);
+
+    for (const auto& source: {emitMetal(builder.graph()),
+                              emitHlsl(builder.graph()),
+                              emitGlsl(builder.graph())})
+    {
+        check(occurrences(source, "= buffer0[") == 1);
+        check(contains(source, "float t0 = buffer0[gid];"));
+        check(contains(source, "(t0 * 2.0)"));
+        check(contains(source, "(t0 + 1.0)"));
+    }
+
+    expectGlslCompiles(builder.graph());
+};
+
+// The same two reads of an output are two loads, because a store between them
+// is exactly what makes them two values. This is the rule the sharing is
+// bounded by, and it is the slot's declared access that decides it rather than
+// anything visible in the expression.
+auto tWritableReadsStayTwoLoads =
+    test("Hoisting/twoReadsOfAnOutputStayTwoLoads") = []
+{
+    auto builder = ShaderBuilder {};
+    recordWritableReads(builder);
+
+    for (const auto& source: {emitMetal(builder.graph()),
+                              emitHlsl(builder.graph()),
+                              emitGlsl(builder.graph())})
+    {
+        check(occurrences(source, "= buffer0[") == 2);
+        check(source.find("buffer0[gid] = 1.0;") > source.find("= buffer0[gid]"));
+        check(source.rfind("= buffer0[gid]") > source.find("buffer0[gid] = 1.0;"));
+    }
+
+    expectGlslCompiles(builder.graph());
+};
+
+// And sharing a read does not move it: one used only inside a loop body is
+// named there, loop-invariant or not. The emitter hands out a name where the
+// statement being emitted evaluates the node anyway, and no root statement
+// evaluates this one.
+auto tLoopedReadStaysInTheLoop =
+    test("Hoisting/aSharedReadIsNotLiftedOutOfALoop") = []
+{
+    auto builder = ShaderBuilder {};
+    recordLoopedRead(builder);
+
+    for (const auto& source: {emitMetal(builder.graph()),
+                              emitHlsl(builder.graph()),
+                              emitGlsl(builder.graph())})
+    {
+        check(occurrences(source, "= buffer0[") == 1);
+        check(source.find("= buffer0[gid]") > source.find("while ("));
+    }
+
+    expectGlslCompiles(builder.graph());
+};
+
 // The reciprocal is divided once, before the loop that applies it.
 auto tNormaliseDividesOnce = test("Hoisting/aLoopInvariantSurvivesTheHeader") = []
 {
@@ -419,8 +512,9 @@ auto tNormaliseDividesOnce = test("Hoisting/aLoopInvariantSurvivesTheHeader") = 
     expectGlslCompiles(builder.graph());
 };
 
-// A variable the body raises: the product is recomputed inside the loop.
-auto tRaisedScaleIsRecomputed = test("Hoisting/aVariableTheBodyWritesRetires") = []
+// A variable the body raises: the product keeps the factor it was built with,
+// so it is computed once, before the loop.
+auto tRaisedScaleIsRecomputed = test("Hoisting/aHandleKeepsTheVariableItRead") = []
 {
     auto builder = ShaderBuilder {};
     recordRaisedScale(builder);
@@ -428,13 +522,17 @@ auto tRaisedScaleIsRecomputed = test("Hoisting/aVariableTheBodyWritesRetires") =
     for (const auto& source: {emitMetal(builder.graph()),
                               emitHlsl(builder.graph()),
                               emitGlsl(builder.graph())})
-        check(occurrences(source, "(buffer0[gid] * v0)") == 2);
+    {
+        check(occurrences(source, "(buffer0[gid] * v0)") == 1);
+        check(source.find("(buffer0[gid] * v0)") < source.rfind("while ("));
+    }
 
     expectGlslCompiles(builder.graph());
 };
 
-// A buffer element the body stores into: the read is taken again inside.
-auto tReadBackIsRecomputed = test("Hoisting/aStoredSlotRetiresItsRead") = []
+// A buffer element the body stores into: the read is the element before the
+// loop's stores, taken once.
+auto tReadBackIsRecomputed = test("Hoisting/aHandleKeepsTheElementItRead") = []
 {
     auto builder = ShaderBuilder {};
     recordReadBack(builder);
@@ -442,13 +540,14 @@ auto tReadBackIsRecomputed = test("Hoisting/aStoredSlotRetiresItsRead") = []
     for (const auto& source: {emitMetal(builder.graph()),
                               emitHlsl(builder.graph()),
                               emitGlsl(builder.graph())})
-        check(occurrences(source, "(buffer0[gid] * 2.0)") == 2);
+        check(occurrences(source, "(buffer0[gid] * 2.0)") == 1);
 
     expectGlslCompiles(builder.graph());
 };
 
-// Threadgroup memory behind a barrier: the tile is read again inside the loop.
-auto tSharedTileIsRecomputed = test("Hoisting/aBarrierRetiresASharedRead") = []
+// Threadgroup memory behind a barrier: the handle is what the tile held where
+// it was read, so the loop's barriers leave it standing.
+auto tSharedTileIsRecomputed = test("Hoisting/aHandleKeepsTheTileItRead") = []
 {
     auto builder = ShaderBuilder {};
     recordSharedTile(builder);
@@ -456,7 +555,7 @@ auto tSharedTileIsRecomputed = test("Hoisting/aBarrierRetiresASharedRead") = []
     for (const auto& source: {emitMetal(builder.graph()),
                               emitHlsl(builder.graph()),
                               emitGlsl(builder.graph())})
-        check(occurrences(source, "(s0[0u] * 2.0)") == 2);
+        check(occurrences(source, "(s0[0u] * 2.0)") == 1);
 
     expectGlslCompiles(builder.graph());
 };
@@ -497,9 +596,10 @@ auto tRaisedBoundIsRetested = test("Hoisting/aRaisedBoundIsRetested") = []
     expectGlslCompiles(builder.graph());
 };
 
-// A name the condition bound is not reused by a body that moved what it read.
+// A name the condition bound is still the value a body that moved what it read
+// writes out.
 auto tBranchBodyRecomputesWhatItMoved =
-    test("Hoisting/anIfBodyRetiresWhatItInvalidates") = []
+    test("Hoisting/anIfBodyKeepsTheNameItWasHanded") = []
 {
     auto builder = ShaderBuilder {};
     recordRaisedInBranch(builder);
@@ -508,8 +608,8 @@ auto tBranchBodyRecomputesWhatItMoved =
                               emitHlsl(builder.graph()),
                               emitGlsl(builder.graph())})
     {
-        check(occurrences(source, "(buffer0[gid] * v0)") == 2);
-        check(source.find("buffer1[gid] = t0;") == std::string::npos);
+        check(occurrences(source, "(buffer0[gid] * v0)") == 1);
+        check(contains(source, "buffer1[gid] = t0;"));
     }
 
     expectGlslCompiles(builder.graph());
@@ -518,149 +618,120 @@ auto tBranchBodyRecomputesWhatItMoved =
 // The scan itself, against the same argmax written in C++.
 auto tArgMaxRuns = test("Hoisting/theScanFindsTheSameIndex") = []
 {
-    if (!Device::shared().isValid())
-        return;
-
     auto rows = makeRows();
-    auto input = makeStorage(rows);
-    auto output = makeStorage(rowCount);
 
     auto kernel = ArgMaxKernel {};
-    kernel.input = input;
-    kernel.output = output;
-    kernel.prepare();
 
-    auto commands = Device::shared().makeCommandBuffer();
+    CrossCheck {kernel}
+        .input(kernel.input, rows)
+        .output(kernel.output, rowCount)
+        .run(rowCount,
+             [&](const Readback& readback)
+             {
+                 const auto& values = readback.floats(kernel.output);
+                 auto matched = 0;
 
-    {
-        auto pass = commands.beginCompute();
-        pass.dispatch(kernel, rowCount);
-    }
+                 for (auto row = 0; row < rowCount; ++row)
+                 {
+                     auto best = 0;
 
-    commands.commit();
+                     for (auto column = 1; column < (int) rowLength; ++column)
+                         if (rows[row * (int) rowLength + column]
+                             > rows[row * (int) rowLength + best])
+                             best = column;
 
-    auto values = readBack(output, rowCount);
-    auto matched = 0;
+                     if (values[row] == (float) best)
+                         ++matched;
+                 }
 
-    for (auto row = 0; row < rowCount; ++row)
-    {
-        auto best = 0;
-
-        for (auto column = 1; column < (int) rowLength; ++column)
-            if (rows[row * (int) rowLength + column]
-                > rows[row * (int) rowLength + best])
-                best = column;
-
-        if (values[row] == (float) best)
-            ++matched;
-    }
-
-    check(matched == rowCount);
+                 check(matched == rowCount, readback.name());
+             });
 };
 
 // The normalising pass, against the same division written in C++.
 auto tNormaliseRuns = test("Hoisting/theNormaliserScalesByTheSameFactor") = []
 {
-    if (!Device::shared().isValid())
-        return;
-
     auto rows = makeRows();
-    auto input = makeStorage(rows);
-    auto output = makeStorage(rowCount * (int) rowLength);
-    auto scales = makeStorage(rowCount);
 
     auto kernel = NormaliseKernel {};
-    kernel.input = input;
-    kernel.output = output;
-    kernel.scales = scales;
-    kernel.prepare();
 
-    auto commands = Device::shared().makeCommandBuffer();
+    CrossCheck {kernel}
+        .input(kernel.input, rows)
+        .output(kernel.output, rowCount * (int) rowLength)
+        .output(kernel.scales, rowCount)
+        .run(rowCount,
+             [&](const Readback& readback)
+             {
+                 const auto& normalised = readback.floats(kernel.output);
+                 const auto& factors = readback.floats(kernel.scales);
+                 auto matched = 0;
 
-    {
-        auto pass = commands.beginCompute();
-        pass.dispatch(kernel, rowCount);
-    }
+                 for (auto row = 0; row < rowCount; ++row)
+                 {
+                     auto total = 0.0f;
 
-    commands.commit();
+                     for (auto column = 0; column < (int) rowLength; ++column)
+                         total += rows[row * (int) rowLength + column];
 
-    auto normalised = readBack(output, rowCount * (int) rowLength);
-    auto factors = readBack(scales, rowCount);
-    auto matched = 0;
+                     auto inverse = 1.0f / total;
 
-    for (auto row = 0; row < rowCount; ++row)
-    {
-        auto total = 0.0f;
+                     if (std::abs(factors[row] - inverse) > 1e-6f)
+                         continue;
 
-        for (auto column = 0; column < (int) rowLength; ++column)
-            total += rows[row * (int) rowLength + column];
+                     auto correct = 0;
 
-        auto inverse = 1.0f / total;
+                     for (auto column = 0; column < (int) rowLength; ++column)
+                     {
+                         auto at = row * (int) rowLength + column;
 
-        if (std::abs(factors[row] - inverse) > 1e-6f)
-            continue;
+                         if (std::abs(normalised[at] - rows[at] * inverse) <= 1e-6f)
+                             ++correct;
+                     }
 
-        auto correct = 0;
+                     if (correct == (int) rowLength)
+                         ++matched;
+                 }
 
-        for (auto column = 0; column < (int) rowLength; ++column)
-        {
-            auto at = row * (int) rowLength + column;
-
-            if (std::abs(normalised[at] - rows[at] * inverse) <= 1e-6f)
-                ++correct;
-        }
-
-        if (correct == (int) rowLength)
-            ++matched;
-    }
-
-    check(matched == rowCount);
+                 check(matched == rowCount, readback.name());
+             });
 };
 
-// The retired name is retired in the numbers too: every iteration sees the
-// factor the one before it raised, not the one the product was named with.
-auto tRaisedScaleRuns = test("Hoisting/theRaisedFactorReachesEveryIteration") = []
+// ...and in the numbers: every iteration writes the product the handle was
+// built with, whatever the body has since done to the factor - the same loop
+// written in C++ over a float.
+auto tRaisedScaleRuns = test("Hoisting/everyIterationWritesTheBuiltValue") = []
 {
-    if (!Device::shared().isValid())
-        return;
-
     auto rows = makeRows();
-    auto input = makeStorage(rows);
-    auto output = makeStorage(rowCount);
-    auto tail = makeStorage(rowCount * (int) rowLength);
 
     auto kernel = RaisedScaleKernel {};
-    kernel.input = input;
-    kernel.output = output;
-    kernel.tail = tail;
-    kernel.prepare();
 
-    auto commands = Device::shared().makeCommandBuffer();
+    CrossCheck {kernel}
+        .input(kernel.input, rows)
+        .output(kernel.output, rowCount)
+        .output(kernel.tail, rowCount * (int) rowLength)
+        .run(
+            rowCount,
+            [&](const Readback& readback)
+            {
+                const auto& seeds = readback.floats(kernel.output);
+                const auto& raised = readback.floats(kernel.tail);
+                auto correct = 0;
 
-    {
-        auto pass = commands.beginCompute();
-        pass.dispatch(kernel, rowCount);
-    }
+                for (auto row = 0; row < rowCount; ++row)
+                {
+                    if (std::abs(seeds[row] - rows[row] * 2.0f) > 1e-6f)
+                        continue;
 
-    commands.commit();
+                    for (auto step = 0; step < (int) rowLength; ++step)
+                    {
+                        auto expected = rows[row] * 2.0f;
 
-    auto seeds = readBack(output, rowCount);
-    auto raised = readBack(tail, rowCount * (int) rowLength);
-    auto correct = 0;
+                        if (std::abs(raised[row * (int) rowLength + step] - expected)
+                            <= 1e-6f)
+                            ++correct;
+                    }
+                }
 
-    for (auto row = 0; row < rowCount; ++row)
-    {
-        if (std::abs(seeds[row] - rows[row] * 2.0f) > 1e-6f)
-            continue;
-
-        for (auto step = 0; step < (int) rowLength; ++step)
-        {
-            auto expected = rows[row] * (3.0f + (float) step);
-
-            if (std::abs(raised[row * (int) rowLength + step] - expected) <= 1e-6f)
-                ++correct;
-        }
-    }
-
-    check(correct == rowCount * (int) rowLength);
+                check(correct == rowCount * (int) rowLength, readback.name());
+            });
 };

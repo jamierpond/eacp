@@ -1,5 +1,7 @@
 #include "Window.h"
+#include "Window-macOS.h"
 #include "MouseLock-macOS.h"
+#include "../View/View-MacOS.h"
 #include "../Graphics/Keyboard.h"
 #include "../Helpers/ImageConversion-macOS.h"
 #include "../Primitives/GraphicUtils.h"
@@ -129,6 +131,8 @@ void ensureAppBecomesActive()
 
 namespace eacp::Graphics
 {
+bool detail::cursorWasWarped = false;
+
 namespace
 {
 // Borderless NSWindows refuse key status by default, which would make a
@@ -329,6 +333,9 @@ void notifyKeyState(id self, bool isKey)
 
     if (state->onKeyStateChanged)
         state->onKeyStateChanged(isKey);
+
+    if (state->events != nullptr)
+        state->events->input.activationChanged(isKey);
 
     if (state->events != nullptr && state->events->onActivationChanged)
         state->events->onActivationChanged(isKey);
@@ -1013,6 +1020,15 @@ bool Window::isCommandPressed() const
 ModifierKeys Window::getModifiers() const
 {
     return Keyboard::getModifiers();
+}
+
+bool isFrameworkWindow(NSWindow* window)
+{
+    if (window == nil)
+        return false;
+
+    return [(id) window.delegate isKindOfClass:getWindowDelegateClass()]
+           || isFrameworkNativeView(window.contentView);
 }
 
 } // namespace eacp::Graphics

@@ -1,5 +1,8 @@
 ﻿#include "PathRasterizer.h"
 
+#include "CoverageKernel.h"
+
+#include <algorithm>
 #include <cmath>
 
 namespace eacp::GPUWidgets
@@ -19,6 +22,16 @@ int tileOf(float coordinate)
 int tileAfter(float coordinate)
 {
     return (int) std::ceil(coordinate / (float) tileSize);
+}
+
+// Where a segment is at a height, with its end taken as itself rather than
+// interpolated back to - BinKernel::xAt, which this count has to agree with.
+float xAt(const float* segment, float y, float slope)
+{
+    if (y == segment[3])
+        return segment[2];
+
+    return segment[0] + (y - segment[1]) * slope;
 }
 
 GPU::TextureDescriptor describeCoverage(int width, int height)
@@ -41,6 +54,21 @@ void PathRasterizer::setScale(float pixelsPerUnit)
 bool PathRasterizer::isEmpty() const
 {
     return segments.empty() || coverageWidth <= 0 || coverageHeight <= 0;
+}
+
+Graphics::Rect PathRasterizer::getCoveredBounds() const
+{
+    return covered;
+}
+
+int PathRasterizer::getSegmentCount() const
+{
+    return segments.size() / 4;
+}
+
+const GPU::Texture& PathRasterizer::getCoverage() const
+{
+    return *coverageTexture;
 }
 
 void PathRasterizer::setTarget(const GPU::Texture& texture,
@@ -233,8 +261,8 @@ void PathRasterizer::countTiles() const
             if (bandBottom <= bandTop)
                 continue;
 
-            auto enters = segment[0] + (bandTop - segment[1]) * slope;
-            auto leaves = segment[0] + (bandBottom - segment[1]) * slope;
+            auto enters = xAt(segment, bandTop, slope);
+            auto leaves = xAt(segment, bandBottom, slope);
 
             auto beyond = std::max(tileAfter(std::max(enters, leaves)), 0);
             auto firstColumn = std::max(tileOf(std::min(enters, leaves)), 0);

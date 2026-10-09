@@ -1,25 +1,25 @@
 #include "Keyboard-Linux.h"
 
-#include "../Window/WaylandDisplay-Linux.h"
-#include "../Window/WaylandInput-Linux.h"
+#include "../Window/LinuxSeat-Linux.h"
+#include "../Window/LinuxWindowSystem-Linux.h"
 #include "../Window/Window.h"
 
 #include <linux/input-event-codes.h>
 
-// Wayland tells a client about the keyboard only while it has focus, so the
-// global queries read as nothing pressed while unfocused or with no seat.
+// A Linux seat tells a client about the keyboard only while it has focus, so
+// the global queries read as nothing pressed while unfocused or with no seat.
 
 namespace eacp::Graphics
 {
 namespace
 {
-struct WaylandKeyMapping
+struct LinuxKeyMapping
 {
     uint16_t keyCode;
     uint32_t evdev;
 };
 
-constexpr WaylandKeyMapping waylandKeyMappings[] = {
+constexpr LinuxKeyMapping linuxKeyMappings[] = {
     {KeyCode::A, KEY_A},
     {KeyCode::S, KEY_S},
     {KeyCode::D, KEY_D},
@@ -67,6 +67,7 @@ constexpr WaylandKeyMapping waylandKeyMappings[] = {
     {KeyCode::ForwardDelete, KEY_DELETE},
 
     {KeyCode::Escape, KEY_ESC},
+    {KeyCode::Back, KEY_BACK},
 
     {KeyCode::LeftArrow, KEY_LEFT},
     {KeyCode::RightArrow, KEY_RIGHT},
@@ -105,6 +106,15 @@ constexpr WaylandKeyMapping waylandKeyMappings[] = {
     {KeyCode::PageDown, KEY_PAGEDOWN},
     {KeyCode::CapsLock, KEY_CAPSLOCK},
 
+    {KeyCode::Shift, KEY_LEFTSHIFT},
+    {KeyCode::RightShift, KEY_RIGHTSHIFT},
+    {KeyCode::Control, KEY_LEFTCTRL},
+    {KeyCode::RightControl, KEY_RIGHTCTRL},
+    {KeyCode::Option, KEY_LEFTALT},
+    {KeyCode::RightOption, KEY_RIGHTALT},
+    {KeyCode::Command, KEY_LEFTMETA},
+    {KeyCode::RightCommand, KEY_RIGHTMETA},
+
     {KeyCode::KeypadEnter, KEY_KPENTER},
     {KeyCode::Keypad0, KEY_KP0},
     {KeyCode::Keypad1, KEY_KP1},
@@ -127,33 +137,26 @@ constexpr WaylandKeyMapping waylandKeyMappings[] = {
     {KeyCode::KeypadClear, KEY_NUMLOCK},
 };
 
-WaylandInput* waylandSeatInput()
+LinuxSeat* linuxFocusedSeat()
 {
-    auto* connection = waylandDisplay();
+    auto* seat = linuxSeat();
 
-    return connection != nullptr ? connection->getInput() : nullptr;
-}
-
-bool waylandKeyboardIsFocused()
-{
-    auto* input = waylandSeatInput();
-
-    return input != nullptr && input->getKeyboardFocus() != nullptr;
+    return (seat != nullptr && seat->hasKeyboardFocus()) ? seat : nullptr;
 }
 } // namespace
 
-uint16_t waylandKeyCodeFromEvdev(uint32_t evdevCode)
+uint16_t linuxKeyCodeFromEvdev(uint32_t evdevCode)
 {
-    for (const auto& mapping: waylandKeyMappings)
+    for (const auto& mapping: linuxKeyMappings)
         if (mapping.evdev == evdevCode)
             return mapping.keyCode;
 
     return KeyCode::Unknown;
 }
 
-uint32_t waylandEvdevFromKeyCode(uint16_t keyCode)
+uint32_t linuxEvdevFromKeyCode(uint16_t keyCode)
 {
-    for (const auto& mapping: waylandKeyMappings)
+    for (const auto& mapping: linuxKeyMappings)
         if (mapping.keyCode == keyCode)
             return mapping.evdev;
 
@@ -162,7 +165,7 @@ uint32_t waylandEvdevFromKeyCode(uint16_t keyCode)
 
 bool Keyboard::isKeyPressed(const Window& window, uint16_t keyCode)
 {
-    auto evdev = waylandEvdevFromKeyCode(keyCode);
+    auto evdev = linuxEvdevFromKeyCode(keyCode);
 
     if (evdev == 0)
         return false;
@@ -197,13 +200,13 @@ ModifierKeys Keyboard::getModifiers(const Window& window)
 
 bool Keyboard::isKeyPressed(uint16_t keyCode)
 {
-    auto* input = waylandSeatInput();
-    auto evdev = waylandEvdevFromKeyCode(keyCode);
+    auto* seat = linuxFocusedSeat();
+    auto evdev = linuxEvdevFromKeyCode(keyCode);
 
-    if (input == nullptr || evdev == 0 || !waylandKeyboardIsFocused())
+    if (seat == nullptr || evdev == 0)
         return false;
 
-    return input->isKeyPressed(evdev);
+    return seat->isKeyPressed(evdev);
 }
 
 bool Keyboard::isShiftPressed()
@@ -228,30 +231,30 @@ bool Keyboard::isCommandPressed()
 
 ModifierKeys Keyboard::getModifiers()
 {
-    auto* input = waylandSeatInput();
+    auto* seat = linuxFocusedSeat();
 
-    if (input == nullptr || !waylandKeyboardIsFocused())
+    if (seat == nullptr)
         return {};
 
-    return input->getModifiers();
+    return seat->getModifiers();
 }
 
 Vector<Key> Keyboard::getPressedKeys()
 {
     auto keys = Vector<Key> {};
-    auto* input = waylandSeatInput();
+    auto* seat = linuxFocusedSeat();
 
-    if (input == nullptr || !waylandKeyboardIsFocused())
+    if (seat == nullptr)
         return keys;
 
-    for (auto evdev: input->getPressedCodes())
+    for (auto evdev: seat->getPressedCodes())
     {
-        auto keyCode = waylandKeyCodeFromEvdev(evdev);
+        auto keyCode = linuxKeyCodeFromEvdev(evdev);
 
         if (keyCode == KeyCode::Unknown)
             continue;
 
-        keys.add(Key {keyCode, input->characterForCode(evdev)});
+        keys.add(Key {keyCode, seat->characterForCode(evdev)});
     }
 
     return keys;
@@ -259,14 +262,14 @@ Vector<Key> Keyboard::getPressedKeys()
 
 std::string Keyboard::keyCodeToCharacter(uint16_t keyCode)
 {
-    auto* input = waylandSeatInput();
-    auto evdev = waylandEvdevFromKeyCode(keyCode);
+    auto* seat = linuxSeat();
+    auto evdev = linuxEvdevFromKeyCode(keyCode);
 
-    if (input == nullptr || evdev == 0)
+    if (seat == nullptr || evdev == 0)
         return "";
 
     // Not gated on focus: the keymap outlives the focus that delivered it.
-    return input->characterForCode(evdev);
+    return seat->characterForCode(evdev);
 }
 
 } // namespace eacp::Graphics

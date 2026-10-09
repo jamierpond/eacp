@@ -3,6 +3,9 @@
 #include "../Frame/ComputePass.h"
 
 #include <bit>
+#include <cassert>
+#include <map>
+#include <tuple>
 
 namespace eacp::GPU
 {
@@ -22,6 +25,10 @@ ValueType indexNodeType(DispatchRank forRank, int component)
 // a mutable local, or a resource the kernel may have written since. Two such
 // nodes spelled identically are not the same value, so neither they nor
 // anything built over them may be shared.
+//
+// A storage-buffer read is listed here and taken back out again by
+// readsImmutableStorage below, since which of the two it is depends on the slot
+// and not on the kind.
 bool dependsOnMutableState(ExprKind kind)
 {
     switch (kind)
@@ -58,16 +65,229 @@ bool dependsOnMutableState(ExprKind kind)
 
     return false;
 }
+
+// Structural sharing for the three kinds that can take it. A key holds
+// everything add() would have to compare to call two nodes the same value; a
+// binary's operands and a read's index are node ids, which is enough because
+// the nodes they name were themselves shared on the way in.
+//
+// A read's key is its kind and width beside its slot and its index, so a read2
+// and a read4 starting at the same element stay two nodes - and only a read of
+// a read-only slot is ever pure enough to reach the cache at all.
+using ConstantKey = std::tuple<ValueType, int, std::uint32_t>;
+using BinaryKey = std::tuple<ValueType, char, std::string, int, int>;
+using ReadKey = std::tuple<ExprKind, ValueType, int, int>;
+
+ConstantKey constantKeyFor(const Expr& node)
+{
+    return {node.type, node.index, std::bit_cast<std::uint32_t>(node.value)};
+}
+
+BinaryKey binaryKeyFor(const Expr& node)
+{
+    return {node.type, node.op, node.text, node.args[0], node.args[1]};
+}
+
+// The kind tells a scalar read from a record one and the type tells a record's
+// width, so a read2 and a read4 at the same first element stay two nodes: they
+// are different values, however much of the same memory they cover.
+ReadKey readKeyFor(const Expr& node)
+{
+    return {node.kind, node.type, node.index, node.args[0]};
+}
 } // namespace
+
+struct ShaderGraph::Caches
+{
+    std::map<ConstantKey, int> constants;
+    std::map<BinaryKey, int> binaries;
+    std::map<ReadKey, int> reads;
+};
+
+ShaderGraph::SharingCaches::SharingCaches()
+    : caches(std::make_unique<Caches>())
+{
+}
+
+ShaderGraph::SharingCaches::~SharingCaches() = default;
+
+std::unique_ptr<ShaderGraph::Caches>
+    ShaderGraph::SharingCaches::copyOf(const SharingCaches& other)
+{
+    if (other.caches)
+        return std::make_unique<Caches>(*other.caches);
+
+    return std::make_unique<Caches>();
+}
+
+ShaderGraph::SharingCaches::SharingCaches(const SharingCaches& other)
+    : caches(copyOf(other))
+{
+}
+
+ShaderGraph::SharingCaches::SharingCaches(SharingCaches&& other) noexcept = default;
+
+ShaderGraph::SharingCaches&
+    ShaderGraph::SharingCaches::operator=(const SharingCaches& other)
+{
+    if (this != &other)
+        caches = copyOf(other);
+
+    return *this;
+}
+
+ShaderGraph::SharingCaches&
+    ShaderGraph::SharingCaches::operator=(SharingCaches&& other) noexcept = default;
+
+ShaderGraph::Caches& ShaderGraph::SharingCaches::get()
+{
+    if (!caches)
+        caches = std::make_unique<Caches>();
+
+    return *caches;
+}
+
+ShaderGraph::ShaderGraph()
+{
+    blocks.add(Block {});
+    openBlocks.add(rootBlock);
+}
+
+ShaderGraph::~ShaderGraph() = default;
+ShaderGraph::ShaderGraph(const ShaderGraph& other) = default;
+ShaderGraph::ShaderGraph(ShaderGraph&& other) noexcept = default;
+ShaderGraph& ShaderGraph::operator=(const ShaderGraph& other) = default;
+ShaderGraph& ShaderGraph::operator=(ShaderGraph&& other) noexcept = default;
+
+const ShaderGraph::Caches* ShaderGraph::SharingCaches::find() const
+{
+    return caches.get();
+}
+
+const Expr& ShaderGraph::expr(int node) const
+{
+    return nodes[node];
+}
+
+int ShaderGraph::sequenceOf(int node) const
+{
+    return nodeSequences[node];
+}
+
+int ShaderGraph::nodeCount() const
+{
+    return nodes.size();
+}
+
+int ShaderGraph::textureCount() const
+{
+    return textureSamplings.size();
+}
+
+TextureSampling ShaderGraph::textureSampling(int slot) const
+{
+    return slot >= 0 && slot < textureSamplings.size() ? textureSamplings[slot]
+                                                       : TextureSampling {};
+}
+
+TextureAccess ShaderGraph::textureAccess(int slot) const
+{
+    return slot >= 0 && slot < textureAccesses.size() ? textureAccesses[slot]
+                                                      : TextureAccess::Sample;
+}
+
+TextureKind ShaderGraph::textureKind(int slot) const
+{
+    return slot >= 0 && slot < textureKinds.size() ? textureKinds[slot]
+                                                   : TextureKind::Texture2D;
+}
+
+ValueType ShaderGraph::storageElementType(int slot) const
+{
+    return slot >= 0 && slot < storageElements.size() ? storageElements[slot]
+                                                      : ValueType::Float;
+}
+
+bool ShaderGraph::usesGroupReduction() const
+{
+    return !reductionTypes.empty();
+}
+
+int ShaderGraph::simdMatrixCount() const
+{
+    return simdMatrixElementList.size();
+}
+
+bool ShaderGraph::usesSimdGroups() const
+{
+    return simdMatrixCount() > 0 || simdGroupIndexUsed;
+}
+
+SimdMatrixElement ShaderGraph::simdMatrixElement(int matrix) const
+{
+    return simdMatrixElementList[matrix];
+}
+
+bool ShaderGraph::isCompute() const
+{
+    return storeList.size() > 0 || textureStoreList.size() > 0 || atomicUsed
+           || usesSimdGroups();
+}
+
+const Statement& ShaderGraph::statement(int index) const
+{
+    return statementList[index];
+}
+
+const Block& ShaderGraph::block(int index) const
+{
+    return blocks[index];
+}
+
+int ShaderGraph::statementCount() const
+{
+    return statementList.size();
+}
+
+int ShaderGraph::blockCount() const
+{
+    return blocks.size();
+}
+
+bool ShaderGraph::hasStatements() const
+{
+    return !blocks[rootBlock].statements.empty();
+}
 
 bool ShaderGraph::isPure(int node) const
 {
     return node >= 0 && node < pureFlags.size() && pureFlags[node] != 0;
 }
 
+// The reads the rule above is too coarse for. Nothing can store to a read-only
+// slot - ShaderBuilder::write takes an output - so what an element of one holds
+// is fixed for the whole kernel, and two reads of it at the same index are the
+// same value however far apart they were written. An output's read is not:
+// it may hold what this very thread stored a statement ago, which is the whole
+// point of OutputBuffer::operator[], so the access the slot was declared with
+// is what decides.
+//
+// The index still has to be pure for the read to be, which purityOf checks for
+// every node alike. That is what keeps a read subscripted by a loop counter out
+// of this: the counter is a VarRead, so the read over it is impure and neither
+// shared nor carried across the assignment that advances it.
+bool ShaderGraph::readsImmutableStorage(const Expr& node) const
+{
+    if (node.kind != ExprKind::BufferRead && node.kind != ExprKind::BufferVectorRead)
+        return false;
+
+    return node.index >= 0 && node.index < storageSlots.size()
+           && storageSlots[node.index] == BufferAccess::Read;
+}
+
 bool ShaderGraph::purityOf(const Expr& node) const
 {
-    if (dependsOnMutableState(node.kind))
+    if (dependsOnMutableState(node.kind) && !readsImmutableStorage(node))
         return false;
 
     for (auto argument: node.args)
@@ -77,37 +297,44 @@ bool ShaderGraph::purityOf(const Expr& node) const
     return true;
 }
 
-// Constants and pure binaries are shared by structure rather than by the call
-// that built them, so a base index two separate calls arrive at - the write's
-// `gid * 4u` and the read's - is one node and prints under one name. Only these
-// two kinds: every other add() registers a slot in a parallel vector before it
-// gets here, and returning an existing node would leave that registration
-// stranded.
+// Constants, pure binaries and reads of read-only buffers are shared by
+// structure rather than by the call that built them, so a base index two
+// separate calls arrive at - the write's `gid * 4u` and the read's - is one node
+// and prints under one name, and two readHalf(scale, i) calls at one index are
+// one load rather than two.
+//
+// Only these three kinds: every other add() registers a slot in a parallel
+// vector before it gets here, and returning an existing node would leave that
+// registration stranded.
 int ShaderGraph::findShared(const Expr& node) const
 {
+    auto* caches = sharing.find();
+
+    if (caches == nullptr)
+        return -1;
+
     if (node.kind == ExprKind::Constant)
     {
-        auto found = constantCache.find(constantKeyFor(node));
-        return found != constantCache.end() ? found->second : -1;
+        auto& cache = caches->constants;
+        auto found = cache.find(constantKeyFor(node));
+        return found != cache.end() ? found->second : -1;
     }
 
     if (node.kind == ExprKind::Binary)
     {
-        auto found = binaryCache.find(binaryKeyFor(node));
-        return found != binaryCache.end() ? found->second : -1;
+        auto& cache = caches->binaries;
+        auto found = cache.find(binaryKeyFor(node));
+        return found != cache.end() ? found->second : -1;
+    }
+
+    if (node.kind == ExprKind::BufferRead || node.kind == ExprKind::BufferVectorRead)
+    {
+        auto& cache = caches->reads;
+        auto found = cache.find(readKeyFor(node));
+        return found != cache.end() ? found->second : -1;
     }
 
     return -1;
-}
-
-ShaderGraph::ConstantKey ShaderGraph::constantKeyFor(const Expr& node)
-{
-    return {node.type, node.index, std::bit_cast<std::uint32_t>(node.value)};
-}
-
-ShaderGraph::BinaryKey ShaderGraph::binaryKeyFor(const Expr& node)
-{
-    return {node.type, node.op, node.text, node.args[0], node.args[1]};
 }
 
 int ShaderGraph::add(Expr node)
@@ -126,13 +353,19 @@ int ShaderGraph::add(Expr node)
 
     if (pure)
     {
+        auto& caches = sharing.get();
+
         if (node.kind == ExprKind::Constant)
-            constantCache.emplace(constantKeyFor(node), id);
+            caches.constants.emplace(constantKeyFor(node), id);
         else if (node.kind == ExprKind::Binary)
-            binaryCache.emplace(binaryKeyFor(node), id);
+            caches.binaries.emplace(binaryKeyFor(node), id);
+        else if (node.kind == ExprKind::BufferRead
+                 || node.kind == ExprKind::BufferVectorRead)
+            caches.reads.emplace(readKeyFor(node), id);
     }
 
     pureFlags.add(pure ? (char) 1 : (char) 0);
+    nodeSequences.add(sequence);
     nodes.add(std::move(node));
     return id;
 }
@@ -624,7 +857,7 @@ int ShaderGraph::addSimdMatrixFill(int value)
 {
     barrierUsed = true;
 
-    auto matrix = simdMatrices++;
+    auto matrix = declareSimdMatrix(SimdMatrixElement::Float);
 
     auto fill = Statement {StatementKind::SimdMatrixFill};
     fill.slot = matrix;
@@ -637,11 +870,18 @@ int ShaderGraph::addSimdMatrixFill(int value)
 int ShaderGraph::addSimdMatrixLoad(SimdMatrixMemory memory,
                                    int slot,
                                    int index,
-                                   int stride)
+                                   int stride,
+                                   SimdMatrixElement element)
 {
+    assert(
+        (element == SimdMatrixElement::Float || memory == SimdMatrixMemory::Buffer)
+        && "eacp: a packed fragment is loaded out of a storage buffer. A "
+           "threadgroup tile holds floats, so a patch of one is already the "
+           "fragment simdMatrix(tile, ...) reads.");
+
     barrierUsed = true;
 
-    auto matrix = simdMatrices++;
+    auto matrix = declareSimdMatrix(element);
 
     auto load = Statement {StatementKind::SimdMatrixLoad};
     load.slot = matrix;
@@ -649,14 +889,31 @@ int ShaderGraph::addSimdMatrixLoad(SimdMatrixMemory memory,
     load.bufferSlot = slot;
     load.index = index;
     load.stride = stride;
+    load.element = element;
     addStatement(load);
 
     return matrix;
 }
 
+int ShaderGraph::declareSimdMatrix(SimdMatrixElement element)
+{
+    simdMatrixElementList.add(element);
+    return simdMatrixElementList.size() - 1;
+}
+
+bool ShaderGraph::usesPackedSimdMatrix(SimdMatrixElement element) const
+{
+    return simdMatrixElementList.contains(element);
+}
+
 void ShaderGraph::addSimdMatrixStore(
     int matrix, SimdMatrixMemory memory, int slot, int index, int stride)
 {
+    assert(simdMatrixElement(matrix) == SimdMatrixElement::Float
+           && "eacp: a packed fragment cannot be stored - there is no "
+              "instruction that writes one back. Multiply it into a float "
+              "accumulator and store that.");
+
     barrierUsed = true;
 
     auto store = Statement {StatementKind::SimdMatrixStore};
@@ -670,6 +927,11 @@ void ShaderGraph::addSimdMatrixStore(
 
 void ShaderGraph::addSimdMatrixMultiplyAdd(int accumulator, int left, int right)
 {
+    assert(simdMatrixElement(accumulator) == SimdMatrixElement::Float
+           && "eacp: a product accumulates into a float fragment. A packed one "
+              "is an operand only - sixteen bits would lose what the sum is "
+              "being accumulated in.");
+
     barrierUsed = true;
 
     auto product = Statement {StatementKind::SimdMatrixMultiplyAdd};
@@ -737,7 +999,7 @@ int ShaderGraph::threadgroupMemoryBytes() const
     for (auto elementType: reductionTypes)
         bytes += threads * threadgroupElementBytes(elementType);
 
-    if (simdMatrices > 0)
+    if (simdMatrixCount() > 0)
         bytes += threads / simdGroupWidth * 2 * simdMatrixSize * simdMatrixSize
                  * (int) sizeof(float);
 
@@ -778,6 +1040,17 @@ void ShaderGraph::addStore(int slot, int index, int value)
     auto statement = Statement {StatementKind::Store};
     statement.slot = slot;
     statement.index = index;
+    statement.value = value;
+    addStatement(statement);
+}
+
+void ShaderGraph::addVectorStore(int slot, int firstElement, int value)
+{
+    storeList.add({slot, firstElement, value});
+
+    auto statement = Statement {StatementKind::VectorStore};
+    statement.slot = slot;
+    statement.index = firstElement;
     statement.value = value;
     addStatement(statement);
 }
@@ -830,6 +1103,13 @@ int ShaderGraph::addAtomicLoad(int bufferSlot, int index)
 
 int ShaderGraph::addStatement(Statement newStatement)
 {
+    auto isCompound = newStatement.kind == StatementKind::If
+                      || newStatement.kind == StatementKind::Loop;
+    auto namesABlock = newStatement.body >= 0 && newStatement.body < blocks.size();
+    newStatement.sequence = !isCompound   ? sequence
+                            : namesABlock ? blocks[newStatement.body].opened
+                                          : -1;
+    ++sequence;
     statementList.add(newStatement);
     auto index = statementList.size() - 1;
     blocks[openBlocks.back()].statements.add(index);
@@ -868,7 +1148,9 @@ void ShaderGraph::assign(int slot, int value)
 
 int ShaderGraph::pushBlock()
 {
-    blocks.add(Block {});
+    auto opening = Block {};
+    opening.opened = sequence++;
+    blocks.add(opening);
     auto index = blocks.size() - 1;
     openBlocks.add(index);
     return index;
@@ -876,6 +1158,7 @@ int ShaderGraph::pushBlock()
 
 void ShaderGraph::popBlock()
 {
+    ++sequence;
     openBlocks.pop_back();
 }
 

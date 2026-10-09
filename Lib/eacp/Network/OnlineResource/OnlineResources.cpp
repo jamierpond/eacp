@@ -1,7 +1,9 @@
 #include "OnlineResources.h"
 
 #include <eacp/Core/Threads/EventLoop.h>
+#include <eacp/Core/Utils/Files.h>
 #include <eacp/Core/Utils/File.h>
+#include <eacp/Core/Utils/Files.h>
 #include <eacp/Core/Utils/StdPath.h>
 
 #include <filesystem>
@@ -18,12 +20,20 @@ std::int64_t sizeOnDisk(const FilePath& path)
         return (std::int64_t) file.size();
 
     auto total = std::int64_t {0};
-    auto ignored = std::error_code {};
 
-    for (const auto& entry:
-         std::filesystem::recursive_directory_iterator(toStdPath(path), ignored))
-        if (entry.is_regular_file(ignored))
-            total += (std::int64_t) entry.file_size(ignored);
+    auto options = Files::DirectoryOptions {};
+    options.recursive = true;
+    options.includeHidden = true;
+
+    Files::forEachEntry(path,
+                        options,
+                        [&](const Files::DirectoryEntry& entry)
+                        {
+                            if (entry.kind == Files::EntryKind::file)
+                                total += (std::int64_t) entry.file().size();
+
+                            return Files::Visit::next;
+                        });
 
     return total;
 }
@@ -33,6 +43,16 @@ bool isUnder(const FilePath& path, const FilePath& root)
     return path == root || File {path}.isUnder(root);
 }
 } // namespace
+
+bool OnlineResources::Entry::isFetching() const
+{
+    return status == Status::fetching;
+}
+
+OnlineResources::OnlineResources()
+    : directory(FilePath::appSupportDirectory() / "Resources")
+{
+}
 
 OnlineResources& OnlineResources::get()
 {
@@ -178,8 +198,7 @@ bool OnlineResources::clear()
         return false;
 
     auto folder = getDirectory();
-    auto ignored = std::error_code {};
-    std::filesystem::remove_all(toStdPath(folder), ignored);
+    Files::removeAll(folder);
 
     {
         auto lock = std::scoped_lock {mutex};
