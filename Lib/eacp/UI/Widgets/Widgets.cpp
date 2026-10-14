@@ -3,8 +3,10 @@
 #include "../Host/ComponentHost.h"
 
 #include <eacp/Core/App/Clipboard.h>
+#include <eacp/Core/Platform/Platform.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 namespace eacp::UI
@@ -203,6 +205,16 @@ bool isShortcutModifier(const ModifierKeys& modifiers)
 bool isContinuationByte(char byte)
 {
     return (static_cast<unsigned char>(byte) & 0xC0) == 0x80;
+}
+
+// A word is a run of letters and digits. Every byte of a UTF-8 sequence counts
+// as one, so an accented word moves as a word and a word boundary is never
+// inside a character.
+bool isWordByte(char byte)
+{
+    auto value = static_cast<unsigned char>(byte);
+
+    return std::isalnum(value) || (value & 0x80) != 0;
 }
 } // namespace
 
@@ -428,6 +440,40 @@ int TextEditor::previousCharacter(int from) const
     return position;
 }
 
+int TextEditor::previousWordStart(int from) const
+{
+    // A password field has no words to show, so it jumps to the ends of the
+    // line, the way Cocoa's secure fields do.
+    if (!passwordCharacter.empty())
+        return 0;
+
+    auto position = std::clamp(from, 0, (int) text.size());
+
+    while (position > 0 && !isWordByte(text[(std::size_t) position - 1]))
+        --position;
+
+    while (position > 0 && isWordByte(text[(std::size_t) position - 1]))
+        --position;
+
+    return position;
+}
+
+int TextEditor::nextWordEnd(int from) const
+{
+    if (!passwordCharacter.empty())
+        return (int) text.size();
+
+    auto position = std::clamp(from, 0, (int) text.size());
+
+    while (position < (int) text.size() && !isWordByte(text[(std::size_t) position]))
+        ++position;
+
+    while (position < (int) text.size() && isWordByte(text[(std::size_t) position]))
+        ++position;
+
+    return position;
+}
+
 void TextEditor::setCaretPosition(int position)
 {
     moveCaret(position, false);
@@ -492,33 +538,17 @@ void TextEditor::replaceSelection(const std::string& with)
     onTextChange(text);
 }
 
-void TextEditor::deleteBackwards()
+void TextEditor::deleteTo(int position)
 {
     if (readOnly)
         return;
 
     if (!hasSelection())
     {
-        if (caret == 0)
+        if (position == caret)
             return;
 
-        selectionStart = previousCharacter(caret);
-    }
-
-    replaceSelection({});
-}
-
-void TextEditor::deleteForwards()
-{
-    if (readOnly)
-        return;
-
-    if (!hasSelection())
-    {
-        if (caret >= (int) text.size())
-            return;
-
-        selectionStart = nextCharacter(caret);
+        selectionStart = position;
     }
 
     replaceSelection({});
@@ -657,11 +687,74 @@ bool TextEditor::handleClipboardKey(const KeyEvent& event)
     return false;
 }
 
+bool TextEditor::handleLineKey(const KeyEvent& event)
+{
+    using namespace eacp::Graphics;
+
+    const auto extend = event.modifiers.shift;
+    const auto end = (int) text.size();
+
+    // Command for the line and Option for a word on Apple, the Cocoa text-field
+    // keys; Control for a word everywhere else. Command is only read on Apple:
+    // elsewhere it is the Windows key.
+    if constexpr (Platform::isApple())
+    {
+        if (event.modifiers.command)
+        {
+            switch (event.keyCode)
+            {
+                case KeyCode::LeftArrow:
+                    moveCaret(0, extend);
+                    return true;
+
+                case KeyCode::RightArrow:
+                    moveCaret(end, extend);
+                    return true;
+
+                case KeyCode::Delete:
+                    deleteTo(0);
+                    return true;
+
+                case KeyCode::ForwardDelete:
+                    deleteTo(end);
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+    }
+
+    const auto byWord =
+        Platform::isApple() ? event.modifiers.alt : event.modifiers.control;
+
+    if (!byWord)
+        return false;
+
+    switch (event.keyCode)
+    {
+        case KeyCode::LeftArrow:
+            moveCaret(previousWordStart(caret), extend);
+            return true;
+
+        case KeyCode::RightArrow:
+            moveCaret(nextWordEnd(caret), extend);
+            return true;
+
+        case KeyCode::Delete:
+            deleteTo(previousWordStart(caret));
+            return true;
+
+        default:
+            return false;
+    }
+}
+
 bool TextEditor::keyDown(const KeyEvent& event)
 {
     using namespace eacp::Graphics;
 
-    if (handleClipboardKey(event))
+    if (handleClipboardKey(event) || handleLineKey(event))
         return true;
 
     // Anything else with the shortcut modifier held belongs to the window, not
@@ -693,11 +786,11 @@ bool TextEditor::keyDown(const KeyEvent& event)
             return true;
 
         case KeyCode::Delete:
-            deleteBackwards();
+            deleteTo(previousCharacter(caret));
             return true;
 
         case KeyCode::ForwardDelete:
-            deleteForwards();
+            deleteTo(nextCharacter(caret));
             return true;
 
         case KeyCode::Return:

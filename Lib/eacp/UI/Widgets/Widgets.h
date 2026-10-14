@@ -220,13 +220,18 @@ private:
     int nextCharacter(int from) const;
     int previousCharacter(int from) const;
 
+    // Byte offsets of the word boundaries either side of `from`, skipping any
+    // spaces and punctuation in the way first.
+    int previousWordStart(int from) const;
+    int nextWordEnd(int from) const;
+
     int selectionLeft() const;
     int selectionRight() const;
 
     void moveCaret(int position, bool extendSelection);
     void replaceSelection(const std::string& with);
-    void deleteBackwards();
-    void deleteForwards();
+    // Deletes the selection, or the text between the caret and `position`.
+    void deleteTo(int position);
 
     // Which byte offset a click at `x` landed on, by walking characters until
     // the measured width passes it. Linear in the string, which for one line of
@@ -239,6 +244,7 @@ private:
     void scrollToCaret();
 
     bool handleClipboardKey(const KeyEvent& event);
+    bool handleLineKey(const KeyEvent& event);
 
     // What is drawn for the first `bytes` of the text: the text itself, or
     // one mask per character of it in a password field. Everything that
