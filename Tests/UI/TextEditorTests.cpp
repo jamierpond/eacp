@@ -595,3 +595,188 @@ auto tPasswordWordsAreTheLine =
 
     check(harness.editor.getCaretPosition() == 0);
 };
+
+namespace
+{
+// Command on Apple, Control everywhere else: what undo and redo are held with.
+KeyEvent undoKey(bool shift = false)
+{
+    auto event = typed(shift ? "Z" : "z");
+    event.keyCode = KeyCode::Z;
+    event.modifiers.shift = shift;
+
+    if constexpr (Platform::isApple())
+        event.modifiers.command = true;
+    else
+        event.modifiers.control = true;
+
+    return event;
+}
+
+KeyEvent redoKey()
+{
+    return undoKey(true);
+}
+
+void typeEach(TextEditorHarness& harness, const std::string& characters)
+{
+    for (auto c: characters)
+        harness.press(typed(std::string(1, c)));
+}
+} // namespace
+
+auto tUndoAndRedo = test("TextEditor/undoAndRedoStepThroughTheEdits") = []
+{
+    auto harness = TextEditorHarness {"abc"};
+
+    harness.editor.setCaretPosition(1);
+    harness.press(shifted(KeyCode::RightArrow));
+    harness.press(keyOf(KeyCode::Delete));
+
+    check(harness.editor.getText() == "ac");
+
+    check(harness.editor.keyDown(undoKey()));
+    check(harness.editor.getText() == "abc");
+    check(harness.editor.getSelectedText() == "b",
+          "undo puts back the selection the edit was made over");
+
+    check(harness.editor.keyDown(redoKey()));
+    check(harness.editor.getText() == "ac");
+    check(harness.editor.getCaretPosition() == 1);
+};
+
+auto tNothingToUndoCarriesOn =
+    test("TextEditor/undoWithNothingToUndoCarriesOnToTheWindow") = []
+{
+    auto harness = TextEditorHarness {"abc"};
+
+    check(!harness.editor.keyDown(undoKey()));
+    check(!harness.editor.keyDown(redoKey()));
+    check(harness.editor.getText() == "abc");
+};
+
+auto tTypingCoalesces = test("TextEditor/typingUndoesAWordAtATime") = []
+{
+    auto harness = TextEditorHarness {};
+
+    typeEach(harness, "hello world");
+
+    harness.press(undoKey());
+    check(harness.editor.getText() == "hello ");
+
+    harness.press(undoKey());
+    check(harness.editor.getText().empty());
+    check(!harness.editor.canUndo());
+};
+
+auto tMovingTheCaretStartsAStep =
+    test("TextEditor/movingTheCaretOrSwitchingToDeletingStartsAStep") = []
+{
+    auto harness = TextEditorHarness {};
+
+    typeEach(harness, "abc");
+    harness.press(keyOf(KeyCode::LeftArrow));
+    typeEach(harness, "xy");
+
+    check(harness.editor.getText() == "abxyc");
+
+    harness.press(keyOf(KeyCode::Delete));
+    harness.press(keyOf(KeyCode::Delete));
+
+    check(harness.editor.getText() == "abc");
+
+    harness.press(undoKey());
+    check(harness.editor.getText() == "abxyc", "the deletes are one step");
+
+    harness.press(undoKey());
+    check(harness.editor.getText() == "abc", "the typing after the move another");
+
+    harness.press(undoKey());
+    check(harness.editor.getText().empty());
+};
+
+auto tLineKeysAreSteps = test("TextEditor/aLineOrWordDeleteIsAStepOfItsOwn") = []
+{
+    auto harness = TextEditorHarness {};
+
+    typeEach(harness, "abc");
+    harness.press(keyOf(KeyCode::Delete));
+    harness.press(withModifiers(KeyCode::Delete, byWord()));
+
+    check(harness.editor.getText().empty());
+
+    harness.press(undoKey());
+    check(harness.editor.getText() == "ab");
+};
+
+auto tANewEditDropsRedo = test("TextEditor/aNewEditDropsTheRedo") = []
+{
+    auto harness = TextEditorHarness {};
+
+    typeEach(harness, "ab");
+    harness.press(undoKey());
+    check(harness.editor.canRedo());
+
+    harness.press(typed("c"));
+
+    check(!harness.editor.canRedo());
+    check(!harness.editor.keyDown(redoKey()));
+    check(harness.editor.getText() == "c");
+};
+
+auto tCommitClearsUndo = test("TextEditor/returnAndLosingFocusEndTheHistory") = []
+{
+    auto harness = TextEditorHarness {};
+
+    typeEach(harness, "ab");
+    harness.press(keyOf(KeyCode::Return));
+
+    check(!harness.editor.canUndo(), "Return commits");
+
+    harness.press(typed("c"));
+    harness.editor.giveAwayKeyboardFocus();
+
+    check(!harness.editor.canUndo(), "and so does losing focus");
+    check(harness.editor.getText() == "abc");
+};
+
+auto tSetTextClearsUndo = test("TextEditor/setTextStartsANewHistory") = []
+{
+    auto harness = TextEditorHarness {};
+
+    typeEach(harness, "ab");
+    harness.press(undoKey());
+    harness.editor.setText("other");
+
+    check(!harness.editor.canUndo());
+    check(!harness.editor.canRedo());
+};
+
+auto tApplyEditIsUndoable = test("TextEditor/anAppliedEditUndoesLikeTyping") = []
+{
+    auto harness = TextEditorHarness {"hello world"};
+
+    harness.editor.setCaretPosition(5);
+    harness.editor.applyEdit("hello", 2);
+
+    check(harness.editor.getText() == "hello");
+    check(harness.editor.getCaretPosition() == 2);
+
+    harness.press(undoKey());
+    check(harness.editor.getText() == "hello world");
+    check(harness.editor.getCaretPosition() == 5);
+
+    harness.press(redoKey());
+    check(harness.editor.getText() == "hello");
+};
+
+auto tClearUndo = test("TextEditor/clearUndoIsTheAppsOwnCommit") = []
+{
+    auto harness = TextEditorHarness {};
+
+    typeEach(harness, "ab");
+    harness.editor.clearUndo();
+
+    check(!harness.editor.canUndo());
+    check(harness.editor.getText() == "ab");
+};

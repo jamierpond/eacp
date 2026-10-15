@@ -216,6 +216,15 @@ bool isWordByte(char byte)
 
     return std::isalnum(value) || (value & 0x80) != 0;
 }
+
+// Whether a shortcut was pressed with `letter`, whichever case Shift gave it.
+bool isLetterKey(const KeyEvent& event, char letter)
+{
+    const auto& pressed = event.charactersIgnoringModifiers;
+
+    return pressed.size() == 1
+           && std::tolower(static_cast<unsigned char>(pressed.front())) == letter;
+}
 } // namespace
 
 Checkbox::Checkbox(std::string textToUse)
@@ -338,6 +347,7 @@ Font TextEditor::fontToDrawIn() const
 
 void TextEditor::setText(std::string newText, bool notify)
 {
+    clearUndo();
     text = std::move(newText);
 
     caret = (int) text.size();
@@ -348,6 +358,77 @@ void TextEditor::setText(std::string newText, bool notify)
 
     if (notify)
         onTextChange(text);
+}
+
+void TextEditor::applyEdit(std::string newText, int newCaret, bool notify)
+{
+    if (newText != text)
+        recordEdit(EditKind::Other, {});
+
+    text = std::move(newText);
+    moveCaret(newCaret, false);
+    caretAfterLastEdit = caret;
+
+    if (notify)
+        onTextChange(text);
+}
+
+void TextEditor::undo()
+{
+    if (readOnly || undoSteps.empty())
+        return;
+
+    redoSteps.push_back({text, caret, selectionStart});
+    restore(undoSteps.back());
+    undoSteps.pop_back();
+}
+
+void TextEditor::redo()
+{
+    if (readOnly || redoSteps.empty())
+        return;
+
+    undoSteps.push_back({text, caret, selectionStart});
+    restore(redoSteps.back());
+    redoSteps.pop_back();
+}
+
+void TextEditor::clearUndo()
+{
+    undoSteps.clear();
+    redoSteps.clear();
+    lastEdit.reset();
+}
+
+void TextEditor::restore(const UndoStep& step)
+{
+    text = step.text;
+    caret = step.caret;
+    selectionStart = step.selectionStart;
+    lastEdit.reset();
+
+    scrollToCaret();
+    repaint();
+    onTextChange(text);
+}
+
+// A run of typing or deleting stays one step until the caret is moved, the
+// kind of edit changes, or typing starts a new word.
+void TextEditor::recordEdit(EditKind kind, const std::string& inserted)
+{
+    auto startsWord = kind == EditKind::Typing && !inserted.empty() && caret > 0
+                      && isWordByte(inserted.front())
+                      && !isWordByte(text[(std::size_t) caret - 1]);
+
+    auto continuesRun = kind != EditKind::Other && lastEdit == kind
+                        && caret == caretAfterLastEdit && !hasSelection()
+                        && !startsWord;
+
+    if (!continuesRun)
+        undoSteps.push_back({text, caret, selectionStart});
+
+    redoSteps.clear();
+    lastEdit = kind;
 }
 
 void TextEditor::setPlaceholder(std::string newPlaceholder)
@@ -520,38 +601,43 @@ std::string TextEditor::getSelectedText() const
                        (std::size_t) (selectionRight() - selectionLeft()));
 }
 
-void TextEditor::replaceSelection(const std::string& with)
+void TextEditor::replaceSelection(const std::string& with, EditKind kind)
+{
+    replaceRange(selectionLeft(), selectionRight(), with, kind);
+}
+
+void TextEditor::replaceRange(int left,
+                              int right,
+                              const std::string& with,
+                              EditKind kind)
 {
     if (readOnly)
         return;
 
-    auto left = selectionLeft();
-    auto right = selectionRight();
+    if (left != right || !with.empty())
+        recordEdit(kind, with);
 
     text.replace((std::size_t) left, (std::size_t) (right - left), with);
 
     caret = left + (int) with.size();
     selectionStart = caret;
+    caretAfterLastEdit = caret;
 
     scrollToCaret();
     repaint();
     onTextChange(text);
 }
 
-void TextEditor::deleteTo(int position)
+void TextEditor::deleteTo(int position, EditKind kind)
 {
     if (readOnly)
         return;
 
-    if (!hasSelection())
-    {
-        if (position == caret)
-            return;
-
-        selectionStart = position;
-    }
-
-    replaceSelection({});
+    // Deleting a selection is a step of its own, never part of a run.
+    if (hasSelection())
+        replaceSelection({}, EditKind::Other);
+    else if (position != caret)
+        replaceRange(std::min(position, caret), std::max(position, caret), {}, kind);
 }
 
 float TextEditor::textOrigin() const
@@ -647,6 +733,7 @@ void TextEditor::focusGained()
 
 void TextEditor::focusLost()
 {
+    clearUndo();
     deselect();
     repaint();
     onFocusChange(false);
@@ -671,7 +758,7 @@ bool TextEditor::handleClipboardKey(const KeyEvent& event)
             Clipboard::copyText(getSelectedText());
 
         if (pressed == "x" && !readOnly)
-            replaceSelection({});
+            replaceSelection({}, EditKind::Other);
 
         return true;
     }
@@ -679,7 +766,7 @@ bool TextEditor::handleClipboardKey(const KeyEvent& event)
     if (pressed == "v")
     {
         if (!readOnly && Clipboard::hasText())
-            replaceSelection(Clipboard::getText());
+            replaceSelection(Clipboard::getText(), EditKind::Other);
 
         return true;
     }
@@ -712,11 +799,11 @@ bool TextEditor::handleLineKey(const KeyEvent& event)
                     return true;
 
                 case KeyCode::Delete:
-                    deleteTo(0);
+                    deleteTo(0, EditKind::Other);
                     return true;
 
                 case KeyCode::ForwardDelete:
-                    deleteTo(end);
+                    deleteTo(end, EditKind::Other);
                     return true;
 
                 default:
@@ -742,7 +829,7 @@ bool TextEditor::handleLineKey(const KeyEvent& event)
             return true;
 
         case KeyCode::Delete:
-            deleteTo(previousWordStart(caret));
+            deleteTo(previousWordStart(caret), EditKind::Other);
             return true;
 
         default:
@@ -750,11 +837,49 @@ bool TextEditor::handleLineKey(const KeyEvent& event)
     }
 }
 
+// Command-Z and Shift-Command-Z on Apple; Control-Z, Control-Y and
+// Shift-Control-Z elsewhere. With nothing to undo the key carries on to the
+// window, which may have an undo of its own.
+bool TextEditor::handleUndoKey(const KeyEvent& event)
+{
+    using namespace eacp::Graphics;
+
+    const auto& modifiers = event.modifiers;
+    const auto held = Platform::isApple() ? modifiers.command : modifiers.control;
+
+    if (!held || modifiers.alt)
+        return false;
+
+    const auto zPressed = isLetterKey(event, 'z');
+    const auto yPressed =
+        !Platform::isApple() && !modifiers.shift && isLetterKey(event, 'y');
+
+    if (zPressed && !modifiers.shift)
+    {
+        if (!canUndo())
+            return false;
+
+        undo();
+        return true;
+    }
+
+    if ((zPressed && modifiers.shift) || yPressed)
+    {
+        if (!canRedo())
+            return false;
+
+        redo();
+        return true;
+    }
+
+    return false;
+}
+
 bool TextEditor::keyDown(const KeyEvent& event)
 {
     using namespace eacp::Graphics;
 
-    if (handleClipboardKey(event) || handleLineKey(event))
+    if (handleUndoKey(event) || handleClipboardKey(event) || handleLineKey(event))
         return true;
 
     // Anything else with the shortcut modifier held belongs to the window, not
@@ -786,15 +911,16 @@ bool TextEditor::keyDown(const KeyEvent& event)
             return true;
 
         case KeyCode::Delete:
-            deleteTo(previousCharacter(caret));
+            deleteTo(previousCharacter(caret), EditKind::Deleting);
             return true;
 
         case KeyCode::ForwardDelete:
-            deleteTo(nextCharacter(caret));
+            deleteTo(nextCharacter(caret), EditKind::Deleting);
             return true;
 
         case KeyCode::Return:
         case KeyCode::KeypadEnter:
+            clearUndo();
             onReturnKey(text);
             return true;
 
@@ -815,7 +941,7 @@ bool TextEditor::keyDown(const KeyEvent& event)
     if (static_cast<unsigned char>(event.characters.front()) < 0x20)
         return false;
 
-    replaceSelection(event.characters);
+    replaceSelection(event.characters, EditKind::Typing);
 
     return true;
 }
@@ -1514,6 +1640,16 @@ const std::string& TextEditor::getPasswordCharacter() const
 int TextEditor::getCaretPosition() const
 {
     return caret;
+}
+
+bool TextEditor::canUndo() const
+{
+    return !undoSteps.empty();
+}
+
+bool TextEditor::canRedo() const
+{
+    return !redoSteps.empty();
 }
 
 bool TextEditor::hasSelection() const
