@@ -5,6 +5,9 @@
 #include "HotReloadTarget.h"
 #include "ReloadableLibrary.h"
 
+#include <map>
+#include <type_traits>
+
 namespace eacp::Plugins
 {
 struct BuildFailure
@@ -26,6 +29,15 @@ BuildFailure buildFailureFrom(const Processes::ProcessResult& result);
 // command and reloads the module it produces. A failed build or load keeps the
 // current generation. Nothing builds until the first change. Main thread only;
 // every callback runs on the main thread and must not destroy the loop.
+//
+// Built from a HotReloadTarget, the loop refuses any image that lacks the
+// host's own requiredHostFunction, found by the name the loader gives the
+// host's copy, so no name is ever spelled. Without one, every image is taken.
+//
+// A header under the source directory whose contents differ from launch may
+// have changed a struct the running app laid out, so while one differs nothing
+// builds or reloads, rebuild() included, and the state stays HeaderChanged;
+// a build already running finishes unused. Undo the edit or restart.
 class HotReloadLoop
 {
 public:
@@ -35,7 +47,8 @@ public:
         Building,
         Loaded,
         BuildFailed,
-        LoadFailed
+        LoadFailed,
+        HeaderChanged
     };
 
     struct Options
@@ -48,7 +61,15 @@ public:
     };
 
     explicit HotReloadLoop(const Options& options);
-    HotReloadLoop(const HotReloadTarget& target, const std::string& requiredSymbol);
+    explicit HotReloadLoop(const HotReloadTarget& target,
+                           const void* requiredHostFunction = nullptr);
+
+    template <typename Function>
+        requires std::is_function_v<std::remove_pointer_t<Function>>
+    HotReloadLoop(const HotReloadTarget& target, Function requiredHostFunction)
+        : HotReloadLoop(target, reinterpret_cast<const void*>(requiredHostFunction))
+    {
+    }
 
     HotReloadLoop(const HotReloadLoop&) = delete;
     HotReloadLoop& operator=(const HotReloadLoop&) = delete;
@@ -76,6 +97,9 @@ public:
 
 private:
     Files::FileWatcher::ChangedFunc rebuildOnChange();
+    void rebuildUnlessAHeaderChanged(const Vector<FilePath>& changed);
+    [[nodiscard]] bool hasHeaderChangedSinceLaunch(const FilePath& header) const;
+    [[nodiscard]] bool hasAnyHeaderChanged() const;
     void startBuilding();
     void buildFinished(const Processes::ProcessResult& result);
     void reload();
@@ -85,6 +109,8 @@ private:
     Processes::BuildRunner runner;
     State state = State::Idle;
     std::string failureMessage;
+    std::map<std::string, std::size_t> headerContentsAtLaunch;
+    Vector<FilePath> headersChangedSinceLaunch;
     Files::SourceWatcher watcher;
 };
 } // namespace eacp::Plugins

@@ -12,7 +12,7 @@ using eacp::Plugins::ReloadableLibrary;
 namespace Files = eacp::Files;
 
 using AnswerFunction = int (*)();
-using NameFunction = const char* (*)();
+using NameFunction = const char* (*) ();
 
 const auto fixtureA = FilePath {EACP_RELOAD_FIXTURE_A};
 const auto fixtureB = FilePath {EACP_RELOAD_FIXTURE_B};
@@ -103,8 +103,8 @@ auto tSecondReload = test("ReloadableLibrary/reloadPicksUpARebuild") = []
 
     eacp::Threads::runEventLoopFor(eacp::Time::MS {10});
 
-    check(!Files::exists(firstCopy));
-    check(sandbox.stagedFileCount() == 1);
+    check(Files::exists(firstCopy));
+    check(sandbox.stagedFileCount() == 2);
 };
 
 auto tMissingBuild = test("ReloadableLibrary/missingBuildKeepsTheImage") = []
@@ -145,7 +145,8 @@ auto tGarbageBuild = test("ReloadableLibrary/unloadableBuildKeepsTheImage") = []
     check(sandbox.stagedFileCount() == 1);
 };
 
-auto tReloadWhileLooping = test("ReloadableLibrary/reloadDefersTheOldUnmap") = []
+auto tReloadWhileLooping =
+    test("ReloadableLibrary/reloadKeepsTheOldImageMapped") = []
 {
     auto sandbox = Sandbox {};
     auto library =
@@ -178,9 +179,11 @@ auto tReloadWhileLooping = test("ReloadableLibrary/reloadDefersTheOldUnmap") = [
     check(answerOf(library) == 2);
 };
 
-auto tDestructorCleans = test("ReloadableLibrary/destructorEmptiesStaging") = []
+auto tDestructorKeepsCopies =
+    test("ReloadableLibrary/destructorKeepsImagesAndCopies") = []
 {
     auto sandbox = Sandbox {};
+    auto oldAnswer = AnswerFunction {nullptr};
 
     {
         auto library =
@@ -188,13 +191,33 @@ auto tDestructorCleans = test("ReloadableLibrary/destructorEmptiesStaging") = []
 
         sandbox.build(fixtureA);
         check(library.reload());
+        oldAnswer = library.findFunction<AnswerFunction>("eacpReloadFixtureAnswer");
         sandbox.build(fixtureB);
         check(library.reload());
-        sandbox.build(fixtureA);
-        check(library.reload());
-        check(sandbox.stagedFileCount() >= 1);
     }
 
-    check(sandbox.stagedFileCount() == 0);
+    check(oldAnswer() == 1);
+    check(sandbox.stagedFileCount() == 2);
+
+    auto next = ReloadableLibrary {sandbox.builtPath(), sandbox.stagingDirectory()};
+    check(sandbox.stagedFileCount() == 2);
+};
+
+auto tEndedProcessCopies =
+    test("ReloadableLibrary/copiesOfEndedProcessesAreRemoved") = []
+{
+    constexpr auto processIdNoneUses = "999999";
+    auto sandbox = Sandbox {};
+    check(Files::createDirectories(sandbox.stagingDirectory()));
+
+    auto endedCopy = sandbox.stagingDirectory()
+                     / ("Module-1-" + std::string {processIdNoneUses} + "-1"
+                        + fixtureA.extension());
+    check(Files::copyFile(fixtureA, endedCopy));
+
+    auto library =
+        ReloadableLibrary {sandbox.builtPath(), sandbox.stagingDirectory()};
+
+    check(!Files::exists(endedCopy));
 };
 } // namespace ReloadableLibraryTests

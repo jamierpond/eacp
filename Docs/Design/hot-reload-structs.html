@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hot reloading structs in eacp: design</title>
+<style>
+  body { font: 15px/1.5 -apple-system, Helvetica, Arial, sans-serif; max-width: 52em; margin: 3em auto; padding: 0 1em; color: #222; }
+  h1, h2, h3 { line-height: 1.2; }
+  h2 { margin-top: 2.2em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+  pre, code { font: 13px/1.45 Menlo, monospace; }
+  pre { background: #f4f4f4; padding: .8em 1em; overflow-x: auto; }
+  code { background: #f4f4f4; padding: 0 .2em; }
+  table { border-collapse: collapse; margin: 1em 0; }
+  th, td { border: 1px solid #bbb; padding: .4em .7em; vertical-align: top; text-align: left; }
+  th { background: #eee; }
+  .note { border-left: 4px solid #c60; padding: .2em 1em; background: #fff7f0; }
+</style>
+</head>
+<body>
+
+<h1>Hot reloading structs in eacp</h1>
+<p>Status: phase 1 implemented on <code>jp/hot-reload-library</code>. Deviations are noted where they apply (5.2, 6.1, 6.2, 7.3, 8, 10).</p>
+
+<h2>1. Requirements</h2>
+<ol>
+  <li><strong>Off means off.</strong> With hot reload disabled, the build is an ordinary static binary. No dylib, no module target, no indirection in user code, no extra bytes in user structs.</li>
+  <li><strong>Users write only the reload behaviour.</strong> A user marks what reloads and, if needed, writes what happens after a reload. They do not write plumbing: no factories, no interfaces, no registration, no symbol names.</li>
+  <li>Free functions and structs are both reloadable.</li>
+</ol>
+
+<h2>2. What exists today</h2>
+<p>A hot build (<code>eacp_add_hot_reload(... HOT_RELOAD ON)</code>) compiles the chosen source files twice: into the app as normal, and into a module (a <code>.so</code> on macOS). The app, every static library in its link closure and the module are compiled with default symbol visibility, the app is linked with <code>-export_dynamic</code>, and the module is linked with <code>-undefined,dynamic_lookup</code>. So the module can call anything in the app, and the app can look up anything in the module by symbol name.</p>
+<p>A <code>HotReloadLoop</code> watches the source directory, runs <code>cmake --build --target &lt;module&gt;</code> on a change, copies the result to a fresh path and <code>dlopen</code>s it. The previous image is unmapped one event-loop turn later.</p>
+<p>Only free functions reload. The user holds a <code>Plugins::Reloadable&lt;&amp;fn&gt;</code> handle and calls through it. On each reload the handle asks the loader for the symbol name of the app's own copy of <code>fn</code> (<code>dladdr</code>), looks that name up in the fresh image (<code>dlsym</code>), and stores the pointer. Nothing spells a mangled name.</p>
+
+<h2>3. The one fact that decides the design</h2>
+<p>C++ binds a call to a non-virtual function at link time. If the app contains <code>cow.makeParts()</code>, that call goes to the app's <code>CowModel::makeParts</code> forever. Loading new code somewhere else changes nothing about that call site. The only calls the language late-binds are virtual calls and calls through function pointers.</p>
+<p>Consequences:</p>
+<ul>
+  <li>A struct's methods can only be reloaded if they are virtual.</li>
+  <li>"Reloading a struct" means making the virtual calls on existing instances land in the new image. Nothing else is possible without rewriting machine code in the running process.</li>
+  <li>No reflection on method names is needed. The compiler has already built the method table: the vtable.</li>
+</ul>
+
+<h2>4. Two candidate mechanisms for structs</h2>
+
+<h3>4.1 Recreate through a factory</h3>
+<p>The module exports a factory. The app holds instances through a base-class pointer and never names the concrete type. On reload the app destroys each instance and asks the fresh image's factory for a new one, optionally handing the old instance over so state can be copied. This is what <code>Apps/GPU/HotReload</code> does by hand today.</p>
+
+<h3>4.2 Swap the vtable pointer in place</h3>
+<p>Instances stay where they are. On reload, for each live instance: read its vtable pointer, ask the loader which symbol it points into (for example <code>_ZTV8CowModel</code> + 16), find the same symbol in the fresh image, and write the new address into the instance. Virtual calls on that instance now run the new code. Then call a user hook, <code>onReload()</code>, so the instance can rebuild anything it derived from the old code.</p>
+
+<h3>4.3 Comparison</h3>
+<table>
+  <tr><th></th><th>Recreate through factory (4.1)</th><th>Swap vtable in place (4.2)</th></tr>
+  <tr><td>What the user writes</td>
+      <td>An abstract interface, a concrete class, a factory function, a state hand-over function. App code holds a pointer to the interface.</td>
+      <td>Derive from an empty base. Mark methods with a macro. Optionally write <code>onReload()</code>. App code holds the struct by value as usual.</td></tr>
+  <tr><td>Cost when hot reload is off</td>
+      <td>Still pays: virtual dispatch, heap allocation, pointer indirection. The interface and factory remain in the code.</td>
+      <td>None. The macro expands to nothing and the base is empty. The struct is the one you would have written anyway.</td></tr>
+  <tr><td>Changing data members while running</td>
+      <td>Allowed. The new instance is built by the new code with the new layout; the app only sees the interface.</td>
+      <td>Not allowed. Instances keep their memory. A size change is detected and refused (see 6.2). A change that keeps the size is not detectable and will corrupt memory.</td></tr>
+  <tr><td>Instance state across a reload</td>
+      <td>Lost unless the user writes a hand-over function.</td>
+      <td>Kept automatically.</td></tr>
+  <tr><td>Instances the app did not create through the handle</td>
+      <td>Not reloaded. Only what the handle owns is reloaded.</td>
+      <td>Reloaded, wherever they live, because the base registers every instance.</td></tr>
+  <tr><td>Standards conformance</td>
+      <td>Plain C++.</td>
+      <td>Writing an object's vtable pointer is outside the language. It relies on the Itanium C++ ABI (clang and gcc on macOS and Linux), which eacp already relies on for symbol mangling. MSVC has an equivalent layout, so Windows is possible later.</td></tr>
+</table>
+
+<p><strong>Decision: 4.2.</strong> It is the only one that meets requirement 1 (zero cost when off) and requirement 2 (no plumbing). The price is the layout restriction and the ABI dependence, both stated in section 6.</p>
+
+<h2>5. Proposed user-facing API</h2>
+
+<h3>5.1 Structs</h3>
+<pre>struct CowModel : Plugins::Reloadable&lt;CowModel&gt;
+{
+    EACP_RELOADABLE Vector&lt;CowPart&gt; makeParts() const;
+    EACP_RELOADABLE JumpPhysics getJumpPhysics() const;
+
+    // Optional. Called on every live instance after each reload.
+    EACP_RELOADABLE void onReload();
+};
+
+CowModel cow;        // a member, a local, an element of a Vector: anywhere
+cow.makeParts();     // an ordinary call</pre>
+<p>Hot reload off: <code>EACP_RELOADABLE</code> expands to nothing and <code>Plugins::Reloadable&lt;T&gt;</code> is an empty class with no members and no virtual functions. <code>CowModel</code> has no vtable pointer and no registration. <code>onReload()</code> is never called.</p>
+<p>Hot reload on: <code>EACP_RELOADABLE</code> expands to <code>virtual</code>. <code>Plugins::Reloadable&lt;T&gt;</code> registers <code>this</code> in its default, copy and move constructors and removes it in its destructor. The registry is a process-wide list in eacp-core of (pointer to the complete <code>T</code>, pointer to a thunk that calls <code>onReload()</code> on it). The thunk is a lambda instantiated per <code>T</code> in the base's constructor, so eacp-core never names a user type.</p>
+<p><code>Plugins::Reloadable&lt;T&gt;</code> has <strong>no virtual functions of its own</strong>, on or off. Section 7 explains why: a polymorphic base adds a second vtable pointer to any struct that also derives from another polymorphic class, and the swap handles exactly one.</p>
+
+<h3>5.2 Free functions</h3>
+<p>Unchanged from today, with one improvement:</p>
+<p class="note">Implemented as <code>Plugins::ReloadableFunction&lt;&amp;fn&gt;</code>, so the name does not collide with the struct base.</p>
+<pre>Plugins::ReloadableFunction&lt;&amp;makeCowParts&gt; makeLiveCowParts {cowModel};
+makeLiveCowParts();</pre>
+<p>When hot reload is off, <code>operator()</code> calls <code>makeCowParts</code> directly (<code>if constexpr</code>) and the handle holds no data. A user who does not want the handle at the call site puts the function on a struct.</p>
+<p>A free function cannot be made reloadable without a handle at the call site. A direct call is bound at link time (section 3). Any macro that hid this would have to generate a function pointer and a wrapper, which is the same handle with worse error messages.</p>
+
+<h2>6. Mechanism in detail</h2>
+
+<h3>6.1 The swap</h3>
+<ol>
+  <li>The loop loads the fresh image.</li>
+  <li>For each registered instance, read the vtable pointer at offset 0 of the complete object.</li>
+  <li><code>dladdr</code> on that pointer gives the nearest preceding exported symbol and the offset from it, for example <code>_ZTV8CowModel</code> and 16. This names the dynamic type of the instance, so derived classes need no special handling. (Today's <code>getExportedSymbolName</code> requires an exact match; this needs a second form that returns symbol and offset.)</li>
+  <li><code>dlsym</code> that symbol in the fresh image. If it is absent, the type was not compiled into the module: abort with the type named.</li>
+  <li>Run the size check if one is configured (6.2). If it fails, refuse the whole reload and keep the previous generation.</li>
+  <li>Write <code>new vtable address + offset</code> into the instance.</li>
+  <li>After all instances are swapped, call <code>onReload()</code> on each, through the new vtable, so the new code's <code>onReload</code> runs.</li>
+</ol>
+<p><strong>Invalid reloads abort.</strong> Policy: when the swap meets an inconsistency it cannot make safe (a vtable missing from the fresh image, a second vtable pointer, a size mismatch if a check exists, a reload with a header changed since launch), it prints one line on stderr naming the type or file and what to do, and calls <code>std::abort()</code>. Build and load failures stay soft and keep the previous generation.</p>
+<p class="note">Implemented: all instances are resolved first, so an abort happens before any pointer is written. The vptr is checked to lie in a <code>_ZTV</code> symbol; anything else aborts as "no exported vtable".</p>
+<p>The old image is unmapped one loop turn later, as today. Every registered instance now points into the new image, so nothing references the old one.</p>
+
+<h3>6.2 Size check</h3>
+<p>The swap is only safe if the module's <code>sizeof(T)</code> and member layout equal the app's. A check needs the module's <code>sizeof(T)</code>, read from the fresh image before anything is swapped. The obvious way is a hidden virtual, <code>virtual std::size_t getReloadableSize() const { return sizeof(T); }</code>, whose slot the loop reads from the fresh vtable and calls. The function only returns a constant, so calling it with a host instance as <code>this</code> is safe.</p>
+<p>Where that virtual is declared is a real tradeoff:</p>
+<table>
+  <tr><th>Option</th><th>User code</th><th>Consequence</th></tr>
+  <tr><td>A. Declare it in <code>Reloadable&lt;T&gt;</code></td>
+      <td>Nothing extra.</td>
+      <td>The base becomes polymorphic. A struct that also derives from another polymorphic class (<code>struct DemoView : GPUView, Reloadable&lt;DemoView&gt;</code>) then has two vtable pointers, which the phase 1 swap cannot handle (section 7). This rules out the view example. <strong>Rejected for phase 1.</strong></td></tr>
+  <tr><td>B. Declare it in <code>T</code> through a macro in the struct body, <code>EACP_RELOADABLE_STRUCT(CowModel);</code></td>
+      <td>One extra line inside every reloadable struct.</td>
+      <td>A virtual declared in the derived class goes into the primary vtable, so the object keeps one vtable pointer whatever its first base is. The size check works. Costs one line of what requirement 2 calls plumbing.</td></tr>
+  <tr><td>C. No size check in phase 1</td>
+      <td>Nothing extra.</td>
+      <td>A member added or removed while running corrupts memory with no diagnosis. The loop can still refuse to reload after any header change under the watched directory, which catches the realistic way a layout changes (editing the struct's header), but not a struct defined in a .cpp.</td></tr>
+</table>
+<p class="note">Implemented: C. The loop hashes every header under the watched directory at launch; a change event for a header whose contents differ does not build, and a reload while any differs aborts. Undoing the edit clears it.</p>
+<p><strong>Proposed: C for phase 1, with the header-change refusal.</strong> B is the fallback if that proves too thin in practice. A returns in phase 2 once multiple vtable pointers are handled (section 7.4).</p>
+<p class="note"><strong>Any size check is partial.</strong> It catches a member added or removed. It does not catch a member changed to another type of the same size, or two members reordered. Those corrupt memory silently. The rule for users is: edit function bodies in .cpp files; a change to a struct definition needs a restart.</p>
+
+<h3>6.3 Where the vtable lives</h3>
+<p>For the swap to work, the fresh image must contain the type's vtable. The compiler emits a class's vtable in the translation unit that defines its key function (the first non-inline, non-pure virtual function declared in the class). If that function is defined in a file in the module's <code>SOURCES</code>, the vtable is in the module. If every virtual is inline, the vtable is emitted in every TU that needs it, including the module's. Either way the module has it. If the key function is defined in a file that is <em>not</em> in <code>SOURCES</code>, the type cannot be reloaded, and step 4 above reports it.</p>
+
+<h3>6.4 Methods not in the module</h3>
+<p>A virtual method defined in a file outside <code>SOURCES</code> still has a slot in the module's vtable, and that slot points at the app's copy via <code>dynamic_lookup</code>. The call works and runs the old code. The same holds for non-virtual helpers called from reloaded virtuals: a helper defined in a module source runs the new code, one defined elsewhere runs the app's copy. Nothing breaks; the user just reloads less than they might expect. This replaces the question "what if methods are spread over several TUs". The answer is: it works, file by file.</p>
+
+<h3>6.5 Why the reloaded code is compiled twice, and what that costs</h3>
+<p>In a hot build the reloaded sources are compiled into the app and, separately, into the module. The process holds two definitions of every function and type in those files: the app's, used until the first reload, and the module's, used after. This is deliberate, and it is the same situation as any plugin that statically links a library the host also links. It is not the ODR as the standard defines it (one program, one definition) because each image is linked separately, but the practical hazards of two definitions are real and are listed below.</p>
+
+<p><strong>Why not compile the sources only into the module and have the app use the module's symbols?</strong> Because of how the app's call sites get bound. If the app does not contain <code>makeCowParts</code>, every reference to it in the app is an undefined symbol that the dynamic linker resolves once, at launch, to the first image that defines it. That binding is stored in the app's GOT and lazy-pointer tables. Loading a second image later changes nothing: the app's references still point into the first image. Two ways out:</p>
+<table>
+  <tr><th>Approach</th><th>What it needs</th><th>What it would give</th><th>Why not now</th></tr>
+  <tr><td>Rebind the app's GOT on every reload</td>
+      <td>Parse the app's Mach-O (bind opcodes or chained fixups) and ELF (<code>.rela.plt</code>, <code>.rela.dyn</code>) relocation tables, find every slot bound to a module symbol, <code>mprotect</code> the page, write the new address. fishhook does this on macOS and has needed rework for each dyld change (chained fixups, <code>__DATA_CONST</code>).</td>
+      <td>Every direct call from the app into reloaded code is redirected, with no handle at the call site. Free functions reload without <code>Reloadable&lt;&amp;fn&gt;</code>. Non-virtual methods reload too, because a call to a function in another image already goes through the GOT. New instances pick up the new vtable automatically. This is the only route that removes the handle for free functions and the devirtualisation risk of section 10.</td>
+      <td>It is a large amount of platform-specific, fragile code, different on macOS and Linux, and it breaks when the OS changes its loader. Existing instances still need the vtable swap of section 6.1, so it adds to the design rather than replacing it. Worth a spike after phase 1 proves the rest.</td></tr>
+  <tr><td>Reach the module only through handles and factories</td>
+      <td>Nothing new.</td>
+      <td>One definition per process at a time.</td>
+      <td>The app can no longer construct a reloadable struct itself: the constructor needs the type's vtable address, which would be in the module only. Every instance must come from a module factory and be held through a pointer. That is design 4.1, which fails requirements 1 and 2.</td></tr>
+</table>
+
+<p>What the two copies buy, as the design stands:</p>
+<ul>
+  <li>The app runs with no module loaded. Generation 0 is the app's own code. A module that fails to build or load leaves a working program.</li>
+  <li>Hot reload off is the same arrangement with the module target removed. There is no separate code path for the static build to drift from.</li>
+  <li>Symbol discovery without spelling names: <code>dladdr</code> on the app's copy of a function or vtable gives the name to look up in the module.</li>
+  <li>The app can construct reloadable structs by value, because their vtables exist in the app.</li>
+</ul>
+
+<p>What the two copies cost. These are the real "ODR land" hazards and each one is a rule for users of the mechanism:</p>
+<table>
+  <tr><th>Hazard</th><th>Detail</th><th>Rule or mitigation</th></tr>
+  <tr><td>Globals and function-local statics exist twice</td>
+      <td>The app's copy and the module's copy of a <code>static</code> in a reloaded .cpp are different variables. After a reload the module's starts from its initialiser.</td>
+      <td>Documented already. Reloaded files should not keep state in statics; keep it in the struct, which survives the swap.</td></tr>
+  <tr><td>RTTI across the boundary</td>
+      <td><code>typeid</code>, <code>dynamic_cast</code> and exception catch matching compare <code>type_info</code> objects. The app's <code>_ZTI8CowModel</code> and the module's are different objects. libc++ on Apple compares by address for types it considers unique, so a <code>dynamic_cast&lt;CowModel*&gt;</code> in app code on an instance whose vtable now points into the module can fail, and an exception of a reloaded type thrown by module code may not be caught by an app-side <code>catch</code> of that type.</td>
+      <td>Do not <code>dynamic_cast</code> to, or throw, types defined in reloaded files. Both are rare in the code this is for. Can be verified with a test case before shipping.</td></tr>
+  <tr><td>Layout drift between copies</td>
+      <td>The app's copy was compiled from the header as it was at launch; the module's from the header as it is now.</td>
+      <td>Section 6.2: edit bodies, not definitions; refuse to reload after a header change.</td></tr>
+  <tr><td>Inline functions and templates</td>
+      <td>An inline function from a reloaded header that the app instantiated runs the app's copy when called from app code, and the module's when called from module code.</td>
+      <td>Same rule as section 6.4: code runs where it was compiled. Nothing breaks; it just does not reload.</td></tr>
+  <tr><td>Module references to its own symbols</td>
+      <td>With a two-level namespace (macOS) the module's internal calls to functions it defines bind to itself at link time. With <code>-undefined,dynamic_lookup</code> only its undefined symbols are resolved against the app. On Linux the equivalent is the default for a shared object unless <code>-Bsymbolic</code> is absent and the symbol is preemptible; the module should be linked with <code>-Bsymbolic</code> so its own definitions win.</td>
+      <td>Check the Linux link flags when phase 1 is implemented.</td></tr>
+</table>
+
+<h2>7. Multiple inheritance in detail</h2>
+<p class="note">Implemented differently from 7.3: the scan runs at each swap, not at registration (the derived vptr is not yet written while the base constructor runs), and needs no symbol size: a word at a non-zero offset is a second vtable pointer when <code>dladdr</code> names the same <code>_ZTV</code> symbol for it. It aborts with the type named.</p>
+
+<h3>7.1 How the object is laid out</h3>
+<p>Under the Itanium C++ ABI, a class with virtual functions has one vtable pointer per polymorphic base subobject, plus one of its own if it introduces virtual functions and has no polymorphic base to share with. The first polymorphic non-virtual base is the <em>primary base</em>: it sits at offset 0 and the derived class shares its vtable pointer. Every other polymorphic base is a <em>secondary base</em> at a non-zero offset with its own vtable pointer.</p>
+<pre>struct A { virtual void a(); int x; };
+struct B { virtual void b(); int y; };
+struct D : A, B { void a() override; void b() override; int z; };
+
+D in memory (64-bit):
+  offset  0   vptr  -> _ZTV1D + 16            (primary: D-in-A vtable)
+  offset  8   int x
+  offset 16   vptr  -> _ZTV1D + 16 + N        (secondary: B-in-D vtable)
+  offset 24   int y
+  offset 28   int z</pre>
+<p>Both pointers point into the same symbol, <code>_ZTV1D</code>, the <em>vtable group</em> for <code>D</code>: the primary vtable followed by one secondary vtable per secondary base. The compiler emits the whole group as one object with one symbol.</p>
+<p>A <code>B*</code> that refers to a <code>D</code> holds the address of offset 16, not offset 0. A virtual call through it reads the secondary vtable pointer.</p>
+
+<h3>7.2 What the phase 1 swap does to such an object</h3>
+<p>Phase 1 rewrites the pointer at offset 0 only. After a reload:</p>
+<ul>
+  <li>Calls through a <code>D*</code> or <code>A*</code> use the new image. Correct.</li>
+  <li>Calls through a <code>B*</code> read offset 16, which still points into the old image. For one loop turn that runs stale code. After the old image is unmapped, it is a jump into unmapped memory: a crash, at the first such call, with no connection visible to the edit that caused it.</li>
+</ul>
+<p>This is why <code>Reloadable&lt;T&gt;</code> must not be polymorphic in phase 1 (section 6.2, option A). With the view example, <code>struct DemoView : GPUView, Reloadable&lt;DemoView&gt;</code>, <code>GPUView</code> is the primary base and a polymorphic <code>Reloadable</code> would be a secondary base with its own vtable pointer. eacp holds views as <code>View*</code>, which here is the primary, so the app's calls would work, but <code>onReload()</code> dispatched through the secondary pointer would not, and the unmapped image would still be referenced.</p>
+
+<h3>7.3 Phase 1 rule and how it is enforced</h3>
+<p><strong>Rule:</strong> a reloadable struct may have at most one polymorphic base, and it must be the first base listed. <code>Reloadable&lt;T&gt;</code> itself does not count because it has no virtual functions.</p>
+<p>Enforcement options, in order of strength:</p>
+<ul>
+  <li><strong>Documentation only.</strong> The failure mode is a crash on the first call through a secondary base after a reload, which is hard to diagnose. Not acceptable on its own.</li>
+  <li><strong>Compile time.</strong> C++ has no way to enumerate a type's bases or count its vtable pointers, so the general case cannot be asserted. <code>static_assert(!std::is_final_v&lt;T&gt;)</code> and <code>static_assert(std::is_polymorphic_v&lt;T&gt;)</code> are possible but do not catch multiple inheritance.</li>
+  <li><strong>At registration, by scanning the object.</strong> When an instance registers, the base knows <code>sizeof(T)</code> and the complete-object pointer. Read every pointer-aligned word in <code>[this, this + sizeof(T))</code> and count those whose value lies inside the address range of the vtable group the first word points into. More than one means more than one vtable pointer: refuse the type at startup with a message naming it. This needs the <em>size</em> of the vtable group symbol, which <code>dladdr</code> does not return. On macOS it is in the Mach-O symbol table, which <code>DynamicLibrary::getFunctionNames</code> already parses; on Linux it is <code>st_size</code> in the ELF dynamic symbol table (<code>dl_iterate_phdr</code> plus the <code>.dynsym</code> walk). <strong>Proposed for phase 1</strong>, since it turns a crash into an error at startup.</li>
+</ul>
+<p>The scan has a false positive if a data member holds a pointer into the vtable group. No ordinary member does; a function pointer points at code, not at a vtable. A false positive produces a clear refusal, not a crash.</p>
+
+<h3>7.4 Phase 2: rewrite every vtable pointer</h3>
+<p>The same scan that detects multiple vtable pointers can fix them. Every word in the object that points into the old vtable group is a vtable pointer at some offset into the group; add the same offset to the new group's address and write it back. This handles multiple inheritance and, because objects use the same vtable group at runtime (construction vtables are only used while constructors run), virtual inheritance too.</p>
+<p>What it does not handle: a member object that is itself polymorphic but of a type not compiled into the module. Its vtable pointer points into a different symbol, not the group being swapped, so the scan skips it. That is correct, because that type's code did not change.</p>
+<p>With phase 2 in place, <code>Reloadable&lt;T&gt;</code> may become polymorphic again and the size check of section 6.2 option A becomes available with no extra user code. The ordering rule in 7.3 also goes away.</p>
+<p>Phase 2 is not proposed for the first implementation because phase 1 covers every current use (a plain struct, or a struct with one eacp base such as <code>GPUView</code>) and the symbol-size lookup is new platform code on two platforms.</p>
+
+<h2>8. Build system changes</h2>
+<ol>
+  <li><strong><code>EACP_HOT_RELOAD</code> becomes a build-wide compile definition.</strong> Today it is PRIVATE to the app target. <code>EACP_RELOADABLE</code> adds a vtable pointer to a struct, so every translation unit that includes the struct's header must see the same value, or the program has two layouts for one type (an ODR violation that will crash). When any <code>eacp_add_hot_reload</code> in the build is ON, the definition is added to every compiled target in the build. The docs already say a hot build is a property of the whole build directory because of the visibility change, so this adds no new restriction.</li>
+  <li class="note">Implemented as a walk of every directory's <code>BUILDSYSTEM_TARGETS</code> at the end of the configure, since a directory-scope definition only reaches targets created after it. The examples no longer force <code>HOT_RELOAD ON</code>, or a static configure would be hot.</li>
+  <li>The per-app definitions (module path, build directory, target name, source directory) stay on the app, as today.</li>
+  <li>Nothing else changes in CMake. The <code>LIBRARY</code> form on the branch already lets the struct's .cpp live in a static library and be compiled into the module.</li>
+</ol>
+
+<h2>9. Limitations</h2>
+<table>
+  <tr><th>Limitation</th><th>Why</th><th>What happens</th></tr>
+  <tr><td>Only virtual methods reload</td><td>Section 3.</td><td>Non-virtual methods called from app code run the old code. Documented; the macro makes the reloadable set explicit.</td></tr>
+  <tr><td>No layout changes while running</td><td>Instances keep their memory.</td><td>Size changes are refused. Same-size changes corrupt memory. Restart after editing a struct definition.</td></tr>
+  <tr><td>One vtable pointer per object (phase 1)</td><td>Section 7. A second polymorphic base adds a second vtable pointer that phase 1 does not rewrite.</td><td>Aborts with the type named at the first reload (7.3 note). One polymorphic base, listed first, plus <code>Reloadable&lt;T&gt;</code>, is fine. Phase 2 (7.4) lifts the limit.</td></tr>
+  <tr><td>No anonymous-namespace types</td><td>Their vtable symbol has internal linkage and cannot be found by name in the module.</td><td>Aborts at the first reload with the type named. Reloadable structs must have external linkage.</td></tr>
+  <tr><td>No <code>final</code> on a reloadable struct</td><td><code>final</code> lets the compiler replace a virtual call with a direct one, bypassing the vtable.</td><td><code>Reloadable&lt;T&gt;</code> <code>static_assert</code>s it.</td></tr>
+  <tr><td>Module statics reset</td><td>Each generation is a new image with its own globals and function-local statics.</td><td>Already true today; documented.</td></tr>
+  <tr><td>Main thread only</td><td>The swap and <code>onReload()</code> run on the main thread while other threads may be in a virtual call on the old image.</td><td>Already the loop's rule today. Instances used from other threads are not supported.</td></tr>
+</table>
+
+<h2>10. Risk that needs a test before relying on this</h2>
+<p><strong>Devirtualisation.</strong> When the compiler can prove an object's dynamic type, it may replace a virtual call with a direct call. For <code>CowModel cow; cow.makeParts();</code> the compiler knows the object is exactly a <code>CowModel</code>, and at optimisation levels above -O0 it is permitted to call <code>CowModel::makeParts</code> directly. That call would bypass the swapped vtable and run the old code, silently.</p>
+<p>At -O0 compilers do not devirtualise, and hot reload builds are Debug builds, so the common case is safe. A Release build with hot reload on is the case at risk.</p>
+<p class="note">Measured (Apple clang, arm64): the premise above is wrong. Clang emits a direct call for <code>object.method()</code> when <code>object</code> names a local or a by-value member, even at -O0; through a pointer or reference it calls through the vtable at -O0 and -O2 (a local reference variable is enough). The registry's thunk calls through a pointer, so <code>onReload</code> and every call eacp makes through a base pointer reload in Debug and Release (the example reloaded in a Release hot build). The fallback in use: call reloadable methods through a reference or pointer, documented; Cows does <code>const auto&amp; cowModel = scene.cowModel;</code>. gcc not tested.</p>
+<p>Before the design is accepted, build a small test: a struct with an <code>EACP_RELOADABLE</code> method, held by value as a member and as a local, called at -O2 with clang and gcc, and check the generated code calls through the vtable. If it does not, the fallback is for the hot build to compile the app's sources at -O0, or for <code>Reloadable&lt;T&gt;</code> to route calls through a non-inlinable accessor, which would weaken requirement 2.</p>
+
+<h2>11. Effect on the examples and on Cows</h2>
+<ul>
+  <li><code>Apps/GPU/HotReload</code> and <code>HotReloadLibrary</code>: the view becomes <code>struct DemoView : GPUView, Plugins::Reloadable&lt;DemoView&gt;</code> with external linkage, <code>GPUView</code> first so it is the primary base (section 7.3). <code>onReload()</code> recompiles its shader. The factory, the <code>ViewABI.h</code> header, and the destroy-and-recreate code in <code>Main.cpp</code> are deleted. <code>GPUView</code>'s virtuals are already virtual, so no <code>EACP_RELOADABLE</code> is needed there.</li>
+  <li>Cows: <code>makeCowParts</code> and <code>getJumpPhysics</code> become methods of a <code>CowModel</code> struct as in 5.1. The scene holds a <code>CowModel</code> by value. The two function handles in <code>CowsApp.h</code> are deleted. The app still needs one callback from the loop to tell the scene to pull the parts again, because <code>CowModel::onReload()</code> has no reference to the scene. That callback is reload behaviour, not plumbing.</li>
+</ul>
+
+<h2>12. Open questions</h2>
+<ol>
+  <li>Should <code>onReload()</code> be mandatory (<code>static_assert</code>) or optional (<code>if constexpr (requires ...)</code>)? Optional is proposed: the view example has nothing to do in it.</li>
+  <li>Should the loop refuse to reload after any header change under the watched directory, or only warn? Refusing is safer and is proposed.</li>
+  <li>Size check: ship phase 1 with none (option C) or with the body macro (option B)? None is proposed; see 6.2.</li>
+  <li>Should GOT rebinding (6.5) be spiked after phase 1? It is the only route to reloading free functions and non-virtual methods with no handle.</li>
+  <li>Keep <code>Reloadable&lt;&amp;fn&gt;</code> for free functions, or tell users to use structs only? Keeping it is proposed; it is small and already works.</li>
+</ol>
+
+</body>
+</html>

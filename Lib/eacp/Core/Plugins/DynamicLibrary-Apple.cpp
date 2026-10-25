@@ -45,6 +45,17 @@ bool isSegment(const char* segmentName, const char* expected)
 }
 } // namespace
 
+std::string getExportedSymbolName(const void* address)
+{
+    auto info = Dl_info {};
+
+    if (dladdr(address, &info) == 0 || info.dli_sname == nullptr
+        || info.dli_saddr != address)
+        return {};
+
+    return info.dli_sname;
+}
+
 Vector<std::string> DynamicLibrary::getFunctionNames() const
 {
     auto result = Vector<std::string>();

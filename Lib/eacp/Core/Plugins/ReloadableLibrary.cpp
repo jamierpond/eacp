@@ -3,6 +3,7 @@
 #include "../Utils/Files.h"
 
 #include <atomic>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -15,6 +16,44 @@ int nextStagingSerial()
     static auto serial = std::atomic<int> {0};
     return ++serial;
 }
+
+// Leaked on purpose, so no image is closed even at static destruction.
+Vector<DynamicLibrary>& getImagesKeptMapped()
+{
+    static auto* images = new Vector<DynamicLibrary> {};
+    return *images;
+}
+
+std::optional<long long> readStagedCopyProcessId(const std::string& name,
+                                                 const FilePath& builtPath)
+{
+    auto prefix = builtPath.stem() + "-";
+    auto extension = builtPath.extension();
+
+    if (!name.starts_with(prefix) || !name.ends_with(extension))
+        return {};
+
+    auto fields =
+        name.substr(prefix.size(), name.size() - prefix.size() - extension.size());
+    auto serialStart = fields.rfind('-');
+
+    if (serialStart == std::string::npos)
+        return {};
+
+    auto beforeSerial = fields.substr(0, serialStart);
+    auto processStart = beforeSerial.rfind('-');
+
+    if (processStart == std::string::npos)
+        return {};
+
+    auto processText = beforeSerial.substr(processStart + 1);
+
+    if (processText.empty()
+        || processText.find_first_not_of("0123456789") != std::string::npos)
+        return {};
+
+    return std::stoll(processText);
+}
 } // namespace
 
 ReloadableLibrary::ReloadableLibrary(const FilePath& builtPathToUse,
@@ -24,13 +63,30 @@ ReloadableLibrary::ReloadableLibrary(const FilePath& builtPathToUse,
     , stagingDirectory(stagingDirectoryToUse)
     , requiredSymbol(requiredSymbolToUse)
 {
+    removeCopiesOfEndedProcesses();
 }
 
 ReloadableLibrary::~ReloadableLibrary()
 {
-    library.close();
-    loadedPath = {};
-    removeStaleCopies();
+    keepCurrentImageMapped();
+}
+
+void ReloadableLibrary::keepCurrentImageMapped()
+{
+    if (library.isOpen())
+        getImagesKeptMapped().add(std::move(library));
+}
+
+void ReloadableLibrary::removeCopiesOfEndedProcesses() const
+{
+    for (const auto& copy: Files::listFiles(stagingDirectory))
+    {
+        auto processId = readStagedCopyProcessId(copy.fileName(), builtPath);
+
+        if (processId && *processId != Detail::currentProcessId()
+            && !Detail::isProcessRunning(*processId))
+            Files::removeFile(copy);
+    }
 }
 
 FilePath ReloadableLibrary::nextStagedPath() const
@@ -78,31 +134,11 @@ bool ReloadableLibrary::reload()
         return false;
     }
 
-    stagedCopies.add(staged);
-
-    if (library.isOpen())
-        unload(std::move(library));
-
-    library.open(staged);
+    keepCurrentImageMapped();
+    library = std::move(fresh);
     loadedPath = staged;
     ++generation;
-
-    removeStaleCopies();
     return true;
-}
-
-void ReloadableLibrary::removeStaleCopies()
-{
-    auto removeUnlessLoaded = [this](const FilePath& copy)
-    {
-        if (copy == loadedPath)
-            return false;
-
-        Files::removeFile(copy);
-        return !Files::exists(copy);
-    };
-
-    stagedCopies.eraseIf(removeUnlessLoaded);
 }
 
 bool ReloadableLibrary::isOpen() const

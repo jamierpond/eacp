@@ -135,46 +135,69 @@ its README.
   Schema codegen still emits TS into `web/src/generated` on every app build.
 
 - `EACP_HOT_RELOAD` (default `OFF`) — dev or static mode for every app wired
-  with `eacp_add_hot_reload(<app> MODULE <module> SOURCES <files...>
+  with `eacp_add_hot_reload(<app> MODULE <module> [LIBRARY <lib>] SOURCES <files...>
   [HOT_RELOAD ON|OFF])` that names no mode of its own. An app's `HOT_RELOAD`
-  wins over the option either way; `Apps/UI/HotReload` names none, so it is
+  wins over the option either way; the examples (`Apps/UI/HotReload`,
+  `Apps/GPU/HotReload`, `Apps/GPU/HotReloadLibrary`) name none, so they are
   in dev mode exactly when `-DEACP_HOT_RELOAD=ON` is given. iOS, Android and
-  Windows are always off, whatever either says. The sources are
-  compiled into the app either way, as generation 0; dev mode adds the
-  reloadable module and a `Plugins::HotReloadLoop` (a `Files::SourceWatcher`
-  on the source directory, a build runner and the reloadable library, with
-  the build-failure summary and status text; an image without the app's
-  `requiredSymbol` is refused and the previous generation kept), static mode
-  adds nothing, so the example is that loop plus one layout function.
-  `Apps/GPU/HotReload` (`HotReloadGPU`) is the other half: its module
-  exports a factory that makes a `GPUView` defined in the module, the host
-  owns it, and each reload destroys it inside `onReloaded` (the previous
-  image is still mapped then, its unmap being deferred a loop turn) and asks
-  the fresh image for a new one, so an object whose code lives in the module
-  is created and dropped once per generation. The module links
-  nothing: its eacp references stay undefined
-  (`-undefined dynamic_lookup` on Apple, the default for a Linux module) and
-  bind at load time to the eacp the app exports, so both share one eacp and
-  the module's one `extern "C"` entry point (`EACP_HOT_RELOAD_EXPORT`, empty
-  on Windows) takes and calls C++ types. Dev
-  mode builds the app with `ENABLE_EXPORTS` (`-export_dynamic` on Apple,
-  `--export-dynamic` on Linux, which is what keeps the exports alive under
-  the libraries' Release IPO) and links every static library in its link
-  closure whole-archive, so the module can call eacp code the app itself
-  never does. It also compiles every eacp library in that closure at default
-  visibility, a property of those library targets and so of the whole build
-  directory: `eacp_add_plugin` modules built there re-export eacp and lose
-  their isolation, so the two should not be mixed in one build directory.
-  A save rebuilds the module alone, never the running app. Windows is not
-  supported: `WINDOWS_EXPORT_ALL_SYMBOLS` never exports a static library's
-  symbols, and a module linking the exe would relink a locked exe on every
-  save. The module owns nothing: it installs no callbacks and keeps no state,
-  and anything it creates is handed to the host, which destroys it no later
-  than the `onReloaded` of the next generation, since the image is unmapped
-  one loop turn after that reload.
-  The host branches on `Plugins::isHotReload()` (`Core/Plugins/HotReload.h`,
-  included directly rather than through the `Core.h` umbrella, since its
-  contents depend on the app's compile definitions), and a configure prints `<app>: hot reload ON/OFF`.
+  Windows are always off, whatever either says. When any app in the build is
+  in dev mode, every compiled target in the build gets `EACP_HOT_RELOAD=1`
+  (added at the end of the configure), because `EACP_RELOADABLE` changes
+  struct layouts and every translation unit must agree; a hot build is a
+  property of the whole build directory.
+
+  The sources are compiled into the app either way, as generation 0; dev mode
+  also builds them as a module, and a `Plugins::HotReloadLoop` watches the
+  source directory, rebuilds the module on save and loads it, keeping the
+  previous generation when the build or load fails. `LIBRARY <target>` says
+  the sources belong to a static library the app links (relative to its
+  directory): they are compiled only there, and the module builds them with
+  the library's flags. The module links nothing: its references bind at load
+  time to what the app exports (`-undefined dynamic_lookup` on Apple, the
+  default for a Linux module), so C++ types cross freely. Dev mode builds the
+  app with `ENABLE_EXPORTS`, links every static library in its link closure
+  whole-archive and compiles them at default visibility, so `eacp_add_plugin`
+  modules built in the same directory lose their isolation. Static mode adds
+  no module, no watcher and no build runner. Windows is not supported:
+  `WINDOWS_EXPORT_ALL_SYMBOLS` never exports a static library's symbols.
+
+  Two things reload, both from `Core/Plugins/Reloadable.h`, driven by a
+  `Plugins::HotReloadedModule module {Plugins::hotReloadTarget()}` (no loop
+  in static mode; `module.onReloaded` fires after each reload):
+
+  - Free functions, through `Plugins::ReloadableFunction<&f> liveF {module}`:
+    a callable running the latest generation's `f`, found by the name the
+    loader gives the app's own copy. In static mode it is a direct call with
+    no data.
+  - Structs, through `struct Thing : Plugins::Reloadable<Thing>` with
+    methods marked `EACP_RELOADABLE` (`virtual` in a hot build, nothing
+    otherwise; `Reloadable<T>` is empty then). In a hot build each instance
+    registers itself; after a reload its vtable pointer is moved to the
+    fresh image's vtable for its type, and then its `onReload()`, if it has
+    one, runs. The instance keeps its memory and state. The struct needs
+    external linkage, must not be `final`, and may have one polymorphic base,
+    listed first (`struct DemoView : GPUView, Plugins::Reloadable<DemoView>`,
+    `Apps/GPU/HotReload`). Call its methods through a pointer or reference:
+    clang binds `object.method()` on a named object or member straight to the
+    app's copy, even at `-O0`. Instances created after a reload start on the
+    app's own code until the next one.
+
+  The reloaded files are compiled twice, into the app and into each module
+  generation, so the process holds two copies of them: statics and
+  function-local statics in them reset each generation (keep state in the
+  struct), `dynamic_cast` to and exceptions of their types may not match
+  across the boundary, and inline functions run the copy of whoever calls
+  them. Edit function bodies in `.cpp` files only. A change to a header
+  under the watched directory is not built ("… changed since launch, so
+  nothing was rebuilt"; undo it or restart), since the running app's struct
+  layouts came from the header as it was at launch.
+
+  An invalid reload stops the app rather than carrying on: when a reload
+  would run with a header changed since launch, when a registered struct's
+  vtable is missing from the new module (its key function's file is not in
+  `SOURCES`), or when a struct has a second vtable pointer, the app prints
+  one line on stderr naming the type or file and what to do, and aborts.
+  Build and load failures stay soft and keep the previous generation.
 
 - `EACP_VERBOSE_CONFIGURE` (default `OFF`) — prints the configure detail a
   clean configure leaves out: the FetchContent population of the

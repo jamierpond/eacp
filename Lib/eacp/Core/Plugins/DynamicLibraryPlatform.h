@@ -17,6 +17,9 @@ std::string lastLoadError();
 // getpid/GetCurrentProcessId, for names no other running copy will pick.
 long long currentProcessId();
 
+// kill(pid, 0)/OpenProcess: false once no process has that id.
+bool isProcessRunning(long long processId);
+
 // dlclose/FreeLibrary. The registry calls loadImage once per path and
 // unloadImage once at the last close, so the image genuinely unmaps here.
 void unloadImage(void* handle);

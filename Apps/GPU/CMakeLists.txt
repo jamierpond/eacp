@@ -46,9 +46,15 @@ add_subdirectory(StreamingStress)
 # Incremental sub-region texture uploads, the glyph-atlas pattern.
 add_subdirectory(TextureAtlas)
 
-# A GPUView made by a hot-reloaded factory: the host owns the view, and every
-# save destroys it and asks the fresh module image for a new one.
+# A GPUView held by value that reloads in place: Plugins::Reloadable<DemoView>
+# moves its vtable to each fresh module image and onReload remakes its shader.
 add_subdirectory(HotReload)
+
+# The same, with the view in a static library the app links: LIBRARY tells
+# eacp_add_hot_reload the files are the library's, so nothing is compiled twice
+# into one binary and other targets can link the library alone. The module is
+# two files, so saving either reloads it.
+add_subdirectory(HotReloadLibrary)
 
 # These paint an overlay with the 2D Graphics::Context, so each needs the
 # native 2D tier rather than only a window and a glyph rasterizer.

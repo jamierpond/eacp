@@ -61,6 +61,24 @@ private:
     std::string error;
 };
 
+// The name the loader knows the function or object at `address` by, ready to
+// pass to findSymbol in another image built from the same source: empty unless
+// a symbol starts exactly there and the image exports it. Not implemented on
+// Windows yet (empty), where it would walk the host's PE export table the way
+// getFunctionNames walks a module's.
+[[nodiscard]] std::string getExportedSymbolName(const void* address);
+
+struct EnclosingSymbol
+{
+    std::string name;
+    std::size_t offset = 0;
+};
+
+// The nearest exported symbol at or before `address` in the image holding it,
+// and how far past its start `address` lies: `_ZTV8CowModel` and 16 for a
+// vtable pointer. Empty name when no image holds `address`. Empty on Windows.
+[[nodiscard]] EnclosingSymbol getEnclosingSymbol(const void* address);
+
 // Tears a module down and unmaps it, in the order the platform requires.
 //
 // Unmapping is only safe once nothing in the process still points into the

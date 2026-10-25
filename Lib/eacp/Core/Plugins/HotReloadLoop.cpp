@@ -1,5 +1,13 @@
 #include "HotReloadLoop.h"
 
+#include "../Utils/Console.h"
+
+#include <cassert>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
 namespace eacp::Plugins
 {
 namespace
@@ -184,14 +192,33 @@ bool isInside(const FilePath& path, const FilePath& directory)
     return (path.str() + "/").starts_with(prefix);
 }
 
+std::string getRequiredSymbolName(const void* requiredHostFunction)
+{
+    if (requiredHostFunction == nullptr)
+        return {};
+
+    auto name = getExportedSymbolName(requiredHostFunction);
+
+    if (name.empty())
+    {
+        Console::printError(
+            "hot reload: the app does not export the function the loop requires "
+            "of every module, so no module can be checked. Build the app "
+            "through eacp_add_hot_reload, which exports it, and restart.");
+        std::exit(EXIT_FAILURE);
+    }
+
+    return name;
+}
+
 HotReloadLoop::Options hotReloadOptionsFor(const HotReloadTarget& target,
-                                           const std::string& requiredSymbol)
+                                           const void* requiredHostFunction)
 {
     auto options = HotReloadLoop::Options {};
     options.sources.directory = FilePath {target.sourceDirectory};
     options.buildCommand = hotReloadBuildCommand(target);
     options.modulePath = FilePath {target.library};
-    options.requiredSymbol = requiredSymbol;
+    options.requiredSymbol = getRequiredSymbolName(requiredHostFunction);
     return options;
 }
 
@@ -207,6 +234,61 @@ Files::SourceWatcher::Options
             excluded.add(output);
 
     return sources;
+}
+bool isHeader(const FilePath& path)
+{
+    auto extension = std::filesystem::path {path.str()}.extension().string();
+
+    for (auto headerExtension: {".h", ".hpp", ".hh", ".inl", ".ipp"})
+        if (extension == headerExtension)
+            return true;
+
+    return false;
+}
+
+std::size_t hashFileContents(const std::filesystem::path& path)
+{
+    auto file = std::ifstream {path, std::ios::binary};
+    auto contents = std::stringstream {};
+    contents << file.rdbuf();
+    return std::hash<std::string> {}(contents.str());
+}
+
+std::map<std::string, std::size_t>
+    hashHeadersUnder(const Files::SourceWatcher::Options& sources)
+{
+    auto hashes = std::map<std::string, std::size_t> {};
+    auto error = std::error_code {};
+    auto entries = std::filesystem::recursive_directory_iterator {
+        sources.directory.str(), error};
+
+    for (auto end = std::filesystem::recursive_directory_iterator {};
+         !error && entries != end;
+         entries.increment(error))
+    {
+        auto path = FilePath {entries->path().string()};
+
+        if (sources.watcher.excludedDirectories.contains(path))
+        {
+            entries.disable_recursion_pending();
+            continue;
+        }
+
+        if (entries->is_regular_file(error) && isHeader(path))
+            hashes[path.str()] = hashFileContents(entries->path());
+    }
+
+    return hashes;
+}
+
+std::string describeChangedHeaders(const Vector<FilePath>& headers)
+{
+    auto names = std::string {};
+
+    for (auto& header: headers)
+        names += (names.empty() ? "" : ", ") + header.str();
+
+    return names;
 }
 } // namespace
 
@@ -226,6 +308,7 @@ BuildFailure buildFailureFrom(const Processes::ProcessResult& result)
 HotReloadLoop::HotReloadLoop(const Options& options)
     : library(options.modulePath, options.stagingDirectory, options.requiredSymbol)
     , runner(options.buildCommand)
+    , headerContentsAtLaunch(hashHeadersUnder(sourcesExcludingOutputs(options)))
     , watcher(sourcesExcludingOutputs(options), rebuildOnChange())
 {
     auto forwardOutput = [this](std::string_view chunk) { onBuildOutput(chunk); };
@@ -236,34 +319,92 @@ HotReloadLoop::HotReloadLoop(const Options& options)
 }
 
 HotReloadLoop::HotReloadLoop(const HotReloadTarget& target,
-                             const std::string& requiredSymbol)
-    : HotReloadLoop(hotReloadOptionsFor(target, requiredSymbol))
+                             const void* requiredHostFunction)
+    : HotReloadLoop(hotReloadOptionsFor(target, requiredHostFunction))
 {
 }
 
 Files::FileWatcher::ChangedFunc HotReloadLoop::rebuildOnChange()
 {
-    auto changed = [this](const Vector<FilePath>&) { rebuild(); };
+    auto changed = [this](const Vector<FilePath>& paths)
+    { rebuildUnlessAHeaderChanged(paths); };
     return changed;
+}
+
+bool HotReloadLoop::hasHeaderChangedSinceLaunch(const FilePath& header) const
+{
+    auto launched = headerContentsAtLaunch.find(header.str());
+
+    if (!std::filesystem::exists(header.str()))
+        return launched != headerContentsAtLaunch.end();
+
+    return launched == headerContentsAtLaunch.end()
+           || launched->second != hashFileContents(header.str());
+}
+
+void HotReloadLoop::rebuildUnlessAHeaderChanged(const Vector<FilePath>& changed)
+{
+    auto sourcesChanged = false;
+
+    for (auto& path: changed)
+    {
+        if (!isHeader(path))
+        {
+            sourcesChanged = true;
+            continue;
+        }
+
+        headersChangedSinceLaunch.removeAllMatches(path);
+
+        if (hasHeaderChangedSinceLaunch(path))
+            headersChangedSinceLaunch.add(path);
+    }
+
+    if (hasAnyHeaderChanged())
+    {
+        setState(State::HeaderChanged);
+        return;
+    }
+
+    if (sourcesChanged || state == State::HeaderChanged)
+        rebuild();
 }
 
 void HotReloadLoop::rebuild()
 {
+    if (hasAnyHeaderChanged())
+    {
+        setState(State::HeaderChanged);
+        return;
+    }
+
     if (!runner.isRunning())
         startBuilding();
 
     runner.run();
 }
 
+bool HotReloadLoop::hasAnyHeaderChanged() const
+{
+    return !headersChangedSinceLaunch.empty();
+}
+
 void HotReloadLoop::startBuilding()
 {
+    if (hasAnyHeaderChanged())
+        return;
+
     setState(State::Building);
     onBuildStarted();
 }
 
 void HotReloadLoop::buildFinished(const Processes::ProcessResult& result)
 {
-    if (succeeded(result))
+    if (hasAnyHeaderChanged())
+    {
+        setState(State::HeaderChanged);
+    }
+    else if (succeeded(result))
     {
         reload();
     }
@@ -281,6 +422,15 @@ void HotReloadLoop::buildFinished(const Processes::ProcessResult& result)
 
 void HotReloadLoop::reload()
 {
+    if (hasAnyHeaderChanged())
+    {
+        Console::printError(
+            "hot reload: " + describeChangedHeaders(headersChangedSinceLaunch)
+            + " changed since launch; struct layouts may differ. Restart the "
+              "app.");
+        std::abort();
+    }
+
     if (!library.reload())
     {
         failureMessage = library.lastError();
@@ -315,6 +465,10 @@ std::string HotReloadLoop::describeState() const
             return "build failed: " + failureMessage;
         case State::LoadFailed:
             return "load failed: " + failureMessage;
+        case State::HeaderChanged:
+            return "hot reload: " + describeChangedHeaders(headersChangedSinceLaunch)
+                   + " changed since launch, so nothing was rebuilt; struct "
+                     "layouts may differ. Undo the edit or restart the app.";
         case State::Idle:
         case State::Loaded:
             break;

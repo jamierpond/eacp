@@ -12,9 +12,12 @@ namespace eacp::Plugins
 // and Windows' lock on a loaded DLL, which the linker must be free to
 // overwrite.
 //
-// Every pointer obtained through findFunction/findSymbol, and anything a
-// function in the image returned, is invalid after the next successful
-// reload(): copy out what you need first. Main thread only.
+// No image is ever unmapped, not on reload and not on destruction: whatever a
+// generation's code made (a std::function, an object with a vtable, a string
+// literal) may outlive it, so every image stays mapped until the process
+// exits. Their staged copies stay too, and are removed by the first
+// ReloadableLibrary on the same staging directory once their process has
+// ended. A development-only cost. Main thread only.
 //
 // With a requiredSymbol, an image that does not export it is refused before
 // it replaces the current one, so the previous generation stays loaded.
@@ -55,18 +58,33 @@ public:
         return library.findFunction<FunctionType>(name);
     }
 
+    // The fresh image's copy of a function the host has compiled in, found by
+    // the name the loader gives the host's copy; nullptr when either image
+    // does not export it.
+    template <typename FunctionType>
+    FunctionType findFunctionMatching(FunctionType hostFunction) const
+    {
+        auto* address = reinterpret_cast<const void*>(hostFunction);
+        auto name = getExportedSymbolName(address);
+
+        if (name.empty())
+            return nullptr;
+
+        return findFunction<FunctionType>(name);
+    }
+
     [[nodiscard]] void* findSymbol(const std::string& name) const;
 
 private:
     FilePath nextStagedPath() const;
-    void removeStaleCopies();
+    void removeCopiesOfEndedProcesses() const;
+    void keepCurrentImageMapped();
 
     FilePath builtPath;
     FilePath stagingDirectory;
     std::string requiredSymbol;
     FilePath loadedPath;
     DynamicLibrary library;
-    Vector<FilePath> stagedCopies;
     std::string error;
     int generation = 0;
 };

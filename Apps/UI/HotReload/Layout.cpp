@@ -15,8 +15,7 @@ constexpr auto rowHeight = 32.f;
 constexpr auto muteWidth = 120.f;
 } // namespace
 
-EACP_HOT_RELOAD_EXPORT void demoLayout(const LayoutTargets& targets,
-                                       const Rect& bounds)
+void demoLayout(const LayoutTargets& targets, const Rect& bounds)
 {
     auto area = bounds.inset(padding);
     area.removeFromBottom(statusHeight + gap);

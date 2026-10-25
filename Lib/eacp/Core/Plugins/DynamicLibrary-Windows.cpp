@@ -34,6 +34,21 @@ long long currentProcessId()
     return (long long) GetCurrentProcessId();
 }
 
+bool isProcessRunning(long long processId)
+{
+    auto* process =
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD) processId);
+
+    if (process == nullptr)
+        return GetLastError() == ERROR_ACCESS_DENIED;
+
+    auto exitCode = DWORD {0};
+    auto running =
+        GetExitCodeProcess(process, &exitCode) != 0 && exitCode == STILL_ACTIVE;
+    CloseHandle(process);
+    return running;
+}
+
 void unloadImage(void* handle)
 {
     FreeLibrary((HMODULE) handle);
@@ -44,6 +59,16 @@ void* findImageSymbol(void* handle, const std::string& name)
     return (void*) GetProcAddress((HMODULE) handle, name.c_str());
 }
 } // namespace Detail
+
+std::string getExportedSymbolName(const void*)
+{
+    return {};
+}
+
+EnclosingSymbol getEnclosingSymbol(const void*)
+{
+    return {};
+}
 
 Vector<std::string> DynamicLibrary::getFunctionNames() const
 {

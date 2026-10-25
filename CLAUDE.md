@@ -338,38 +338,33 @@ cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Debug -DEACP_UNITY_BUILD=OFF \
 ```
 
 - `EACP_HOT_RELOAD` (default `OFF`): the dev/static mode of every app wired
-  with `eacp_add_hot_reload(<app> MODULE <module> SOURCES <files...>
+  with `eacp_add_hot_reload(<app> MODULE <module> [LIBRARY <lib>] SOURCES <files...>
   [HOT_RELOAD ON|OFF])` (`CMake/EacpPlugin.cmake`) that names no mode of its
-  own. An app's `HOT_RELOAD ON` is always dev mode and `OFF` always static,
-  whatever the option says; `Apps/UI/HotReload` names none, so it follows
-  the option, and `Apps/GPU/HotReload` (`HotReloadGPU`, always `ON`) reloads
-  a factory whose `GPUView` the host owns and recreates per generation. iOS and Android (no cmake to run) and Windows (not supported: `WINDOWS_EXPORT_ALL_SYMBOLS` never
-  exports a static library's symbols, and a module linking the exe would
-  relink a locked exe on every save) are always off. The sources are compiled
-  into the app in both modes, so that copy is generation 0 and the fallback;
-  dev mode also builds them as a module the app reloads on save, static mode
-  builds no module, no watcher and no build runner. The module links nothing
-  and binds at load time to the eacp the app exports (`-undefined
-  dynamic_lookup` on Apple, a Linux module's default), so C++ types cross its
-  one `extern "C"` entry point (`EACP_HOT_RELOAD_EXPORT`, empty on Windows). Dev mode gives the app `ENABLE_EXPORTS`
-  (`-export_dynamic` on Apple, `--export-dynamic` on Linux, which keeps the
-  exports alive under the libraries' Release IPO), links every static library
-  in its link closure whole-archive so the module can call what the app never
-  does, and compiles every eacp library in that closure at default
-  visibility. That is a property of the library targets, so of the whole
-  build directory: `eacp_add_plugin` modules built there re-export eacp and
-  lose their isolation, and should not be mixed with a hot-reload build.
-  A save rebuilds the module alone, never the running app. Everything in the
-  module's sources but its entry point stays in an anonymous namespace, or
-  it binds to the app's generation-0 copy. The module owns
-  nothing: no callbacks, no state, and any object it creates is the host's
-  to destroy by the next `onReloaded`, since its image is unmapped a loop
-  turn after the next reload. The host reads its mode and module from
-  `Core/Plugins/HotReload.h` — `if constexpr (Plugins::isHotReload())`,
-  `hotReloadTarget()` and `hotReloadBuildCommand` — and never spells an
-  `EACP_HOT_RELOAD_*` macro; it includes that header directly, never through
-  the `Core.h` umbrella, because its contents depend on the app's own compile
-  definitions. A configure prints `<app>: hot reload ON/OFF`.
+  own; the examples name none. Any app in dev mode puts `EACP_HOT_RELOAD=1` on
+  every compiled target in the build (deferred to the end of the configure),
+  since `EACP_RELOADABLE` changes layouts. iOS, Android and Windows are always
+  off. The sources are compiled into the app (generation 0) and, in dev mode,
+  into a module rebuilt and loaded on save; the module links nothing and binds
+  to the eacp the app exports. Functions reload through
+  `Plugins::ReloadableFunction<&fn>`; structs through `Plugins::Reloadable<T>`
+  plus `EACP_RELOADABLE` methods (`Core/Plugins/Reloadable.h`): each reload
+  moves every live instance's vtable pointer to the fresh image
+  (`ReloadRegistry::swapVtablesTo`, after the function binders, before
+  `HotReloadedModule::onReloaded`) and calls its `onReload()`. Such a struct
+  has external linkage, is not `final`, has at most one polymorphic base,
+  listed first, and is called through a pointer or reference (clang binds a
+  call on a named object or member directly, even at -O0). Statics in
+  reloaded files reset per generation; don't `dynamic_cast` to or throw their
+  types; edit bodies, not definitions. A changed header under the watched
+  directory is not built; a reload that would still run with one, a
+  struct whose vtable the module lacks, or a second vtable pointer aborts
+  with one line naming the file or type. Build and load failures keep the
+  previous generation. `Apps/GPU/HotReload` (a `DemoView : GPUView,
+  Reloadable<DemoView>` remaking its shader in `onReload`),
+  `Apps/GPU/HotReloadLibrary` (the `LIBRARY` form, two files) and
+  `Apps/UI/HotReload` (a layout function) are the examples. The host includes
+  `Core/Plugins/HotReload.h` directly, never through `Core.h`. A configure
+  prints `<app>: hot reload ON/OFF`.
 
 ```bash
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Debug -DEACP_UNITY_BUILD=OFF \
@@ -1085,10 +1080,7 @@ matching `APPLE`/`IOS`/`WIN32`/`LINUX` branch.
   calling `setBounds` on components the host owns) in a module, rebuilt and
   reloaded on save, or compiled in statically when `EACP_HOT_RELOAD` says so
   (`Plugins/HotReload.h`: `isHotReload()`, `hotReloadTarget()`);
-  `Apps/GPU/HotReload` is the object case: `makeDemoView()` returns
-  an `OwningPointer<Graphics::View>` holding one of two module-defined
-  `GPUView`s, which the host destroys in `onReloaded`, while the old image is
-  still mapped, before asking the new one for a replacement
+  `Apps/GPU/HotReload` is the struct case: a `GPUView` held by value whose vtable each reload moves to the fresh image
 - `Plugins::HotReloadLoop` (`Plugins/HotReloadLoop.h`): a `SourceWatcher`,
   `BuildRunner` and `ReloadableLibrary` as one object, built from `Options`
   or a define-free `HotReloadTarget` (`Plugins/HotReloadTarget.h`, with
@@ -1102,7 +1094,10 @@ matching `APPLE`/`IOS`/`WIN32`/`LINUX` branch.
   ninja's `FAILED:` and the last line, in that order. The module's and
   staging directories are excluded from the watch when they lie under the
   sources. `getState()`/`describeState()` (`generation N`, `building…`,
-  `build failed: …`, `load failed: …`) drive a status line. Nothing builds
+  `build failed: …`, `load failed: …`, and a changed header's refusal)
+  drive a status line. A change to a header (`.h .hpp .hh .inl .ipp`)
+  whose contents differ from launch does not build (`HeaderChanged`); a
+  reload while one differs aborts. Nothing builds
   until the first change; callbacks must not destroy the loop
 
 **ObjC/** - Memory management bridge

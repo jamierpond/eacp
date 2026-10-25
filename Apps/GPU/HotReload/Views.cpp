@@ -1,4 +1,4 @@
-#include "ViewABI.h"
+#include "DemoView.h"
 
 #include <eacp/GPU/GPU.h>
 
@@ -24,6 +24,7 @@ constexpr QuadVertex fullQuad[] = {
 };
 
 using RGB = float[3];
+} // namespace
 
 struct FullScreenProgram : ShaderProgram
 {
@@ -55,6 +56,8 @@ struct FullScreenProgram : ShaderProgram
     Uniform<Float> aspect;
 };
 
+namespace
+{
 struct PlasmaShader final : FullScreenProgram
 {
     static constexpr auto speed = 0.6f;
@@ -137,41 +140,39 @@ struct TunnelShader final : FullScreenProgram
     EACP_SHADER(time, aspect)
 };
 
-template <typename Shader>
-struct FullScreenView final : GPUView
+OwningPointer<FullScreenProgram> makeDemoShader()
 {
-    FullScreenView()
-    {
-        shader.setVertices(fullQuad);
-        shader.prepare(sampleCount());
-        setContinuous(true);
-    }
-
-    void update(Threads::FrameTime frameTime) override
-    {
-        elapsed += (float) frameTime.delta;
-    }
-
-    void render(Frame& frame) override
-    {
-        auto size = frame.logicalSize();
-        shader.time = elapsed;
-        shader.aspect = size.y > 0.f ? size.x / size.y : 1.f;
-
-        auto pass = frame.beginPass({});
-        pass.draw(shader);
-    }
-
-    Shader shader;
-    float elapsed = 0.f;
-};
-
-using PlasmaView = FullScreenView<PlasmaShader>;
-using TunnelView = FullScreenView<TunnelShader>;
+    // return makeOwned<TunnelShader>();
+    return makeOwned<PlasmaShader>();
+}
 } // namespace
 
-EACP_HOT_RELOAD_EXPORT ViewPointer makeDemoView()
+DemoView::DemoView()
 {
-    // return makeOwned<TunnelView>();
-    return makeOwned<PlasmaView>();
+    onReload();
+    setContinuous(true);
+}
+
+DemoView::~DemoView() = default;
+
+void DemoView::onReload()
+{
+    shader = makeDemoShader();
+    shader->setVertices(fullQuad);
+    shader->prepare(sampleCount());
+}
+
+void DemoView::update(Threads::FrameTime frameTime)
+{
+    elapsed += (float) frameTime.delta;
+}
+
+void DemoView::render(Frame& frame)
+{
+    auto size = frame.logicalSize();
+    shader->time = elapsed;
+    shader->aspect = size.y > 0.f ? size.x / size.y : 1.f;
+
+    auto pass = frame.beginPass({});
+    pass.draw(*shader);
 }

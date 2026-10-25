@@ -1,20 +1,15 @@
-#include "ViewABI.h"
+#include "DemoView.h"
 
-#include <eacp/Core/Plugins/HotReload.h>
-#include <eacp/Core/Plugins/HotReloadLoop.h>
-
-#include <optional>
 #include <string>
 
-// A window filled by one GPUView that a factory in Views.cpp beside this file
-// creates. The view's type, its shader and its code all live in Views.cpp; the
-// app only owns the pointer the factory hands back. The factory is always
-// compiled into the app, and under EACP_HOT_RELOAD it is also built as a module,
-// HotReloadGPUView, bound at load time to this app's own eacp: swap the view the
-// factory returns, or a shader's tuning, in Views.cpp and save, a
-// Plugins::HotReloadLoop rebuilds and reloads the module, and the old view is
-// destroyed while its image is still mapped and replaced by one the fresh image
-// makes.
+// A window filled by DemoView, a GPUView defined in Views.cpp beside this file
+// and held here by value. Under EACP_HOT_RELOAD, Views.cpp is also built as a
+// module, HotReloadGPUView, bound at load time to this app's own eacp: change
+// a shader's tuning, or which shader makeDemoShader returns, and save. The
+// module is rebuilt and loaded, the view's vtable pointer is moved to the
+// fresh image's DemoView vtable, and its onReload() remakes the shader there.
+// The view keeps its state; only Views.cpp's function bodies may change while
+// the app runs (a changed header is refused).
 
 using namespace eacp;
 
@@ -24,56 +19,23 @@ struct DemoRoot final : Graphics::View
 {
     DemoRoot()
     {
-        install(&makeDemoView);
-
-        if constexpr (Plugins::isHotReload())
-            startReloadLoop();
+        addSubview(*view);
+        reloadedModule.onStateChanged = [this](const std::string& state)
+        {
+            Console::print(state);
+            showStatus();
+        };
     }
 
-    void startReloadLoop()
-    {
-        auto& loop = reloader.emplace(Plugins::hotReloadTarget(), viewFactoryName);
+    void resized() override { view->setBounds(getLocalBounds()); }
 
-        auto showState = [this] { showStatus(); };
-        auto useImage = [this](Plugins::ReloadableLibrary& library)
-        { replaceViewFrom(library); };
-        auto printFailure = [this](const auto&)
-        { Console::print(reloader->describeState()); };
-
-        loop.onStateChanged = showState;
-        loop.onReloaded = useImage;
-        loop.onBuildFailed = printFailure;
-        loop.onLoadFailed = printFailure;
-    }
-
-    void resized() override { current->setBounds(getLocalBounds()); }
-
-    void install(ViewFactory factory)
-    {
-        current = factory();
-        addSubview(*current);
-        current->setBounds(getLocalBounds());
-    }
-
-    void replaceViewFrom(Plugins::ReloadableLibrary& library)
-    {
-        removeSubview(*current);
-        current.reset();
-
-        install(library.findFunction<ViewFactory>(viewFactoryName));
-        Console::print("generation " + std::to_string(library.getGeneration()));
-    }
-
-    void showStatus()
-    {
-        onStatusChanged(reloader ? reloader->describeState() : "static view");
-    }
+    void showStatus() { onStatusChanged(reloadedModule.describeState()); }
 
     std::function<void(const std::string& status)> onStatusChanged =
         [](const std::string&) {};
 
-    ViewPointer current;
-    std::optional<Plugins::HotReloadLoop> reloader;
+    Plugins::HotReloadedModule reloadedModule {Plugins::hotReloadTarget()};
+    Plugins::Reloadable<DemoView> view;
 };
 
 Graphics::WindowOptions makeOptions()
